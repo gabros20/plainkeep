@@ -24,6 +24,7 @@ case the same line is an error and the suite exits 1. SKIP is visible, never a s
 from __future__ import annotations
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 RESOLVER_SRC = REPO / "bin" / "lib" / "resolver.py"
+GUARDRAIL_SRC = REPO / "bin" / "lib" / "guardrail.py"
 CATALOG_DIR = REPO / "test" / "cases" / "core-parity"
 GREEN, RED, YELLOW, DIM, BOLD, RESET = (
     "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[1m", "\033[0m",
@@ -68,7 +70,16 @@ class Fixture:
     """
 
     def __init__(self, spec: dict):
+        # mkdtemp first, then guard the rest so a catalog authoring error (bad path:ref, unknown
+        # verb location, unregistered file) cleans up its temp vault instead of leaking it (M-2).
         self.root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-parity-")))
+        try:
+            self._build(spec)
+        except Exception:
+            shutil.rmtree(self.root, ignore_errors=True)
+            raise
+
+    def _build(self, spec: dict) -> None:
         self.home = self.root / "_home"
         self.home.mkdir()
         self.resolver_py = self.root / "bin" / "lib" / "resolver.py"
@@ -91,7 +102,19 @@ class Fixture:
             self._root_order.append(ref)
 
         for v in spec.get("verbs", []):
-            self._make_verb(v["at"], v["verb"], v.get("files", ["run.py", "cmd.json"]))
+            self._make_verb(v["at"], v["verb"], v.get("files", ["run.py", "cmd.json"]), v.get("cmd"))
+
+        # Guardrail-catalog additions (additive; resolver.json declares neither): plugins_lock writes
+        # plugins/plugins.lock.json verbatim (a str for a malformed-JSON fixture) or json.dumps()'d
+        # (an object). verbs[].cmd overrides a verb's cmd.json CONTENT (str written raw, else dumped),
+        # so risk/dry_run vary per verb — what _VERB_FILES' name-only lambda cannot express.
+        pl = spec.get("plugins_lock")
+        if pl is not None:
+            pdir = self.root / "plugins"
+            pdir.mkdir(parents=True, exist_ok=True)
+            (pdir / "plugins.lock.json").write_text(
+                pl if isinstance(pl, str) else json.dumps(pl), encoding="utf-8"
+            )
 
     def _base_dir(self, at: str) -> Path:
         if at == "engine":
@@ -105,11 +128,15 @@ class Fixture:
             return self._roots[ref][0]
         raise ValueError(f"unknown verb location: {at!r}")
 
-    def _make_verb(self, at: str, verb: str, files: list[str]) -> None:
+    def _make_verb(self, at: str, verb: str, files: list[str], cmd=None) -> None:
         d = self._base_dir(at) / verb
         d.mkdir(parents=True, exist_ok=True)
         for f in files:
-            (d / f).write_text(_VERB_FILES[f](verb), encoding="utf-8")
+            if f == "cmd.json" and cmd is not None:
+                content = cmd if isinstance(cmd, str) else json.dumps(cmd)
+            else:
+                content = _VERB_FILES[f](verb)
+            (d / f).write_text(content, encoding="utf-8")
 
     def path_value(self, order: list[str] | None) -> str:
         refs = self._root_order if order is None else order
@@ -183,9 +210,84 @@ def _compare_api(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
     return ok, detail
 
 
+# Gate comparator (Task 3) — proves the ported guardrail main_cli() reproduces bin/lib/guardrail.py
+# byte-for-byte on exit code, stdout, stderr, AND the appended audit-log line.
+#
+# Log isolation: both sides call _log(), which APPENDS to $PLAINKEEP_HOME/.logs/plainkeep.log. Run
+# them against the SAME vault and the two lines interleave in one file — unattributable. So each side
+# gets its OWN realpath-canonical copy of the built vault (distinct PLAINKEEP_HOME → distinct .logs),
+# and only the Python side's copy also carries guardrail.py (next to the resolver.py it imports); the
+# TS binary embeds its own guardrail. The timestamp differs by construction (two clocks), so the log
+# line is compared as: assert BOTH timestamps match the UTC ISO-seconds+offset shape, then byte-
+# compare the remainder after the first tab (verb+args, verdict, reason — including any tab/newline
+# an arg carries, since split('\t', 1) only consumes the timestamp's separator).
+
+# Python datetime.now(timezone.utc).isoformat(timespec="seconds") → e.g. 2026-07-29T10:00:00+00:00.
+_LOG_TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\+00:00$")
+
+
+def _gate_env(fx: Fixture, inv: dict, root_copy: Path) -> dict:
+    # Reuse the fixture env (PLAINKEEP_PATH is empty for gate cases — they use engine/plugins only),
+    # then repoint PLAINKEEP_HOME + HOME at this side's private copy so its .logs is isolated.
+    e = fx.env(inv.get("path_order"))
+    e["PLAINKEEP_HOME"] = str(root_copy)
+    e["HOME"] = str(root_copy / "_home")
+    return e
+
+
+def _read_log(root: Path) -> str:
+    try:
+        return (root / ".logs" / "plainkeep.log").read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+
+
+def _compare_log(ts_log: str, py_log: str) -> tuple[bool, str]:
+    # main_cli logs allow/confirm/deny but NOT the unknown-verb path (returns before _log) — so both
+    # empty is a valid agreement.
+    if ts_log == "" and py_log == "":
+        return True, "no log (both empty)"
+    if (ts_log == "") != (py_log == ""):
+        return False, f"log presence differs ts={ts_log!r} py={py_log!r}"
+    ts_ts, _, ts_rest = ts_log.rstrip("\n").partition("\t")
+    py_ts, _, py_rest = py_log.rstrip("\n").partition("\t")
+    shape_ok = bool(_LOG_TS_RE.match(ts_ts)) and bool(_LOG_TS_RE.match(py_ts))
+    return (shape_ok and ts_rest == py_rest), (
+        f"ts_ts={ts_ts!r} py_ts={py_ts!r} shape_ok={shape_ok} "
+        f"ts_rest={ts_rest!r} py_rest={py_rest!r}"
+    )
+
+
+def _compare_gate(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
+    verb = inv["verb"]
+    args = inv.get("args", [])
+    ts_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-gate-ts-")))
+    py_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-gate-py-")))
+    try:
+        shutil.copytree(fx.root, ts_root, dirs_exist_ok=True)
+        shutil.copytree(fx.root, py_root, dirs_exist_ok=True)
+        shutil.copy2(GUARDRAIL_SRC, py_root / "bin" / "lib" / "guardrail.py")
+        ts = _run([binary, "--core-gate", verb, *args], _gate_env(fx, inv, ts_root))
+        py = _run([PY, str(py_root / "bin" / "lib" / "guardrail.py"), verb, *args],
+                  _gate_env(fx, inv, py_root))
+        ok_log, log_detail = _compare_log(_read_log(ts_root), _read_log(py_root))
+        ok = (ts.returncode == py.returncode and ts.stdout == py.stdout
+              and ts.stderr == py.stderr and ok_log)
+        detail = (
+            f"verb={verb!r} args={args!r} "
+            f"ts=(rc={ts.returncode},out={ts.stdout!r},err={ts.stderr!r}) "
+            f"py=(rc={py.returncode},out={py.stdout!r},err={py.stderr!r}) log[{log_detail}]"
+        )
+        return ok, detail
+    finally:
+        shutil.rmtree(ts_root, ignore_errors=True)
+        shutil.rmtree(py_root, ignore_errors=True)
+
+
 COMPARATORS = {
     "cli": _compare_cli,
     "api": _compare_api,
+    "gate": _compare_gate,
 }
 
 
@@ -201,11 +303,21 @@ def _load_catalogs() -> list[tuple[str, dict]]:
 
 
 def _run_case(binary: str, catalog: str, case: dict) -> None:
-    fx = Fixture(case["fixture"])
+    # Build inside a guard so a single case's authoring error (bad fixture, unknown comparator) is a
+    # localized FAIL, not a traceback that nukes the whole permanent oracle (M-2). Fixture.__init__
+    # already cleans up its own temp vault on a build failure.
+    try:
+        fx = Fixture(case["fixture"])
+    except Exception as e:
+        check(f"[{catalog}] {case['name']} · fixture-build", False, f"exception: {e!r}")
+        return
     try:
         for i, inv in enumerate(case["invocations"]):
-            cmp = COMPARATORS[inv["compare"]]
-            ok, detail = cmp(binary, fx, inv)
+            try:
+                cmp = COMPARATORS[inv["compare"]]
+                ok, detail = cmp(binary, fx, inv)
+            except Exception as e:
+                ok, detail = False, f"exception: {e!r}"
             label = inv.get("api") or inv.get("verb") or inv["compare"]
             check(f"[{catalog}] {case['name']} · {inv['compare']}:{label} #{i}", ok, detail)
     finally:

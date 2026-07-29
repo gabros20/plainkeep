@@ -12,6 +12,7 @@ import {
   shadowed,
   sourceOf,
 } from "./resolver.js";
+import { mainCli } from "./guardrail.js";
 
 export interface CoreResult {
   stdout?: string;
@@ -65,6 +66,12 @@ export function runCore(argv: string[]): CoreResult {
   }
   if (argv[0] === "--core-api") {
     return coreApi(argv[1] ?? "");
+  }
+  // Hidden gate probe (no help text) consumed by test/run_core_parity.py's "gate" comparator: runs
+  // the ported main_cli semantics (known-verb check + did-you-mean, risk gate, audit log, stderr)
+  // and exits with the gate code, spawning nothing. Task 4 wires the gate into real verb dispatch.
+  if (argv[0] === "--core-gate") {
+    return mainCli(argv.slice(1));
   }
   return { stderr: "plainkeep-core: not yet wired (skeleton binary — no verbs are dispatched yet)", code: 2 };
 }

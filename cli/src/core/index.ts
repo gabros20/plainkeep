@@ -21,3 +21,18 @@ export {
   shadowed,
   type Source,
 } from "./resolver.js";
+// Task 3 — the dispatcher-facing guardrail (gate + did-you-mean + audit log), ported from the
+// gate-side subset of bin/lib/guardrail.py. Task 4 wires gate()/mainCli() into real verb dispatch.
+export {
+  gate,
+  mainCli,
+  riskOf,
+  decisionStr,
+  getCloseMatches,
+  type Decision,
+  EXIT_OK,
+  EXIT_USAGE,
+  EXIT_CONFIRM,
+  EXIT_NOT_FOUND,
+  EXIT_DENY,
+} from "./guardrail.js";

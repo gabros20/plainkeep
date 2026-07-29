@@ -128,3 +128,29 @@ test("getCloseMatches mirrors difflib ordering and cutoff", () => {
 test("decisionStr formats verdict, risk class, and reason with the em-dash", () => {
   expect(decisionStr({ verdict: "allow", reason: "read", riskClass: "read" })).toBe("ALLOW [read] — read");
 });
+
+test("dry_run field uses Python bool() truthiness, not JS Boolean()", () => {
+  makeVault();
+  // JS Boolean([]) / Boolean({}) are true, but Python bool([]) / bool({}) are false — an empty
+  // container must NOT downgrade a confirm verb (the I-1 unsafe divergence).
+  engineVerb("d_list", { risk: "confirm", dry_run: [] });
+  engineVerb("d_obj", { risk: "confirm", dry_run: {} });
+  engineVerb("d_strfalse", { risk: "confirm", dry_run: "false" }); // non-empty string is truthy
+  engineVerb("d_one", { risk: "confirm", dry_run: 1 });
+  expect(gate("d_list", ["--dry-run"]).verdict).toBe("confirm");
+  expect(gate("d_obj", ["--dry-run"]).verdict).toBe("confirm");
+  expect(gate("d_strfalse", ["--dry-run"]).verdict).toBe("allow");
+  expect(gate("d_one", ["--dry-run"]).verdict).toBe("allow");
+});
+
+test("non-string risk passes through raw and renders as Python str() (no clamp)", () => {
+  makeVault();
+  engineVerb("r_five", { risk: 5 });
+  engineVerb("r_true", { risk: true });
+  engineVerb("r_empty", { risk: "" }); // falsy -> default confirm
+  engineVerb("r_null", { risk: null }); // falsy -> default confirm
+  expect(gate("r_five", [])).toEqual({ verdict: "allow", reason: "5", riskClass: "5" });
+  expect(gate("r_true", [])).toEqual({ verdict: "allow", reason: "True", riskClass: "True" });
+  expect(gate("r_empty", []).verdict).toBe("confirm");
+  expect(gate("r_null", []).verdict).toBe("confirm");
+});

@@ -112,6 +112,36 @@
         { "compare": "gate", "verb": "v_read", "args": ["café", "a\tb", "a\nb", ""] },
         { "compare": "gate", "verb": "v_read", "args": ["--dry-run", "spaced arg"] }
       ]
+    },
+    {
+      "name": "wrong-type-field-values",
+      "rationale": "cmd.json fields that are VALID JSON but wrong-typed must flow through the TS port with PYTHON semantics, not JS. dry_run truthiness is bool()/pythonTruthy: [] {} 0 \"\" are falsy (no downgrade -> confirm) while \"false\" and 1 are truthy (downgrade -> allow) — JS Boolean([]) / Boolean({}) would UNSAFELY downgrade. risk is passed through raw (no type clamp): 5 and true stay truthy and render in the ALLOW reason/log as Python str() prints them (\"5\", \"True\"), while \"\" and null are falsy and default to confirm. Guards the fix-wave-r1 root cause; these cases FAIL against the pre-fix binary.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "vd_list", "cmd": { "verb": "vd_list", "risk": "confirm", "dry_run": [] } },
+          { "at": "engine", "verb": "vd_obj", "cmd": { "verb": "vd_obj", "risk": "confirm", "dry_run": {} } },
+          { "at": "engine", "verb": "vd_zero", "cmd": { "verb": "vd_zero", "risk": "confirm", "dry_run": 0 } },
+          { "at": "engine", "verb": "vd_emptystr", "cmd": { "verb": "vd_emptystr", "risk": "confirm", "dry_run": "" } },
+          { "at": "engine", "verb": "vd_strfalse", "cmd": { "verb": "vd_strfalse", "risk": "confirm", "dry_run": "false" } },
+          { "at": "engine", "verb": "vd_one", "cmd": { "verb": "vd_one", "risk": "confirm", "dry_run": 1 } },
+          { "at": "engine", "verb": "vr_five", "cmd": { "verb": "vr_five", "risk": 5 } },
+          { "at": "engine", "verb": "vr_emptystr", "cmd": { "verb": "vr_emptystr", "risk": "" } },
+          { "at": "engine", "verb": "vr_null", "cmd": { "verb": "vr_null", "risk": null } },
+          { "at": "engine", "verb": "vr_true", "cmd": { "verb": "vr_true", "risk": true } }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "vd_list", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_obj", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_zero", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_emptystr", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_strfalse", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_one", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vr_five", "args": [] },
+        { "compare": "gate", "verb": "vr_emptystr", "args": [] },
+        { "compare": "gate", "verb": "vr_null", "args": [] },
+        { "compare": "gate", "verb": "vr_true", "args": [] }
+      ]
     }
   ]
 }

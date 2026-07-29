@@ -68,15 +68,78 @@ function cmdField(verb: string, key: string): unknown {
   }
 }
 
-// A verb's declared risk from its cmd.json; null if undeclared (→ default confirm).
-export function riskOf(verb: string): string | null {
-  const r = cmdField(verb, "risk");
-  return typeof r === "string" ? r : null;
+// A verb's declared risk from its cmd.json — the RAW decoded JSON value (Python risk_of returns
+// _cmd_field verbatim; its `str | None` annotation is not enforced). No type clamp: a non-string
+// value flows through gate() with Python semantics (0/""/null/[]/{} → default confirm via truthiness;
+// 5 / true / "weird" pass through to the ALLOW reason). Null when undeclared.
+export function riskOf(verb: string): unknown {
+  return cmdField(verb, "risk");
 }
 
-// True iff the verb's cmd.json declares `"dry_run": true` (proposal Part 0.5). bool() of the field.
+// True iff the verb's cmd.json `dry_run` field is PYTHON-truthy (guardrail.py: bool(_cmd_field(...))).
+// Must use pythonTruthy, NOT JS Boolean(): JS Boolean([]) / Boolean({}) are true but Python bool([]) /
+// bool({}) are false — the JS primitive would downgrade a confirm verb on `dry_run: []` UNSAFELY.
 function declaresDryRun(verb: string): boolean {
-  return Boolean(cmdField(verb, "dry_run"));
+  return pythonTruthy(cmdField(verb, "dry_run"));
+}
+
+// Python bool() over a JSON-decoded value: false/null/0/0.0/""/[]/{} are falsy, everything else
+// (incl. "false", [0], {"a":0}, non-zero numbers) is truthy. This is the single coercion primitive
+// the gate uses wherever guardrail.py calls bool(...) or relies on `or` truthiness.
+export function pythonTruthy(v: unknown): boolean {
+  if (v === null || v === undefined) return false;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v !== 0; // 0, -0, 0.0 falsy; NaN is not JSON-representable
+  if (typeof v === "string") return v.length > 0;
+  if (Array.isArray(v)) return v.length > 0;
+  if (typeof v === "object") return Object.keys(v).length > 0;
+  return Boolean(v);
+}
+
+// Render a value the way Python's f-string / str() prints it, so a pass-through non-string risk
+// reaches the ALLOW reason + audit log byte-identically. Top-level string → itself (no quotes);
+// everything else uses repr() (as Python str() does for non-strings). Verified against the Python CLI:
+// 5 → "5", true → "True", [0] → "[0]", {"a":0} → "{'a': 0}". LIMITATION (disclosed, non-authored): a
+// JSON float that is integer-valued ("risk": 5.0) is indistinguishable from int 5 after JSON.parse, so
+// it renders "5" here vs Python's "5.0"; no realistic cmd.json authors a numeric risk at all.
+function pythonNumStr(v: number): string {
+  return String(v);
+}
+
+function pyStrRepr(s: string): string {
+  const quote = s.includes("'") && !s.includes('"') ? '"' : "'";
+  let out = quote;
+  for (const ch of s) {
+    if (ch === "\\") out += "\\\\";
+    else if (ch === quote) out += "\\" + quote;
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch === "\t") out += "\\t";
+    else {
+      const code = ch.codePointAt(0) as number;
+      out += code < 0x20 || code === 0x7f ? "\\x" + code.toString(16).padStart(2, "0") : ch;
+    }
+  }
+  return out + quote;
+}
+
+function pythonRepr(v: unknown): string {
+  if (v === null || v === undefined) return "None";
+  if (typeof v === "boolean") return v ? "True" : "False";
+  if (typeof v === "number") return pythonNumStr(v);
+  if (typeof v === "string") return pyStrRepr(v);
+  if (Array.isArray(v)) return "[" + v.map(pythonRepr).join(", ") + "]";
+  if (typeof v === "object") {
+    const parts = Object.entries(v as Record<string, unknown>).map(
+      ([k, val]) => pyStrRepr(k) + ": " + pythonRepr(val),
+    );
+    return "{" + parts.join(", ") + "}";
+  }
+  return String(v);
+}
+
+export function pythonStr(v: unknown): string {
+  return typeof v === "string" ? v : pythonRepr(v);
 }
 
 // The `{pack: entry}` map from plugins/plugins.lock.json (empty on any failure). Faithful to Python
@@ -109,12 +172,15 @@ function pluginCeiling(verb: string): "confirm" | null {
 
 // Dispatcher per-verb gate: enforce the declared risk class (new/undeclared verbs default to
 // confirm). `risk` override is for tests; in normal use it is read from the verb's cmd.json.
-export function gate(verb: string, args: string[], riskOverride?: string | null): Decision {
+export function gate(verb: string, args: string[], riskOverride?: unknown): Decision {
   if (!knownVerbs().has(verb)) {
     return { verdict: DENY, reason: `unknown/invented verb: '${verb}' (not in plainkeep.json)`, riskClass: "deny" };
   }
-  // Python `risk = risk or risk_of(verb) or "confirm"` — `or` truthiness, so "" / null default.
-  let risk: string = (riskOverride || riskOf(verb) || "confirm") as string;
+  // Python `risk = risk or risk_of(verb) or "confirm"` — `or` chains on RAW truthiness, so a falsy
+  // declared value (0 / "" / null / [] / {}) defaults to confirm while 5 / true / "weird" pass through.
+  let risk: unknown = riskOverride;
+  if (!pythonTruthy(risk)) risk = riskOf(verb);
+  if (!pythonTruthy(risk)) risk = "confirm";
   const yes = args.includes("--yes") || args.includes("-y");
   const dry = args.includes("--dry-run");
   if (risk === "deny") {
@@ -130,7 +196,9 @@ export function gate(verb: string, args: string[], riskOverride?: string | null)
   if (risk === "confirm" && !yes) {
     return { verdict: CONFIRM, reason: `'${verb}' is confirm-class — re-run with --yes to proceed`, riskClass: "confirm" };
   }
-  return { verdict: ALLOW, reason: `${risk}`, riskClass: risk };
+  // Final allow: Python `Decision(ALLOW, f"{risk}", risk)` — render the raw risk value as Python does.
+  const rendered = pythonStr(risk);
+  return { verdict: ALLOW, reason: rendered, riskClass: rendered };
 }
 
 // Append the gate audit line to $PLAINKEEP_HOME/.logs/plainkeep.log (mkdir -p). Format EXACTLY

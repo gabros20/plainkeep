@@ -42,6 +42,7 @@ SUITES = [
     ("trust wave: exit codes + update merge + doctor (0.1/0.3/0.4)", "run_trust.py"),
     ("machine contract: --json + plainkeep.json/3 + dry-run (1.1/1.2/0.5)", "run_json.py"),
     ("multi-root verb resolution: plugins + PLAINKEEP_PATH (2.1/0.2)", "run_resolver.py"),
+    ("core-parity: TS<->Python resolver differential oracle (hybrid-core)", "run_core_parity.py"),
     ("frozen SDK + plainkeep plugin: api.py + trust ceiling (2.2/2.3)", "run_plugin.py"),
     ("agent transport: plainkeep mcp stdio server (2.4)", "run_mcp.py"),
     ("obsidian frontend zero + canvas/bases (3.1/3.2)", "run_obsidian.py"),

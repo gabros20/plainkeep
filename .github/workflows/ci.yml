@@ -57,27 +57,36 @@ jobs:
           fi
 
   ui:
-    # The TS terminal UI (ui/, ADR-011). Typecheck + compile smoke: the same `bun build --compile`
-    # the release workflow ships must produce a binary that honors the non-TTY contract (exit 2,
-    # pointing at `plainkeep <verb> --json`) — that's testable headlessly without a plainkeep vault.
+    # The TS core-binary workspace (cli/, ADR-011 + hybrid-core Phase 1). Typecheck + unit tests +
+    # compile smoke: the same `bun build --compile` the release workflow ships must produce a
+    # plainkeep-ui binary that honors the non-TTY contract (exit 2, pointing at
+    # `plainkeep <verb> --json`) — testable headlessly without a plainkeep vault. Also compiles the
+    # plainkeep-core skeleton so a broken core entry fails CI too.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: latest
-      - name: install ui deps
+      - name: install cli deps
         run: bun install --frozen-lockfile || bun install
-        working-directory: ui
+        working-directory: cli
       - name: typecheck
-        run: bunx tsc --noEmit
-        working-directory: ui
-      - name: compile smoke + non-TTY contract
-        working-directory: ui
+        run: bun run typecheck
+        working-directory: cli
+      - name: test
+        run: bun run test
+        working-directory: cli
+      - name: build core + ui binaries
+        working-directory: cli
         run: |
-          bun build --compile src/index.ts --outfile /tmp/plainkeep-ui
+          bun run build
+          bun run build:ui
+      - name: plainkeep-ui non-TTY contract
+        working-directory: cli
+        run: |
           set +e
-          out="$(/tmp/plainkeep-ui </dev/null 2>&1)"
+          out="$(../.local/bin/plainkeep-ui </dev/null 2>&1)"
           code=$?
           set -e
           echo "$out"

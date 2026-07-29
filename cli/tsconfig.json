@@ -3,15 +3,13 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
-    "outDir": "dist",
-    "rootDir": "src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
-    "declaration": false,
-    "sourceMap": false,
     "resolveJsonModule": true,
-    "types": ["node"]
+    "verbatimModuleSyntax": false,
+    "noEmit": true,
+    "types": ["node", "bun"]
   },
   "include": ["src"]
 }

@@ -1,0 +1,28 @@
+{
+  "name": "plainkeep-cli",
+  "version": "0.0.0",
+  "description": "The plainkeep core binary (compiled TS): dispatcher, guardrail, resolver, TUI, MCP. Phase 1 skeleton — absorbs the legacy plainkeep-ui TUI (cli/src/tui).",
+  "type": "module",
+  "private": true,
+  "engines": { "bun": ">=1.1", "node": ">=20" },
+  "bin": {
+    "plainkeep-core": "./src/core/main.ts",
+    "plainkeep-ui": "./src/tui/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsgo --noEmit",
+    "test": "bun test",
+    "build": "bun build --compile src/core/main.ts --outfile ../.local/bin/plainkeep-core",
+    "build:ui": "bun build --compile src/tui/index.ts --outfile ../.local/bin/plainkeep-ui"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.7.0",
+    "execa": "^9.5.1",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.14",
+    "@types/node": "^22.9.0",
+    "@typescript/native-preview": "^7.0.0-dev"
+  }
+}

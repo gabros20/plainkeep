@@ -357,7 +357,33 @@ def _compare_gate(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
 # positive proof the floor side really took the bash path rather than silently re-entering the core.
 # The core side needs no such proof: it IS the binary, invoked by absolute path with no shell in
 # between.
+#
+# NOT COMPARABLE, BY DESIGN: the binary's identity/introspection flags are a SANCTIONED divergence
+# from the floor — `plainkeep-core --version` prints the core identity and exits 0 (plan-phase1,
+# "Binary introspection flags": the output must distinguish the core binary from the bash floor
+# unambiguously, advisor B4), while the floor has no such concept and gates `--version` as an unknown
+# verb (exit 4). Routing one of those argv shapes through this comparator would therefore report a
+# difference that is CORRECT, so _intercepted_argv() rejects them up front with an explanation
+# instead of leaving a future case author to rediscover it from a confusing diff.
 # --------------------------------------------------------------------------------------------------
+
+# The argv shapes runCore() answers ITSELF, before dispatch ever runs — mirroring cli.ts exactly:
+# the three --core-* probes intercept on argv[0] alone, while --version/-v/--core-selftest intercept
+# only when they are the WHOLE argv (`--version extra` does fall through to dispatch, and both sides
+# then agree on the gate's unknown-verb refusal, so it stays a legitimate case).
+_CORE_INTERCEPTED_ALWAYS = ("--core-resolve", "--core-api", "--core-gate")
+_CORE_INTERCEPTED_BARE = ("--version", "-v", "--core-selftest")
+
+
+def _intercepted_argv(argv: list[str]) -> str | None:
+    if not argv:
+        return None
+    head = argv[0]
+    if head in _CORE_INTERCEPTED_ALWAYS:
+        return head
+    if head in _CORE_INTERCEPTED_BARE and len(argv) == 1:
+        return head
+    return None
 
 def _install_floor(root: Path) -> None:
     """Make a built fixture vault runnable by the bash floor: the shim at the vault root, plus
@@ -404,6 +430,15 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
     verb = inv.get("verb")
     args = inv.get("args", [])
     argv = list(args) if verb is None else [verb, *args]
+    # Fail the CASE, not the binary: this argv can never be compared across modes (see above).
+    flag = _intercepted_argv(argv)
+    if flag is not None:
+        return False, (
+            f"invalid dispatcher case: {flag!r} is intercepted by the binary before dispatch, so it "
+            f"is a SANCTIONED floor/core divergence (core: identity, exit 0; floor: unknown verb, "
+            f"exit 4 — plan-phase1 'Binary introspection flags', advisor B4). Comparing it across "
+            f"modes proves nothing. Assert the flag's behavior in a bun test or a shim check instead."
+        )
     core_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-core-")))
     floor_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-floor-")))
     aliases: list[Path] = []

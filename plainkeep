@@ -2,40 +2,100 @@
 # plainkeep — the single entrypoint dispatcher (§4.2). Verbs live in bin/<verb>/run.py with a cmd.json
 # sidecar; `plainkeep help` renders the surface from those, and the guardrail gates each by its risk.
 # PLAINKEEP_HOME defaults to this repo. The verb set is whatever bin/*/ exists — run `plainkeep help`.
+#
+# Since the hybrid-core refactor (docs/design/proposals/2026-07-29-hybrid-core-binary.md §3, Phase 1
+# Task 4) this file is a SHIM: the dispatch itself normally happens inside the compiled core binary
+# (.local/bin/plainkeep-core), which does the same gate → resolve → exec in ONE process instead of
+# three. The bash floor below is kept — VERBATIM, not a re-implementation — as the zero-install path
+# and the escape hatch, and test/cases/core-parity/dispatcher.json proves the two agree on exit code,
+# stdout, stderr and the audit log line.
 set -euo pipefail
 PK="${PLAINKEEP_HOME:-$(cd "$(dirname "$0")" && pwd)}"
 export PLAINKEEP_HOME="$PK"
 
-# Interpreter selection (ADR-008): the stdlib floor runs on bare `python3` from PATH, but the OPTIONAL
-# deps (search + models) live in a repo-local $PLAINKEEP_HOME/.venv that `plainkeep setup` creates. A
-# bare-`python3` dispatcher can't see them, so prefer the venv interpreter WHEN it exists — this is what
-# lets `plainkeep index`/`plainkeep search` import the vector plane with no manual PATH surgery, and any
-# agent terminal inherits it for free. Falls back to bare `python3` otherwise (the zero-install path).
-# The guardrail/resolver are stdlib-only, so running them on the chosen interpreter is safe either way.
+# --------------------------------------------------------------------------------------------------
+# The bash floor — the dispatcher as it was before the core binary existed, unchanged.
+# --------------------------------------------------------------------------------------------------
+pk_floor() {
+  # Interpreter selection (ADR-008): the stdlib floor runs on bare `python3` from PATH, but the OPTIONAL
+  # deps (search + models) live in a repo-local $PLAINKEEP_HOME/.venv that `plainkeep setup` creates. A
+  # bare-`python3` dispatcher can't see them, so prefer the venv interpreter WHEN it exists — this is what
+  # lets `plainkeep index`/`plainkeep search` import the vector plane with no manual PATH surgery, and any
+  # agent terminal inherits it for free. Falls back to bare `python3` otherwise (the zero-install path).
+  # The guardrail/resolver are stdlib-only, so running them on the chosen interpreter is safe either way.
+  #
+  # But `-x` alone is not enough: a `.venv/bin/python3` symlink can survive a system-python upgrade or an
+  # ABI break and still be executable while failing to START — that would return 126/127 on EVERY verb.
+  # So we also PROBE that it actually runs (`python3 -c ''`); a broken venv must never poison plainkeep.
+  # One cheap probe, and only when the venv python is present, so the no-venv path pays nothing.
+  local PY=python3
+  if [ -x "$PK/.venv/bin/python3" ] && "$PK/.venv/bin/python3" -c '' 2>/dev/null; then
+    PY="$PK/.venv/bin/python3"
+  fi
+
+  local VERB="${1:-help}"; shift || true
+  case "$VERB" in -h|--help) VERB=help;; esac
+
+  # guardrail (§5): unknown-verb detection (did-you-mean), risk gate, and logging — before anything
+  # runs. Exit codes propagate per the protocol (Part 0.3): 0 ok · 2 usage · 3 confirm · 4 not-found ·
+  # 5 deny. The `|| exit 1` of old flattened 3/4/5 into 1, so agents couldn't tell them apart.
+  set +e
+  "$PY" "$PK/bin/lib/guardrail.py" "$VERB" "$@"
+  local gr=$?
+  set -e
+  [ "$gr" -eq 0 ] || exit "$gr"
+
+  # Multi-root resolution (Part 2.1): engine bin/ (reserved) → plugins/<pack>/ → $PLAINKEEP_PATH. The
+  # resolver is the single source of truth; the dispatcher just asks it for the run.py to exec.
+  local CMD
+  CMD="$("$PY" "$PK/bin/lib/resolver.py" "$VERB" 2>/dev/null || true)"
+  [ -n "$CMD" ] && [ -f "$CMD" ] || { echo "plainkeep: verb '$VERB' has no run.py" >&2; exit 4; }
+  exec "$PY" "$CMD" "$@"
+}
+
+# --------------------------------------------------------------------------------------------------
+# Core selection. PLAINKEEP_CORE = auto (default) · require · off; PLAINKEEP_CORE_BIN overrides where
+# the binary is looked for (the suite's binary-mode runs point it at an absolute built binary so that
+# COPIED fixture vaults route through the real core too).
 #
-# But `-x` alone is not enough: a `.venv/bin/python3` symlink can survive a system-python upgrade or an
-# ABI break and still be executable while failing to START — that would return 126/127 on EVERY verb.
-# So we also PROBE that it actually runs (`python3 -c ''`); a broken venv must never poison plainkeep.
-# One cheap probe, and only when the venv python is present, so the no-venv path pays nothing.
-PY=python3
-if [ -x "$PK/.venv/bin/python3" ] && "$PK/.venv/bin/python3" -c '' 2>/dev/null; then
-  PY="$PK/.venv/bin/python3"
-fi
+# `-x` is not enough for the same reason it is not enough for the venv python: a core binary built for
+# another platform, truncated by a half-finished download, or linked against a missing library is
+# executable and dead. So the candidate must also PASS `--core-selftest` before it is trusted with the
+# dispatch. auto degrades to the floor (with exactly ONE warning line, and none at all when there is
+# simply no binary installed); require refuses to degrade at all — never a silent fallback.
+# --------------------------------------------------------------------------------------------------
+PK_CORE_MODE="${PLAINKEEP_CORE:-auto}"
+PK_CORE="${PLAINKEEP_CORE_BIN:-$PLAINKEEP_HOME/.local/bin/plainkeep-core}"
 
-VERB="${1:-help}"; shift || true
-case "$VERB" in -h|--help) VERB=help;; esac
+pk_core_live() { [ -x "$PK_CORE" ] && "$PK_CORE" --core-selftest >/dev/null 2>&1; }
 
-# guardrail (§5): unknown-verb detection (did-you-mean), risk gate, and logging — before anything
-# runs. Exit codes propagate per the protocol (Part 0.3): 0 ok · 2 usage · 3 confirm · 4 not-found ·
-# 5 deny. The `|| exit 1` of old flattened 3/4/5 into 1, so agents couldn't tell them apart.
-set +e
-"$PY" "$PK/bin/lib/guardrail.py" "$VERB" "$@"
-gr=$?
-set -e
-[ "$gr" -eq 0 ] || exit "$gr"
-
-# Multi-root resolution (Part 2.1): engine bin/ (reserved) → plugins/<pack>/ → $PLAINKEEP_PATH. The
-# resolver is the single source of truth; the dispatcher just asks it for the run.py to exec.
-CMD="$("$PY" "$PK/bin/lib/resolver.py" "$VERB" 2>/dev/null || true)"
-[ -n "$CMD" ] && [ -f "$CMD" ] || { echo "plainkeep: verb '$VERB' has no run.py" >&2; exit 4; }
-exec "$PY" "$CMD" "$@"
+case "$PK_CORE_MODE" in
+  off)
+    pk_floor "$@"
+    ;;
+  require)
+    pk_core_live || {
+      echo "plainkeep: PLAINKEEP_CORE=require but no live core binary at '$PK_CORE'" >&2
+      echo "plainkeep: build it with (cd cli && bun run build), or unset PLAINKEEP_CORE for the bash floor" >&2
+      exit 1
+    }
+    exec "$PK_CORE" "$@"
+    ;;
+  auto)
+    if [ -x "$PK_CORE" ]; then
+      if "$PK_CORE" --core-selftest >/dev/null 2>&1; then
+        exec "$PK_CORE" "$@"
+      fi
+      # Broken-but-executable: one line, then carry on. A core that cannot answer its own selftest
+      # must never take plainkeep down with it.
+      echo "plainkeep: core binary at '$PK_CORE' failed its liveness probe — falling back to the bash floor" >&2
+    fi
+    pk_floor "$@"
+    ;;
+  *)
+    # An unrecognized mode is a usage error (exit 2), never a silent choice: `PLAINKEEP_CORE=Require`
+    # must not quietly become the floor when the operator asked for the opposite.
+    echo "plainkeep: unknown PLAINKEEP_CORE='$PK_CORE_MODE' (expected: auto, require, off)" >&2
+    exit 2
+    ;;
+esac

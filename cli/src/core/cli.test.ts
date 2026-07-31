@@ -1,5 +1,9 @@
 import { test, expect } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { runCore, CORE_IDENTITY } from "./cli.js";
+import { EXIT_NOT_FOUND } from "./guardrail.js";
 import { CORE_VERSION } from "./version.js";
 
 test("--version prints the core identity and exits 0", () => {
@@ -21,14 +25,30 @@ test("--core-selftest identifies the core binary and exits 0", () => {
   expect(r.stdout).toContain(CORE_VERSION);
 });
 
-test("any other argv exits 2 with a one-line 'not yet wired' stderr", () => {
-  for (const argv of [[], ["help"], ["capture", "hi"], ["--version", "extra"], ["--nope"]]) {
-    const r = runCore(argv);
-    expect(r.code).toBe(2);
-    expect(r.stdout).toBeUndefined();
-    expect(r.stderr).toBeDefined();
-    expect(r.stderr).toContain("not yet wired");
-    expect(r.stderr!.split("\n")).toHaveLength(1);
+// Replaces the Task 1 skeleton's "any other argv exits 2 with a one-line 'not yet wired' stderr".
+// That placeholder IS what Task 4 removes: every non-flag argv is now a verb dispatch. The contract
+// asserted here is strictly stronger — the argv still does not run anything, but because the GATE
+// refused it by name (not-found, 4, with the guardrail's own stderr), which is what the bash floor
+// does for the same input. PLAINKEEP_HOME is pinned to an empty temp vault so the verb set is empty
+// by construction: the assertion can never depend on the developer's real vault, and dispatch can
+// never reach a spawn.
+test("a non-flag argv dispatches: an unknown verb is the gate's not-found (4)", () => {
+  const prev = process.env.PLAINKEEP_HOME;
+  const home = mkdtempSync(path.join(tmpdir(), "pk-core-cli-"));
+  process.env.PLAINKEEP_HOME = home;
+  try {
+    for (const argv of [[], ["help"], ["capture", "hi"], ["--version", "extra"], ["--nope"]]) {
+      const r = runCore(argv);
+      expect(r.code).toBe(EXIT_NOT_FOUND);
+      expect(r.stdout).toBeUndefined();
+      expect(r.stderr).toBeDefined();
+      expect(r.stderr).toContain("unknown verb");
+      expect(r.stderr!.split("\n")).toHaveLength(1);
+    }
+  } finally {
+    if (prev === undefined) delete process.env.PLAINKEEP_HOME;
+    else process.env.PLAINKEEP_HOME = prev;
+    rmSync(home, { recursive: true, force: true });
   }
 });
 

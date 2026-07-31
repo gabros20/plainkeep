@@ -1,8 +1,8 @@
-// The core binary's argv handler — pure so it can be unit-tested without spawning a process.
-// Phase 1 is a skeleton: only the identity probes (`--version`, `--core-selftest`) are live; every
-// other argv exits 2 with a one-line "not yet wired" note, so nothing silently pretends the
-// dispatcher/guardrail/resolver (Tasks 2–4, ./index.ts) exist yet.
+// The core binary's argv handler. The identity probes (`--version`, `--core-selftest`) and the
+// hidden `--core-*` introspection flags short-circuit here; EVERY other argv is a verb dispatch
+// (./dispatch.ts) — gate, resolve, one spawn — reproducing the bash floor exactly.
 import { CORE_VERSION } from "./version.js";
+import { dispatch } from "./dispatch.js";
 import {
   iterCmds,
   knownVerbs,
@@ -18,6 +18,10 @@ export interface CoreResult {
   stdout?: string;
   stderr?: string;
   code: number;
+  // Set ONLY when a dispatched verb was killed by a signal. main.ts re-raises it on this process so
+  // the wait status a caller sees is a signal death, exactly like the bash floor's `exec`'d child —
+  // `code` (128+N) is then just the fallback for a signal that does not kill us. See dispatch.ts.
+  signal?: NodeJS.Signals;
 }
 
 // Compact JSON, no inter-token spaces — matches the parity probe's
@@ -69,9 +73,11 @@ export function runCore(argv: string[]): CoreResult {
   }
   // Hidden gate probe (no help text) consumed by test/run_core_parity.py's "gate" comparator: runs
   // the ported main_cli semantics (known-verb check + did-you-mean, risk gate, audit log, stderr)
-  // and exits with the gate code, spawning nothing. Task 4 wires the gate into real verb dispatch.
+  // and exits with the gate code, spawning NOTHING — dispatch() below runs the same gate and then
+  // goes on to spawn the verb.
   if (argv[0] === "--core-gate") {
     return mainCli(argv.slice(1));
   }
-  return { stderr: "plainkeep-core: not yet wired (skeleton binary — no verbs are dispatched yet)", code: 2 };
+  // Everything else is a verb (including no argv at all, which is the default verb `help`).
+  return dispatch(argv);
 }

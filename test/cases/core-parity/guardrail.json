@@ -1,5 +1,5 @@
 {
-  "description": "Language-neutral parity catalog for the dispatcher-facing guardrail (bin/lib/guardrail.py main_cli/gate/_log <-> cli/src/core/guardrail.ts). test/run_core_parity.py builds a fixture vault, then for each 'gate' invocation runs the binary's --core-gate <verb> <args...> and python3 <vault>/bin/lib/guardrail.py <verb> <args...> against SEPARATE copies of the vault (isolated .logs), comparing exit code + stdout + stderr byte-exact AND the appended audit-log line (timestamp shape asserted, remainder after the first tab byte-compared). Fixture grammar additions over resolver.json (additive): verbs[].cmd sets a verb's cmd.json CONTENT (object -> json.dumps, string -> written raw for a malformed-JSON fixture); top-level plugins_lock writes plugins/plugins.lock.json (object -> dumped, string -> raw). Invocation shape: {compare:'gate', verb, args?:[...]}.",
+  "description": "Language-neutral parity catalog for the dispatcher-facing guardrail (bin/lib/guardrail.py main_cli/gate/_log <-> cli/src/core/guardrail.ts). test/run_core_parity.py builds a fixture vault, then for each 'gate' invocation runs the binary's --core-gate <verb> <args...> and python3 <vault>/bin/lib/guardrail.py <verb> <args...> against SEPARATE copies of the vault (isolated .logs), comparing exit code + stdout + stderr byte-exact AND the appended audit-log line (timestamp shape asserted, remainder after the first tab byte-compared). Fixture grammar additions over resolver.json (additive): verbs[].cmd sets a verb's cmd.json CONTENT and top-level plugins_lock writes plugins/plugins.lock.json, both through _content() — an object is json.dumps'd, a string is written RAW (malformed-JSON fixtures), and a LIST is concatenated raw text whose segments are strings or {repeat:'<s>', times:N} (used for pathologically deep documents, which cannot be written literally: the catalog itself would then be too deep for json.loads to read). Invocation shape: {compare:'gate', verb, args?:[...]}.",
   "cases": [
     {
       "name": "engine-verb-risks",
@@ -141,6 +141,71 @@
         { "compare": "gate", "verb": "vr_emptystr", "args": [] },
         { "compare": "gate", "verb": "vr_null", "args": [] },
         { "compare": "gate", "verb": "vr_true", "args": [] }
+      ]
+    },
+    {
+      "name": "wrong-type-trusted-flag",
+      "rationale": "The plugins.lock.json `trusted` flag is read with Python bool() (entry.get('trusted') in _plugin_ceiling), so an empty container is UNTRUSTED: [] {} 0 keep the ceiling (declared read capped to confirm, exit 3) while 1 and 'x' clear it (declared read stands, exit 0). JS Boolean([]) / Boolean({}) are true, so reading the lock the JS way let an untrusted pack escape the trust ceiling entirely — allow (0) where the frozen protocol demands confirm (3), the permissive direction. Same bug class as wrong-type-field-values, at the third and last site; the [] and {} invocations FAIL against the pre-fix binary.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:t_list", "verb": "pv_list", "cmd": { "verb": "pv_list", "risk": "read" } },
+          { "at": "plugin:t_obj", "verb": "pv_obj", "cmd": { "verb": "pv_obj", "risk": "read" } },
+          { "at": "plugin:t_zero", "verb": "pv_zero", "cmd": { "verb": "pv_zero", "risk": "read" } },
+          { "at": "plugin:t_one", "verb": "pv_one", "cmd": { "verb": "pv_one", "risk": "read" } },
+          { "at": "plugin:t_str", "verb": "pv_str", "cmd": { "verb": "pv_str", "risk": "read" } }
+        ],
+        "plugins_lock": {
+          "plugins": {
+            "t_list": { "trusted": [] },
+            "t_obj": { "trusted": {} },
+            "t_zero": { "trusted": 0 },
+            "t_one": { "trusted": 1 },
+            "t_str": { "trusted": "x" }
+          }
+        }
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "pv_list", "args": [] },
+        { "compare": "gate", "verb": "pv_obj", "args": [] },
+        { "compare": "gate", "verb": "pv_zero", "args": [] },
+        { "compare": "gate", "verb": "pv_one", "args": [] },
+        { "compare": "gate", "verb": "pv_str", "args": [] }
+      ]
+    },
+    {
+      "name": "deep-nested-cmd-json",
+      "rationale": "A cmd.json is pack-supplied input, so its nesting depth is adversarial. At ORDINARY depths (5, 50) both sides decode the nested risk value and render it identically into the ALLOW reason and the audit line — pinning that the TS repr is iterative rather than one call frame per level. At PATHOLOGICAL depths (3000, 20000) Python's json.loads raises RecursionError (measured threshold: depth 1498 at the default recursionlimit of 1000), which _cmd_field's bare except swallows to None -> default confirm (exit 3); the TS port reaches the same confirm via its MAX_JSON_DEPTH=100 cap. Both deep invocations FAIL against the pre-fix binary, which ALLOWED (exit 0) at depth 3000 and at depth 20000 blew the JS call stack inside gate() — exiting 1, off the frozen protocol, with NO audit line written. Depths between the cap and CPython's threshold are deliberately NOT authored: there the two sides diverge in the SAFE direction (TS confirms where Python still allows), which is a documented residual, not parity.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "vn_d5", "cmd": ["{\"verb\": \"vn_d5\", \"risk\": ", { "repeat": "[", "times": 5 }, "1", { "repeat": "]", "times": 5 }, "}"] },
+          { "at": "engine", "verb": "vn_d50", "cmd": ["{\"verb\": \"vn_d50\", \"risk\": ", { "repeat": "[", "times": 50 }, "1", { "repeat": "]", "times": 50 }, "}"] },
+          { "at": "engine", "verb": "vn_d3000", "cmd": ["{\"verb\": \"vn_d3000\", \"risk\": ", { "repeat": "[", "times": 3000 }, "1", { "repeat": "]", "times": 3000 }, "}"] },
+          { "at": "engine", "verb": "vn_d20000", "cmd": ["{\"verb\": \"vn_d20000\", \"risk\": ", { "repeat": "[", "times": 20000 }, "1", { "repeat": "]", "times": 20000 }, "}"] }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "vn_d5", "args": [] },
+        { "compare": "gate", "verb": "vn_d50", "args": [] },
+        { "compare": "gate", "verb": "vn_d3000", "args": [] },
+        { "compare": "gate", "verb": "vn_d20000", "args": [] }
+      ]
+    },
+    {
+      "name": "did-you-mean-score-ties",
+      "rationale": "Pins the did-you-mean tie-break, the single most surprising line in the difflib port and the one no other case reaches: when candidates score EQUAL, difflib's heapq.nlargest orders the (ratio, name) tuples descending, so equal scores break by name lexicographically LARGER-first. 'abc' scores abd/abe/abf at exactly 0.667 each -> 'abf, abe, abd'; 'capture' scores captura/capturb/capturz at 0.857 each -> 'capturz, capturb, captura'. An 'obvious cleanup' to ascending name order passes every other check in this catalog and every bun test but flips both of these.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "abd" },
+          { "at": "engine", "verb": "abe" },
+          { "at": "engine", "verb": "abf" },
+          { "at": "engine", "verb": "captura" },
+          { "at": "engine", "verb": "capturb" },
+          { "at": "engine", "verb": "capturz" }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "abc", "args": [] },
+        { "compare": "gate", "verb": "capture", "args": [] }
       ]
     }
   ]

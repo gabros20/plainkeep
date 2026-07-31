@@ -60,6 +60,35 @@ _VERB_FILES = {
 }
 
 
+def _content(spec) -> str:
+    """The text a catalog writes into cmd.json / plugins.lock.json.
+
+    Three additive forms:
+      * object/scalar  -> json.dumps(spec)                (the normal, readable form)
+      * str            -> written RAW                     (malformed-JSON fixtures)
+      * list of SEGMENTS -> concatenated raw text, where a segment is a str or
+        {"repeat": "<s>", "times": N}.
+
+    The segment form exists for the pathologically-deep-JSON cases (fix wave r2 / IMP-2): a literal
+    3000-deep array would be a multi-KB unreadable line AND would nest the CATALOG file itself that
+    deep, which json.loads (which reads the catalog) raises RecursionError on. Segments keep the
+    depth as an integer the catalog states out loud.
+    """
+    if isinstance(spec, str):
+        return spec
+    if isinstance(spec, list):
+        out = []
+        for seg in spec:
+            if isinstance(seg, str):
+                out.append(seg)
+            elif isinstance(seg, dict) and set(seg) == {"repeat", "times"}:
+                out.append(str(seg["repeat"]) * int(seg["times"]))
+            else:
+                raise ValueError(f"bad raw-text segment: {seg!r}")
+        return "".join(out)
+    return json.dumps(spec)
+
+
 class Fixture:
     """A built fixture vault plus the env needed to invoke either side against it.
 
@@ -107,14 +136,13 @@ class Fixture:
         # Guardrail-catalog additions (additive; resolver.json declares neither): plugins_lock writes
         # plugins/plugins.lock.json verbatim (a str for a malformed-JSON fixture) or json.dumps()'d
         # (an object). verbs[].cmd overrides a verb's cmd.json CONTENT (str written raw, else dumped),
-        # so risk/dry_run vary per verb — what _VERB_FILES' name-only lambda cannot express.
+        # so risk/dry_run vary per verb — what _VERB_FILES' name-only lambda cannot express. Both go
+        # through _content(), which also accepts the segment-list form for deep-nesting fixtures.
         pl = spec.get("plugins_lock")
         if pl is not None:
             pdir = self.root / "plugins"
             pdir.mkdir(parents=True, exist_ok=True)
-            (pdir / "plugins.lock.json").write_text(
-                pl if isinstance(pl, str) else json.dumps(pl), encoding="utf-8"
-            )
+            (pdir / "plugins.lock.json").write_text(_content(pl), encoding="utf-8")
 
     def _base_dir(self, at: str) -> Path:
         if at == "engine":
@@ -133,7 +161,7 @@ class Fixture:
         d.mkdir(parents=True, exist_ok=True)
         for f in files:
             if f == "cmd.json" and cmd is not None:
-                content = cmd if isinstance(cmd, str) else json.dumps(cmd)
+                content = _content(cmd)
             else:
                 content = _VERB_FILES[f](verb)
             (d / f).write_text(content, encoding="utf-8")

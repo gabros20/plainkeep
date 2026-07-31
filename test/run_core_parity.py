@@ -368,21 +368,44 @@ def _compare_gate(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
 # instead of leaving a future case author to rediscover it from a confusing diff.
 # --------------------------------------------------------------------------------------------------
 
-# The argv shapes runCore() answers ITSELF, before dispatch ever runs — mirroring cli.ts exactly:
-# the three --core-* probes intercept on argv[0] alone, while --version/-v/--core-selftest intercept
-# only when they are the WHOLE argv (`--version extra` does fall through to dispatch, and both sides
-# then agree on the gate's unknown-verb refusal, so it stays a legitimate case).
-_CORE_INTERCEPTED_ALWAYS = ("--core-resolve", "--core-api", "--core-gate")
-_CORE_INTERCEPTED_BARE = ("--version", "-v", "--core-selftest")
+# The argv shapes runCore() answers ITSELF, before dispatch ever runs — ASKED OF THE BINARY, not
+# restated here. This list used to be a hand-kept copy of cli.ts's branches, which was correct only
+# until the next task added an interception: Tasks 5–7 do exactly that, and a stale copy would not
+# have gone quietly wrong so much as gone LOUDLY wrong with the wrong explanation (the case fails
+# with a raw stdout diff, and the next author rediscovers by hand the thing this guard exists to have
+# already explained). `--core-api intercepts` is the same data that drives those branches.
+#
+# Note the shape has two halves and only ONE of them belongs here: `flags` are short-circuited before
+# the gate and are genuinely not comparable against the floor, while `verbs` (dispatch.ts INTERCEPTS)
+# are answered after the gate and MUST stay comparable — byte-parity with the Python verb is what
+# makes an interception legitimate — so a verb appearing there must never cause a case to be skipped.
+_INTERCEPTS_CACHE: dict | None = None
 
 
-def _intercepted_argv(argv: list[str]) -> str | None:
+def _load_intercepts(binary: str) -> dict:
+    global _INTERCEPTS_CACHE
+    if _INTERCEPTS_CACHE is None:
+        p = _run([binary, "--core-api", "intercepts"], dict(os.environ))
+        if p.returncode != 0:
+            # Fail loudly rather than falling back to a guess: a binary that cannot answer this is a
+            # binary whose interception rules we do not know, and skipping the wrong cases silently
+            # is the exact failure this probe exists to prevent.
+            raise RuntimeError(
+                f"binary could not answer --core-api intercepts (rc={p.returncode}, "
+                f"stderr={p.stderr.strip()!r}) — rebuild it: cd cli && bun run build"
+            )
+        _INTERCEPTS_CACHE = json.loads(p.stdout)
+    return _INTERCEPTS_CACHE
+
+
+def _intercepted_argv(binary: str, argv: list[str]) -> str | None:
+    flags = _load_intercepts(binary)["flags"]
     if not argv:
         return None
     head = argv[0]
-    if head in _CORE_INTERCEPTED_ALWAYS:
+    if head in flags["always"]:
         return head
-    if head in _CORE_INTERCEPTED_BARE and len(argv) == 1:
+    if head in flags["bare"] and len(argv) == 1:
         return head
     return None
 
@@ -460,7 +483,7 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
     args = inv.get("args", [])
     argv = list(args) if verb is None else [verb, *args]
     # Fail the CASE, not the binary: this argv can never be compared across modes (see above).
-    flag = _intercepted_argv(argv)
+    flag = _intercepted_argv(binary, argv)
     if flag is not None:
         return False, (
             f"invalid dispatcher case: {flag!r} is intercepted by the binary before dispatch, so it "
@@ -749,13 +772,27 @@ def main() -> int:
         print(f"{YELLOW}{BOLD}{SKIP_LINE}{RESET}")
         return 0
 
+    # PLAINKEEP_PARITY_ONLY=<substring> runs only the cases whose "<catalog>/<name>" contains it (the
+    # shim block matches on "shim"). It exists because the signal cases kill real children, which on
+    # macOS writes a crash report and pops a user notification per fault signal — so iterating on one
+    # case must not mean re-running all of them. A filtered run is announced loudly and is NEVER a
+    # gate: the summary says so, in place of the usual result line.
+    only = os.environ.get("PLAINKEEP_PARITY_ONLY")
+    if only:
+        print(f"{YELLOW}{BOLD}FILTERED RUN — PLAINKEEP_PARITY_ONLY={only!r}. "
+              f"This is a development aid, NOT a gate.{RESET}\n")
+
     catalogs = _load_catalogs()
+    ncases = 0
     for catalog, doc in catalogs:
         for case in doc.get("cases", []):
+            if only and only not in f"{catalog}/{case['name']}":
+                continue
+            ncases += 1
             _run_case(binary, catalog, case)
-    ncases = sum(len(doc.get("cases", [])) for _, doc in catalogs)
     ncatalog_checks = len(results)
-    _shim_checks(binary)
+    if not only or only in "shim":
+        _shim_checks(binary)
 
     print(f"{BOLD}core-parity differential oracle — {ncatalog_checks} checks across {ncases} "
           f"catalog cases + {len(results) - ncatalog_checks} shim/root-discovery checks "
@@ -765,7 +802,8 @@ def main() -> int:
         mark = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"
         print(f"  {mark} {name}" + (f"\n       {DIM}{detail}{RESET}" if (detail and not ok) else ""))
     failed = len(results) - passed
-    print(f"\n{BOLD}Result:{RESET} {GREEN}{passed} passed{RESET}, "
+    label = f"{YELLOW}Result (FILTERED — not a gate):{RESET}" if only else f"{BOLD}Result:{RESET}"
+    print(f"\n{label} {GREEN}{passed} passed{RESET}, "
           f"{(RED if failed else DIM)}{failed} failed{RESET}, {len(results)} checks")
     return 1 if failed else 0
 

@@ -61,13 +61,24 @@ jobs:
     # compile smoke: the same `bun build --compile` the release workflow ships must produce a
     # plainkeep-ui binary that honors the non-TTY contract (exit 2, pointing at
     # `plainkeep <verb> --json`) — testable headlessly without a plainkeep vault. Also compiles the
-    # plainkeep-core skeleton so a broken core entry fails CI too.
+    # plainkeep-core binary and then RUNS the differential oracle against it (below), which is the
+    # only place that oracle runs at all: the offline-suites job has no bun, so the binary is absent
+    # there and run_core_parity.py takes its SKIP branch.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          # Pinned, not `latest`, and matching .bun-version. The core binary inverts a bun defect
+          # (signal naming) and pins bun's signal DELIVERY behavior per signal, both measured on this
+          # exact version — `latest` would silently revalidate them against whatever shipped that
+          # week, which is the opposite of a pin.
+          bun-version-file: .bun-version
+      - uses: actions/setup-python@v5
+        # The Python oracle and the two suite runs below need the same interpreter offline-suites
+        # uses, rather than whatever the runner image happens to ship.
+        with:
+          python-version: "3.11"
       - name: install cli deps
         run: bun install --frozen-lockfile || bun install
         working-directory: cli
@@ -82,6 +93,23 @@ jobs:
         run: |
           bun run build
           bun run build:ui
+      - name: git identity (the suites create temp repos)
+        run: |
+          git config --global user.email "ci@example.com"
+          git config --global user.name "plainkeep-ci"
+          git config --global init.defaultBranch main
+      - name: core-parity differential oracle (the Task 4 acceptance gate)
+        # PLAINKEEP_REQUIRE_CORE=1 turns "no binary" from a visible SKIP into a FAILURE, so this step
+        # cannot pass by not running. This is the only job with a built binary, and therefore the
+        # only place the dispatcher matrix, the shim checks and the signal pins are enforced at all.
+        run: PLAINKEEP_REQUIRE_CORE=1 python3 test/run_core_parity.py
+      - name: full suite through the CORE (mode pinned)
+        # require + an absolute PLAINKEEP_CORE_BIN so even the suites that copy a vault to temp route
+        # through the real binary; require makes a missing/dead core exit 1 rather than degrade to
+        # the bash floor, so a green run here proves the binary really did the dispatching.
+        run: PLAINKEEP_CORE_BIN="$PWD/.local/bin/plainkeep-core" PLAINKEEP_CORE=require python3 test/run_all.py
+      - name: full suite through the BASH FLOOR (mode pinned)
+        run: PLAINKEEP_CORE=off python3 test/run_all.py
       - name: plainkeep-ui non-TTY contract
         working-directory: cli
         run: |

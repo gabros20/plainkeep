@@ -5,10 +5,20 @@
 // bash-isms, and the choice NOT to canonicalize PLAINKEEP_HOME.
 import { test, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, symlinkSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { pickPython, resolveHome, signalNumberOf, verbFromArgv } from "./dispatch.js";
+import { EXIT_DENY } from "./guardrail.js";
+import {
+  classifySpawnOutcome,
+  dispatch,
+  INTERCEPTS,
+  pickPython,
+  resolveHome,
+  signalNumberOf,
+  verbFromArgv,
+  type SpawnOutcome,
+} from "./dispatch.js";
 
 function withHome<T>(home: string, fn: () => T): T {
   const prev = process.env.PLAINKEEP_HOME;
@@ -68,6 +78,135 @@ test("resolveHome: with no env, home is two parents above the executable", () =>
   } finally {
     if (prev !== undefined) process.env.PLAINKEEP_HOME = prev;
   }
+});
+
+// --------------------------------------------------------------------------------------------------
+// The interception seam (INTERCEPTS). Two properties, both of which an interception written in
+// cli.ts instead would silently lose: it must be reached for EVERY spelling that normalizes to the
+// verb, and the gate's audit line must still be written for the verb that ran.
+// --------------------------------------------------------------------------------------------------
+
+// A vault with one read-class verb `help`, so the gate allows and INTERCEPTS decides the outcome.
+function helpVault(): string {
+  const home = mkdtempSync(path.join(tmpdir(), "pk-intercept-"));
+  const d = path.join(home, "bin", "help");
+  mkdirSync(d, { recursive: true });
+  writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "help", risk: "read" }));
+  writeFileSync(path.join(d, "run.py"), "print('SPAWNED PYTHON')\n");
+  return home;
+}
+
+test("INTERCEPTS is reached for all six spellings of the verb, and the audit line is written", () => {
+  const home = helpVault();
+  const seen: string[][] = [];
+  INTERCEPTS.help = (args) => {
+    seen.push(args);
+    return { stdout: "in-core help", code: 0 };
+  };
+  try {
+    // The six argv shapes that mean `help`: bare, empty-string, both -h/--help spellings, the literal
+    // verb, and a flag spelling carrying args (which must survive normalization).
+    const spellings: string[][] = [[], [""], ["-h"], ["--help"], ["help"], ["--help", "topics"]];
+    withHome(home, () => {
+      for (const argv of spellings) {
+        const r = dispatch(argv);
+        // Reached the interception, not the spawn: the fixture's run.py would have printed something
+        // else entirely, and stdio: "inherit" means it would not show up here at all.
+        expect([argv, r.code, r.stdout]).toEqual([argv, 0, "in-core help"]);
+      }
+    });
+    expect(seen).toEqual([[], [], [], [], [], ["topics"]]);
+    // ...and the gate still logged every one of them. An interception placed before mainCli() would
+    // leave this file absent — the Global Constraints' "unwritten audit line" hazard.
+    const log = readFileSync(path.join(home, ".logs", "plainkeep.log"), "utf-8");
+    const lines = log.trimEnd().split("\n");
+    expect(lines).toHaveLength(spellings.length);
+    for (const line of lines) expect(line).toContain("\thelp");
+    expect(lines[lines.length - 1]).toContain("help topics");
+  } finally {
+    delete INTERCEPTS.help;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("INTERCEPTS does not fire for a verb the gate refused — the gate still decides first", () => {
+  const home = mkdtempSync(path.join(tmpdir(), "pk-intercept-deny-"));
+  const d = path.join(home, "bin", "danger");
+  mkdirSync(d, { recursive: true });
+  writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "danger", risk: "deny" }));
+  let fired = false;
+  INTERCEPTS.danger = () => {
+    fired = true;
+    return { code: 0 };
+  };
+  try {
+    const r = withHome(home, () => dispatch(["danger"]));
+    expect(r.code).toBe(EXIT_DENY);
+    expect(fired).toBe(false);
+  } finally {
+    delete INTERCEPTS.danger;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// --------------------------------------------------------------------------------------------------
+// Spawn-failure classification. Synthetic outcomes rather than real resource exhaustion: reaching
+// EMFILE or EAGAIN for real means filling the process's fd table or the machine's process slots,
+// which is not something a unit test should do to the machine running it.
+// --------------------------------------------------------------------------------------------------
+
+test("classifySpawnOutcome: only ENOENT is reported as a missing interpreter", () => {
+  const enoent = classifySpawnOutcome({ status: null, signal: null, error: { code: "ENOENT" } }, "python3");
+  expect(enoent.code).toBe(127);
+  expect(enoent.stderr).toBe("plainkeep: interpreter not found: 'python3'");
+});
+
+test("classifySpawnOutcome: a non-ENOENT spawn failure names the errno and claims nothing else", () => {
+  for (const errno of ["EAGAIN", "EMFILE", "ENFILE", "ENOMEM", "ENOEXEC"]) {
+    const r = classifySpawnOutcome({ status: null, signal: null, error: { code: errno } }, "python3");
+    // Not 127: that is the shell's "command not found", a diagnosis this outcome does not support.
+    expect([errno, r.code]).toEqual([errno, 201]);
+    expect(r.stderr).toBe(`plainkeep: could not start interpreter 'python3' (${errno})`);
+    expect(r.stderr).not.toContain("not found");
+  }
+  const bare = classifySpawnOutcome({ status: null, signal: null }, "python3");
+  expect(bare.code).toBe(201);
+  expect(bare.stderr).toContain("unknown error");
+});
+
+test("classifySpawnOutcome: EACCES stays the 126 'cannot execute' case", () => {
+  const r = classifySpawnOutcome({ status: null, signal: null, error: { code: "EACCES" } }, "/x/python3");
+  expect(r.code).toBe(126);
+  expect(r.stderr).toBe("plainkeep: cannot execute interpreter '/x/python3'");
+});
+
+test("classifySpawnOutcome: an EMPTY signal name is a signal death, not a missing interpreter", () => {
+  // `if (r.signal)` is false for "" as well as for null, so this outcome used to fall through to the
+  // spawn-failure branch and be reported as an interpreter that could not be found.
+  const r = classifySpawnOutcome({ status: null, signal: "" }, "python3");
+  expect(r.code).toBe(200);
+  expect(r.stderr).toContain("unnamed signal");
+  expect(r.stderr).not.toContain("not found");
+});
+
+test("classifySpawnOutcome: a status wins over anything bun puts in `error`", () => {
+  // bun sets error.code to the exit status on a normal non-zero exit, so `error` can never be the
+  // signal that a spawn FAILED.
+  expect(classifySpawnOutcome({ status: 7, signal: null, error: { code: "7" } }, "python3")).toEqual({ code: 7 });
+  expect(classifySpawnOutcome({ status: 0, signal: null }, "python3")).toEqual({ code: 0 });
+});
+
+test("classifySpawnOutcome: a named signal death carries the number for main.ts to re-raise", () => {
+  expect(classifySpawnOutcome({ status: null, signal: "SIGTERM" }, "python3")).toEqual({ code: 143, signal: 15 });
+  const unknown = classifySpawnOutcome({ status: null, signal: "SIGNOTREAL" }, "python3");
+  expect(unknown.code).toBe(200);
+  expect(unknown.signal).toBeUndefined();
+});
+
+test("classifySpawnOutcome: agrees with what spawnSync really reports for a missing interpreter", () => {
+  // The synthetic cases above are only as good as their shape, so pin the shape against reality once.
+  const r = spawnSync("plainkeep-definitely-not-an-interpreter", ["x"], { stdio: "ignore" });
+  expect(classifySpawnOutcome(r as SpawnOutcome, "plainkeep-definitely-not-an-interpreter").code).toBe(127);
 });
 
 // --------------------------------------------------------------------------------------------------

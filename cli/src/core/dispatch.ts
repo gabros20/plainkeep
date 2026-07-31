@@ -26,6 +26,13 @@ import { runPy } from "./resolver.js";
 const EXIT_NOT_EXECUTABLE = 126;
 const EXIT_COMMAND_NOT_FOUND = 127;
 
+// "The dispatcher could not start the verb, for a reason that is not the interpreter being missing
+// or unexecutable" — EAGAIN, EMFILE, ENOMEM and friends. It deliberately is NOT 127: that code is
+// the shell's "command not found", i.e. a diagnosis, and claiming it for a process-table limit sends
+// the operator to look for a file that is sitting right there. Chosen from the same clear band as
+// EXIT_UNKNOWN_SIGNAL below and for the same reasons; the two are adjacent so they read as a pair.
+const EXIT_SPAWN_FAILED = 201;
+
 // PLAINKEEP_HOME, resolved EXACTLY as the floor's `PK="${PLAINKEEP_HOME:-...}"`: a caller-supplied
 // value is trusted VERBATIM — never canonicalized, never rewritten. It is the vault's identity (the
 // resolver's engine bin/, the guardrail's .logs, every verb's own path derivation all hang off it),
@@ -185,16 +192,34 @@ export function signalNumberOf(name: string): number | null {
 // diverging alike — is a named case in dispatcher.json's signal-passthrough-matrix, so a change in
 // EITHER direction reddens a specific test; delivery classes are additionally pinned in
 // dispatch.test.ts. When a divergence cell goes red, delete its bullet here.
-function spawnVerb(py: string, script: string, args: string[], home: string): CoreResult {
-  const r = spawnSync(py, [script, ...args], {
-    stdio: "inherit",
-    env: { ...process.env, PLAINKEEP_HOME: home },
-  });
-  if (r.signal) {
+// The shape of what spawnSync reports back, narrowed to what the classifier needs. Kept structural
+// so a test can hand it a synthetic outcome — the alternative is exhausting real file descriptors or
+// process slots to reach EMFILE/EAGAIN, which is not a test anyone should run.
+export interface SpawnOutcome {
+  status: number | null | undefined;
+  signal: string | null | undefined;
+  error?: { code?: string } | undefined;
+}
+
+// Turn one spawn outcome into a CoreResult. Pure, exported, and ORDERED deliberately — the previous
+// ordering asserted a cause it had not established, telling the operator "interpreter not found:
+// 'python3'" for EAGAIN, EMFILE, ENOMEM and ENOEXEC alike, about an interpreter that plainly exists
+// (it had already run the guardrail). Each branch below now says only what the outcome supports.
+export function classifySpawnOutcome(r: SpawnOutcome, py: string): CoreResult {
+  // A real exit comes first: a child that ran and returned a status is the overwhelmingly common
+  // case, and its status is authoritative even when bun also populates `error` (it sets error.code
+  // to the exit status on a normal non-zero exit, which is why `error` can never be the signal that
+  // a spawn FAILED).
+  if (r.status !== null && r.status !== undefined) {
+    return { code: r.status };
+  }
+  // Death by signal. Tested as a NON-EMPTY string, not for truthiness: `if (r.signal)` is also false
+  // for "", so a runtime that reports a signal death it cannot name would have fallen through to the
+  // spawn-failure branch below and been reported as a missing interpreter.
+  if (typeof r.signal === "string" && r.signal !== "") {
     const n = signalNumberOf(r.signal);
     if (n === null) {
-      // Unreachable for any signal in the table above; reported rather than guessed, because a wrong
-      // guess here re-raises the WRONG signal on ourselves.
+      // Reported rather than guessed: a wrong guess re-raises the WRONG signal on ourselves.
       return {
         stderr: `plainkeep: verb killed by an unrecognized signal '${r.signal}' — its exit status cannot be reproduced`,
         code: EXIT_UNKNOWN_SIGNAL,
@@ -202,22 +227,65 @@ function spawnVerb(py: string, script: string, args: string[], home: string): Co
     }
     return { code: 128 + n, signal: n };
   }
-  if (r.status !== null && r.status !== undefined) {
-    return { code: r.status };
+  if (r.signal !== null && r.signal !== undefined) {
+    // An empty signal name: the child died by a signal the runtime declined to name. Same honest
+    // dead end as above, and the reason the check above is a string test rather than a truthiness one.
+    return {
+      stderr: "plainkeep: verb killed by an unnamed signal — its exit status cannot be reproduced",
+      code: EXIT_UNKNOWN_SIGNAL,
+    };
   }
-  // No status and no signal: the child never existed. Bun sets `error` even on a normal non-zero
-  // exit (its `code` is then the exit status), so the ABSENCE of both status and signal — not the
-  // presence of `error` — is what identifies a spawn failure.
-  const code = (r.error as NodeJS.ErrnoException | undefined)?.code;
-  if (code === "EACCES") {
+  // Neither a status nor a signal: the child never ran. Only now is an errno about the interpreter
+  // meaningful, and only ENOENT actually means "not found".
+  const errno = r.error?.code;
+  if (errno === "ENOENT") {
+    // Disclosed divergence: bash's `exec` failure prints its OWN message here
+    // (`plainkeep: line 41: exec: python3: not found`, exit 127). The exit code matches; the text is
+    // ours, since a bash line number is not reproducible and not worth reproducing.
+    return { stderr: `plainkeep: interpreter not found: '${py}'`, code: EXIT_COMMAND_NOT_FOUND };
+  }
+  if (errno === "EACCES") {
     return { stderr: `plainkeep: cannot execute interpreter '${py}'`, code: EXIT_NOT_EXECUTABLE };
   }
-  // Disclosed divergence: bash's `exec` failure prints its OWN message here
-  // (`plainkeep: line 41: exec: python3: not found`, exit 127). The exit code matches; the text is
-  // ours, since a bash line number is not reproducible and not worth reproducing. Unreachable in
-  // practice — a plainkeep with no python3 on PATH cannot have run its guardrail either.
-  return { stderr: `plainkeep: interpreter not found: '${py}'`, code: EXIT_COMMAND_NOT_FOUND };
+  // Everything else — EAGAIN, EMFILE, ENFILE, ENOMEM, ENOEXEC, or nothing at all. The interpreter is
+  // not accused of anything; the errno is reported verbatim so the operator can act on it, and the
+  // exit code is the one that means "the dispatcher could not start the verb", never 127's "not
+  // found" (which would be a diagnosis) and never a code a verb could itself return.
+  return {
+    stderr: `plainkeep: could not start interpreter '${py}' (${errno ?? "unknown error"})`,
+    code: EXIT_SPAWN_FAILED,
+  };
 }
+
+function spawnVerb(py: string, script: string, args: string[], home: string): CoreResult {
+  const r = spawnSync(py, [script, ...args], {
+    stdio: "inherit",
+    env: { ...process.env, PLAINKEEP_HOME: home },
+  });
+  return classifySpawnOutcome(r as SpawnOutcome, py);
+}
+
+// The in-core interception seam Tasks 5–7 fill (`__complete`, `ui`, `mcp`; `help` stays Python per
+// D6). A verb present here is answered IN-PROCESS instead of being spawned. Empty today on purpose:
+// landing the seam before the first interception is written is the whole point.
+//
+// IT HAS TO BE HERE, not next to runCore()'s `--core-*` short-circuits in cli.ts, for two reasons —
+// both of which cost correctness, not tidiness:
+//
+//  1. runCore() sees RAW argv, before verbFromArgv() normalizes it. Four of the six spellings that
+//     mean `help` (no argv at all, `""`, `-h`, `--help`) do not literally equal "help" there, so an
+//     interception written in cli.ts would catch `plainkeep help` and miss the rest — half the
+//     invocations answered in-process and half spawning Python.
+//  2. cli.ts is BEFORE the gate. An interception there never reaches mainCli(), so no audit line is
+//     appended for a verb that ran — the "unwritten audit line" hazard the run's Global Constraints
+//     name explicitly, arriving through the front door.
+//
+// Placed after the gate and after normalization, both properties hold by construction rather than by
+// the next author remembering them. Pinned by dispatch.test.ts's INTERCEPTS tests, which assert an
+// entry is reached for all six spellings AND that the audit line is written for each. The keys are
+// also published through `--core-api intercepts` so the parity harness can see them without
+// mirroring this file by hand.
+export const INTERCEPTS: Record<string, (args: string[]) => CoreResult> = {};
 
 // The dispatcher contract end to end. Order is the floor's and is not negotiable: the gate runs
 // BEFORE resolution (so an unknown or refused verb never touches the filesystem beyond the gate's
@@ -235,6 +303,11 @@ export function dispatch(argv: string[]): CoreResult {
   // stderr are the guardrail's, and the audit line has already been appended by mainCli().
   const gated = mainCli([verb, ...args]);
   if (gated.code !== EXIT_OK) return gated;
+
+  // Post-normalization, post-gate, pre-spawn — the only point where an interception keeps both the
+  // audit line and every spelling of the verb. See INTERCEPTS above.
+  const intercept = INTERCEPTS[verb];
+  if (intercept) return intercept(args);
 
   const script = runPyFile(verb);
   // Byte-exact against floor line 40, which prints this and exits 4.

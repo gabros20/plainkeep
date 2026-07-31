@@ -40,6 +40,10 @@ function engineVerbRaw(name: string, cmdText: string): void {
 function nestedRisk(depth: number): string {
   return `{"verb": "x", "risk": ${"[".repeat(depth)}1${"]".repeat(depth)}}`;
 }
+// A cmd.json whose `risk` is an ordinary scalar but which carries deep nesting in a SIBLING key.
+function riskWithDeepSibling(risk: string, depth: number): string {
+  return `{"verb": "x", "risk": ${JSON.stringify(risk)}, "pad": ${"[".repeat(depth)}1${"]".repeat(depth)}}`;
+}
 function readLog(): string {
   const f = path.join(vault, ".logs", "plainkeep.log");
   return existsSync(f) ? readFileSync(f, "utf-8") : "";
@@ -198,6 +202,44 @@ test("a pathologically deep cmd.json caps to null, never throws, and still write
   const r = mainCli(["v_deep"]);
   expect(r.code).toBe(EXIT_CONFIRM);
   expect(readLog()).toContain("\tv_deep \tconfirm\t'v_deep' is confirm-class");
+});
+
+test("a deep SIBLING key never erases the declared risk (a deny-class verb stays deny)", () => {
+  makeVault();
+  engineVerbRaw("v_denypad", riskWithDeepSibling("deny", 500));
+  engineVerbRaw("v_readpad", riskWithDeepSibling("read", 500));
+  // The depth probe runs on the EXTRACTED VALUE. Capping the whole document instead (fix wave r2)
+  // resolved `risk` to null here, i.e. to the default confirm — which --yes clears — so a verb whose
+  // entire contract is "never run" became runnable. Python parses 500 levels fine and DENIES.
+  expect(gate("v_denypad", []).verdict).toBe("deny");
+  expect(gate("v_denypad", ["--yes"]).verdict).toBe("deny"); // --yes must not clear a deny
+  expect(mainCli(["v_denypad", "--yes"]).code).toBe(EXIT_DENY);
+  expect(gate("v_readpad", []).verdict).toBe("allow"); // an ordinary read is undisturbed too
+});
+
+test("a VALUE nested past the cap resolves to null — stricter than Python, never looser", () => {
+  makeVault();
+  engineVerbRaw("v_deeprisk", nestedRisk(500));
+  engineVerbRaw("v_deepdry", `{"verb": "x", "risk": "confirm", "dry_run": ${"[".repeat(500)}1${"]".repeat(500)}}`);
+  // Python reads both values at this depth: the deep list is a truthy non-"deny" risk (ALLOW) and the
+  // deep dry_run is truthy (downgrade to read, ALLOW). The cap makes this side CONFIRM in both cases.
+  // A value this deep is necessarily a container, so it can never be the string "deny" — capping it
+  // can only ever move the verdict toward refusal.
+  expect(gate("v_deeprisk", []).verdict).toBe("confirm");
+  expect(gate("v_deepdry", ["--dry-run"]).verdict).toBe("confirm");
+});
+
+test("DOCUMENTED divergence: a sibling deeper than CPython's parse limit leaves TS looser", () => {
+  makeVault();
+  engineVerbRaw("v_readpaddeep", riskWithDeepSibling("read", 3000));
+  engineVerbRaw("v_denypaddeep", riskWithDeepSibling("deny", 3000));
+  // Past ~1498 levels CPython's json.loads raises RecursionError, _cmd_field swallows it to None and
+  // Python defaults to CONFIRM for both of these. This side has no parse limit, so it reads the real
+  // declaration: stricter for deny (5 vs 3), LOOSER for read (0 vs 3). That one cell is the only
+  // non-safe-direction divergence left in this module and it is deliberate — see MAX_JSON_DEPTH.
+  // Pinned here so it cannot change by accident, in either direction.
+  expect(gate("v_readpaddeep", []).verdict).toBe("allow");
+  expect(gate("v_denypaddeep", []).verdict).toBe("deny");
 });
 
 test("getCloseMatches breaks score TIES by name descending (difflib's heapq.nlargest tuple order)", () => {

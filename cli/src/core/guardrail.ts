@@ -51,18 +51,35 @@ function plainkeepHome(): string {
   return path.resolve(path.dirname(process.execPath), "..", "..");
 }
 
-// Deterministic nesting cap for JSON read off disk (a cmd.json is attacker-shaped input: a pack
-// ships it). CPython's json.loads recurses once per nesting level and raises RecursionError past the
-// interpreter's limit — measured here at depth 1498 with the default recursionlimit of 1000 — which
-// _cmd_field's bare `except Exception` swallows to None → the SAFE default-confirm. JS's JSON.parse
-// has no such limit, so WITHOUT this cap a pathologically nested cmd.json ALLOWS on the TS side while
-// Python CONFIRMS (the unsafe direction), and rendering that value used to blow the JS call stack.
+// Deterministic nesting cap for the VALUE a gate decision is read from (a cmd.json is
+// attacker-shaped input: a pack ships it). It bounds what this module then renders and compares —
+// nothing deeper than this can reach pythonRepr or the audit line.
 //
-// The cap is deliberately far BELOW CPython's threshold, so the residual divergence window (depth
-// 101 … ~1497) always falls the SAFE way: TS resolves the field to null and CONFIRMS where Python
-// still parses and allows. Exact threshold parity is neither achievable (CPython's limit depends on
-// how many frames are already on the stack) nor required — no unsafe-direction divergence at any
-// depth is. No realistic cmd.json nests a field 100 levels deep.
+// It is deliberately NOT a cap on the whole document. Capping the document (fix wave r2) modelled
+// CPython's json.loads RecursionError — measured here at depth 1498 with the default recursionlimit
+// of 1000 — but it made `{"risk": "deny", "pad": [ …101 deep… ]}` resolve `risk` to null on the TS
+// side, i.e. to the *default confirm*, which `--yes` clears: a deny-class verb, whose entire
+// contract is "never run", became runnable while Python read the declaration and DENIED. Probing the
+// extracted value instead keeps that declaration intact and strictly shrinks the divergence surface.
+//
+// The exact divergence surface this leaves, stated in full (D = nesting depth of the requested value,
+// DOC = nesting depth of the whole document; CPython's parse threshold ≈ 1498 here):
+//
+//   * D ≤ 100 and DOC ≤ ~1497 — both sides read the same value. No divergence. This is every
+//     realistic cmd.json, and every case the parity catalog authors.
+//   * D > 100 — TS resolves the field to null. A value that deep is necessarily a CONTAINER, so it
+//     is never the string "deny"/"confirm"/"read": Python renders it into an ALLOW while TS falls
+//     back to the default confirm, and a deep `dry_run` is truthy to Python (downgrade) but null
+//     here (no downgrade). TS is STRICTER in both — the accepted direction.
+//   * DOC > ~1497 with a shallow requested value (deep nesting in a SIBLING key) — Python's parse
+//     raises, `_cmd_field` swallows it to None, and Python defaults to confirm; TS reads the real
+//     declaration. TS is stricter for `"risk": "deny"` (deny vs confirm) and LOOSER for
+//     `"risk": "read"` (allow vs confirm). That last cell is the one divergence in this module that
+//     is not safe-direction, and it is accepted deliberately: it hands a pack nothing it cannot
+//     already have (declaring `"risk": "read"` without any padding is allowed on BOTH sides, and an
+//     untrusted pack is capped to confirm by the trust ceiling regardless), it costs a ≥1498-level
+//     sibling to reach, and closing it would require reproducing CPython's frame-dependent parse
+//     threshold exactly — which is not achievable. Pinned by a bun test so it stays deliberate.
 const MAX_JSON_DEPTH = 100;
 
 // Iterative (explicit-stack) depth probe — recursing here would reintroduce the very stack overflow
@@ -81,21 +98,23 @@ function jsonDepthExceeds(root: unknown, max: number): boolean {
 }
 
 // _cmd_field: read one key from a verb's RESOLVED cmd.json (engine wins over plugins). Returns null
-// on ANY failure — missing file, unreadable, malformed JSON, a non-object top level, or nesting past
-// MAX_JSON_DEPTH — NEVER throws. Faithful to Python `json.loads(...).get(key)` guarded by a bare
-// `except`: a missing key yields null; `.get` on a non-dict raises in Python (→ caught → None), which
-// a null return matches; and json.loads' own RecursionError on deep input is what the depth cap
-// stands in for. The cap is checked over the WHOLE document, not just the requested key, because
-// that is the unit Python fails on (the parse).
+// on ANY failure — missing file, unreadable, malformed JSON, a non-object top level, or a requested
+// value nested past MAX_JSON_DEPTH — NEVER throws. Faithful to Python `json.loads(...).get(key)`
+// guarded by a bare `except`: a missing key yields null, and `.get` on a non-dict raises in Python
+// (→ caught → None), which a null return matches. JSON.parse itself needs no guarding — it is
+// iterative in JS, so no document depth can make it throw or blow the stack.
 function cmdField(verb: string, key: string): unknown {
   const f = cmdJsonPath(verb);
   if (!f) return null;
   try {
     const data = JSON.parse(fs.readFileSync(f, "utf-8")) as unknown;
     if (data === null || typeof data !== "object") return null;
-    if (jsonDepthExceeds(data, MAX_JSON_DEPTH)) return null;
     const v = (data as Record<string, unknown>)[key];
-    return v === undefined ? null : v;
+    if (v === undefined) return null;
+    // Probe the EXTRACTED value, never the document: a deep sibling key must not erase this key's
+    // declaration (see MAX_JSON_DEPTH — that is how a deny-class verb turned into a --yes-clearable
+    // confirm). The probe is iterative and exits at the first node past the cap.
+    return jsonDepthExceeds(v, MAX_JSON_DEPTH) ? null : v;
   } catch {
     return null;
   }
@@ -439,8 +458,10 @@ class SequenceMatcher {
 // larger-first; verb names are distinct so the nlargest decoration counter never breaks a tie).
 // Python orders strings by CODE POINT; JS `<` / Array.sort order them by UTF-16 code UNIT, and the
 // two disagree whenever an astral character (encoded as surrogates 0xD800–0xDBFF) is compared against
-// a BMP character at or above U+E000 — "😀" < "" in Python, "😀" > "" in JS. The tie-break below
-// is decided by exactly this comparison, so it has to be Python's.
+// a BMP character at or above U+E000 — U+1F600 (128512) is ABOVE U+E000 (57344) as a code point,
+// but its lead surrogate 0xD83D is BELOW it as a UTF-16 unit, so Python orders "😀" > "\uE000"
+// while JS orders it "😀" < "\uE000". The tie-break below is decided by exactly
+// this comparison, so it has to be Python's.
 function codePointCompare(a: string, b: string): number {
   const ca = Array.from(a);
   const cb = Array.from(b);

@@ -174,7 +174,7 @@
     },
     {
       "name": "deep-nested-cmd-json",
-      "rationale": "A cmd.json is pack-supplied input, so its nesting depth is adversarial. At ORDINARY depths (5, 50) both sides decode the nested risk value and render it identically into the ALLOW reason and the audit line — pinning that the TS repr is iterative rather than one call frame per level. At PATHOLOGICAL depths (3000, 20000) Python's json.loads raises RecursionError (measured threshold: depth 1498 at the default recursionlimit of 1000), which _cmd_field's bare except swallows to None -> default confirm (exit 3); the TS port reaches the same confirm via its MAX_JSON_DEPTH=100 cap. Both deep invocations FAIL against the pre-fix binary, which ALLOWED (exit 0) at depth 3000 and at depth 20000 blew the JS call stack inside gate() — exiting 1, off the frozen protocol, with NO audit line written. Depths between the cap and CPython's threshold are deliberately NOT authored: there the two sides diverge in the SAFE direction (TS confirms where Python still allows), which is a documented residual, not parity.",
+      "rationale": "A cmd.json is pack-supplied input, so the nesting depth of the RISK VALUE ITSELF is adversarial. At ORDINARY depths (5, 50) both sides decode the nested risk value and render it identically into the ALLOW reason and the audit line — pinning that the TS repr is iterative rather than one call frame per level. At PATHOLOGICAL depths (3000, 20000) Python's json.loads raises RecursionError (measured threshold: depth 1498 at the default recursionlimit of 1000), which _cmd_field's bare except swallows to None -> default confirm (exit 3); the TS port reaches the same confirm because the value exceeds its MAX_JSON_DEPTH=100 cap. Both deep invocations FAIL against the r1 binary, which ALLOWED (exit 0) at depth 3000 and at depth 20000 blew the JS call stack inside gate() — exiting 1, off the frozen protocol, with NO audit line written. VALUE depths between the cap and CPython's threshold are deliberately NOT authored: there the two sides diverge in the SAFE direction (TS confirms where Python renders the deep value into an allow), which is a documented residual, not parity.",
       "fixture": {
         "verbs": [
           { "at": "engine", "verb": "vn_d5", "cmd": ["{\"verb\": \"vn_d5\", \"risk\": ", { "repeat": "[", "times": 5 }, "1", { "repeat": "]", "times": 5 }, "}"] },
@@ -188,6 +188,21 @@
         { "compare": "gate", "verb": "vn_d50", "args": [] },
         { "compare": "gate", "verb": "vn_d3000", "args": [] },
         { "compare": "gate", "verb": "vn_d20000", "args": [] }
+      ]
+    },
+    {
+      "name": "deep-sibling-key",
+      "rationale": "Deep nesting in a SIBLING key must not erase the key the gate is reading. The depth probe runs on the EXTRACTED VALUE, so a cmd.json that declares a plain risk and carries 500 levels of nesting elsewhere gates on the declaration: deny stays deny (exit 5, and --yes does NOT clear it) and read stays read (exit 0), matching Python, which parses 500 levels without complaint. These three invocations FAIL against the r2 binary, whose cap was evaluated over the WHOLE document: it resolved risk to null and fell back to the DEFAULT CONFIRM, turning a deny-class verb — the class whose entire contract is 'never run' — into a --yes-clearable confirm, in the permissive direction, in the module whose job is to refuse. Sibling depths past CPython's parse threshold are deliberately NOT authored: there Python's json.loads raises and defaults to confirm while this side still reads the declaration, which is stricter for deny and looser for read — the one documented non-safe-direction cell, pinned by a bun test instead.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "vs_denypad", "cmd": ["{\"verb\": \"vs_denypad\", \"risk\": \"deny\", \"pad\": ", { "repeat": "[", "times": 500 }, "1", { "repeat": "]", "times": 500 }, "}"] },
+          { "at": "engine", "verb": "vs_readpad", "cmd": ["{\"verb\": \"vs_readpad\", \"risk\": \"read\", \"pad\": ", { "repeat": "[", "times": 500 }, "1", { "repeat": "]", "times": 500 }, "}"] }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "vs_denypad", "args": [] },
+        { "compare": "gate", "verb": "vs_denypad", "args": ["--yes"] },
+        { "compare": "gate", "verb": "vs_readpad", "args": [] }
       ]
     },
     {

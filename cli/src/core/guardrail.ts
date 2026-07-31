@@ -462,7 +462,9 @@ class SequenceMatcher {
 // but its lead surrogate 0xD83D is BELOW it as a UTF-16 unit, so Python orders "😀" > "\uE000"
 // while JS orders it "😀" < "\uE000". The tie-break below is decided by exactly
 // this comparison, so it has to be Python's.
-function codePointCompare(a: string, b: string): number {
+// Exported because complete.ts needs the same ordering for `sorted(cmds)` — completion.py sorts the
+// verb list in Python, so the port has to sort it Python's way.
+export function codePointCompare(a: string, b: string): number {
   const ca = Array.from(a);
   const cb = Array.from(b);
   const n = Math.min(ca.length, cb.length);

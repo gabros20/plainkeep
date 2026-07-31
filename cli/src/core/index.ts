@@ -37,9 +37,13 @@ export {
   pickPython,
   resolveHome,
   signalNumberOf,
+  spawnPythonVerb,
   verbFromArgv,
   type SpawnOutcome,
 } from "./dispatch.js";
+// Task 5 — the first interception: `__complete` answered in-process from the live cmd.json surface,
+// falling through to the Python verb for every live-vault provider.
+export { completeIntercept } from "./complete.js";
 // Task 3 — the dispatcher-facing guardrail (gate + did-you-mean + audit log), ported from the
 // gate-side subset of bin/lib/guardrail.py; dispatch() runs it before every verb.
 export {

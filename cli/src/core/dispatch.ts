@@ -16,6 +16,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CoreResult } from "./cli.js";
+import { completeIntercept } from "./complete.js";
 import { EXIT_NOT_FOUND, EXIT_OK, mainCli } from "./guardrail.js";
 import { runPy } from "./resolver.js";
 
@@ -285,7 +286,26 @@ function spawnVerb(py: string, script: string, args: string[], home: string): Co
 // entry is reached for all six spellings AND that the audit line is written for each. The keys are
 // also published through `--core-api intercepts` so the parity harness can see them without
 // mirroring this file by hand.
-export const INTERCEPTS: Record<string, (args: string[]) => CoreResult> = {};
+export const INTERCEPTS: Record<string, (args: string[]) => CoreResult> = {
+  // Task 5 — tab completion. complete.ts answers only what the cmd.json surface derives (the verb
+  // list, actions[], enums, and the many empty answers); the moment an answer needs a live-vault
+  // PROVIDER it calls the fall-through below, which is this file's own spawn path, so that case
+  // costs exactly what it cost before the interception existed.
+  __complete: (args) => completeIntercept(args, () => spawnPythonVerb("__complete", args)),
+};
+
+// The tail of dispatch(): resolve the verb's run.py and spawn it. Factored out (rather than left
+// inline) so an interception's fall-through is literally the same code path the dispatcher would
+// have taken, not a second implementation of it that can drift.
+export function spawnPythonVerb(verb: string, args: string[]): CoreResult {
+  const script = runPyFile(verb);
+  // Byte-exact against floor line 40, which prints this and exits 4.
+  if (!script) return { stderr: `plainkeep: verb '${verb}' has no run.py`, code: EXIT_NOT_FOUND };
+  // dispatch() has already assigned process.env.PLAINKEEP_HOME, so this re-derivation returns that
+  // same value — and an interception reached through any other caller still gets a coherent home.
+  const home = resolveHome();
+  return spawnVerb(pickPython(home), script, args, home);
+}
 
 // The dispatcher contract end to end. Order is the floor's and is not negotiable: the gate runs
 // BEFORE resolution (so an unknown or refused verb never touches the filesystem beyond the gate's
@@ -309,9 +329,5 @@ export function dispatch(argv: string[]): CoreResult {
   const intercept = INTERCEPTS[verb];
   if (intercept) return intercept(args);
 
-  const script = runPyFile(verb);
-  // Byte-exact against floor line 40, which prints this and exits 4.
-  if (!script) return { stderr: `plainkeep: verb '${verb}' has no run.py`, code: EXIT_NOT_FOUND };
-
-  return spawnVerb(pickPython(home), script, args, home);
+  return spawnPythonVerb(verb, args);
 }

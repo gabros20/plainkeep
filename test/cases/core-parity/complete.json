@@ -1,0 +1,412 @@
+{
+  "about": [
+    "Task 5 — `plainkeep __complete` answered in-core. Every case runs the SAME argv through the",
+    "compiled binary (which intercepts __complete post-gate) and through the bash floor (which spawns",
+    "the real bin/__complete/run.py), and byte-compares exit code, stdout, stderr AND the gate's audit",
+    "line. That last comparison is what proves the interception is post-gate: an interception written",
+    "before the gate would leave the core side's .logs empty and every case here would fail.",
+    "",
+    "The fixture installs the REAL bin/__complete + bin/lib from the repo (engine_from_repo), so the",
+    "reference side is the actual completion brain rather than a restatement of it, and declares its",
+    "own synthetic verb surface so each grammar branch is reachable in isolation.",
+    "",
+    "Two kinds of case, matching the implemented split: TS-ANSWERS cases (the verb list, actions[],",
+    "enums, and the many empty answers — all derivable from the cmd.json surface alone) and",
+    "FALL-THROUGH cases (every arg whose candidates come from a live-vault provider). A fall-through",
+    "case is not a formality: it proves the fall-through spawns the Python verb with the same argv and",
+    "environment, i.e. that the interception costs a provider case nothing and changes it in no way."
+  ],
+  "cases": [
+    {
+      "name": "verb-surface",
+      "fixture": {
+        "engine_from_repo": ["__complete"],
+        "verbs": [
+          {
+            "at": "engine", "verb": "compound", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "compound", "summary": "a compound verb", "risk": "read",
+              "actions": [{ "name": "list", "summary": "list them", "args": [] }]
+            }
+          },
+          {
+            "at": "engine", "verb": "scalar", "files": ["cmd.json"],
+            "cmd": { "verb": "scalar", "summary": "a scalar verb", "risk": "read" }
+          },
+          {
+            "at": "engine", "verb": "secret", "files": ["cmd.json"],
+            "cmd": { "verb": "secret", "summary": "must never be offered", "risk": "read", "hidden": true }
+          },
+          {
+            "at": "engine", "verb": "", "files": ["cmd.json"],
+            "cmd": { "verb": "", "summary": "pua", "risk": "read" }
+          },
+          {
+            "at": "engine", "verb": "😀", "files": ["cmd.json"],
+            "cmd": { "verb": "😀", "summary": "astral", "risk": "read" }
+          },
+          {
+            "at": "plugin:extra", "verb": "packverb", "files": ["cmd.json"],
+            "cmd": { "verb": "packverb", "summary": "from a pack", "risk": "read" }
+          }
+        ]
+      },
+      "invocations": [
+        {
+          "why": "no prior words — the whole verb surface, live from the cmd.json sidecars (never plainkeep.json), engine and plugin alike",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_contains": "compound:a compound verb"
+        },
+        {
+          "why": "hidden verbs are filtered exactly as manifest.load_cmds() filters them — an absence no differential can prove on its own, so it is asserted absolutely on BOTH sides",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_excludes": ["secret", "__complete"]
+        },
+        {
+          "why": "a plugin pack's verb is part of the completion surface (the resolver is the one source for both sides)",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_contains": "packverb:from a pack"
+        },
+        {
+          "why": "sorted(cmds) is Python's CODE-POINT order: U+E000 precedes U+1F600, which JS's default UTF-16-unit sort reverses (field-guide item 2)",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_contains": ":pua\n😀:astral"
+        },
+        {
+          "why": "`plainkeep help <TAB>` completes to the same verb list — grammar, even though `help` ITSELF is not intercepted (run.md D6)",
+          "compare": "dispatch", "verb": "__complete", "args": ["help"],
+          "expect_stdout_contains": "packverb:from a pack"
+        },
+        {
+          "why": "`help` ignores anything already typed after it and still offers the verb list",
+          "compare": "dispatch", "verb": "__complete", "args": ["help", "compound"],
+          "expect_stdout_contains": "compound:a compound verb"
+        },
+        {
+          "why": "an unknown verb answers nothing at all",
+          "compare": "dispatch", "verb": "__complete", "args": ["nosuchverb"]
+        },
+        {
+          "why": "a HIDDEN verb is unknown to completion even though it exists on disk (the guardrail still gates it)",
+          "compare": "dispatch", "verb": "__complete", "args": ["secret"]
+        },
+        {
+          "why": "a scalar verb (no actions[]) has no subaction grammar — nothing, not an error",
+          "compare": "dispatch", "verb": "__complete", "args": ["scalar"]
+        },
+        {
+          "why": "...and nothing after it either, however many words are typed",
+          "compare": "dispatch", "verb": "__complete", "args": ["scalar", "x", "y"]
+        }
+      ]
+    },
+    {
+      "name": "action-grammar",
+      "fixture": {
+        "engine_from_repo": ["__complete"],
+        "verbs": [
+          {
+            "at": "engine", "verb": "compound", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "compound", "summary": "a compound verb", "risk": "read",
+              "actions": [
+                { "name": "list", "summary": "list them", "args": [] },
+                {
+                  "name": "move", "summary": "move one",
+                  "args": [
+                    { "name": "id", "type": "string" },
+                    { "name": "status", "type": "enum", "enum": ["active", "waiting", "done"] },
+                    { "name": "--kind", "type": "string", "enum": ["products", "labs", "tools"] },
+                    { "name": "--force", "type": "flag" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "at": "engine", "verb": "defaulted", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "defaulted", "summary": "has a tokenless default action", "risk": "read",
+              "actions": [
+                {
+                  "name": "run", "summary": "the default", "default": true,
+                  "args": [
+                    { "name": "mode", "enum": ["fast", "slow"] },
+                    { "name": "--tag", "type": "string" }
+                  ]
+                },
+                { "name": "list", "summary": "the ledger", "args": [] }
+              ]
+            }
+          }
+        ]
+      },
+      "invocations": [
+        {
+          "why": "slot 1 of a compound verb: every keyworded action, with its summary",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound"],
+          "expect_stdout_contains": "move:move one"
+        },
+        {
+          "why": "slot 1 with a TOKENLESS default action: the keyworded actions PLUS the default action's first positional's values, and the default's own name is not offered",
+          "compare": "dispatch", "verb": "__complete", "args": ["defaulted"],
+          "expect_stdout_contains": "list:the ledger\nfast\nslow",
+          "expect_stdout_excludes": "run:"
+        },
+        {
+          "why": "first positional of a keyworded action, declaring neither enum nor provider — nothing",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move"]
+        },
+        {
+          "why": "one positional consumed, so the NEXT positional's inline enum is offered",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move", "T-1"],
+          "expect_stdout_contains": "active\nwaiting\ndone"
+        },
+        {
+          "why": "positionals exhausted — nothing",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move", "T-1", "done"]
+        },
+        {
+          "why": "a value-flag as the LAST token: the next word is its VALUE, so its enum is offered rather than a positional's",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move", "--kind"],
+          "expect_stdout_contains": "products\nlabs\ntools"
+        },
+        {
+          "why": "a value-flag plus its value consumes NO positional, so the first positional is still the one being filled",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move", "--kind", "labs"]
+        },
+        {
+          "why": "...and the positional after it is reached normally once one is typed",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move", "--kind", "labs", "T-1"],
+          "expect_stdout_contains": "active\nwaiting\ndone"
+        },
+        {
+          "why": "a `type: flag` flag swallows nothing — it is skipped and the positional count is unchanged",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move", "--force", "T-1"],
+          "expect_stdout_contains": "active\nwaiting\ndone"
+        },
+        {
+          "why": "an unrecognized `--flag` is skipped like any other dash token",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "move", "--unknown", "T-1"],
+          "expect_stdout_contains": "active\nwaiting\ndone"
+        },
+        {
+          "why": "an action with an empty args[] offers nothing, whatever follows it",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "list", "x"]
+        },
+        {
+          "why": "a word that is no action name routes to the DEFAULT action and is consumed as its first positional",
+          "compare": "dispatch", "verb": "__complete", "args": ["defaulted", "notanaction"]
+        },
+        {
+          "why": "the default action's own NAME is not a keyword either — it is consumed as the first positional too",
+          "compare": "dispatch", "verb": "__complete", "args": ["defaulted", "run"]
+        },
+        {
+          "why": "a value-flag before any positional on the default action: its value is consumed, so the first positional's enum is what comes next",
+          "compare": "dispatch", "verb": "__complete", "args": ["defaulted", "--tag", "v1"],
+          "expect_stdout_contains": "fast\nslow"
+        },
+        {
+          "why": "a verb with actions[] but no default action, given a word that names none of them — nothing",
+          "compare": "dispatch", "verb": "__complete", "args": ["compound", "notanaction", "x"]
+        }
+      ]
+    },
+    {
+      "name": "providers-fall-through",
+      "fixture": {
+        "engine_from_repo": ["__complete"],
+        "verbs": [
+          {
+            "at": "engine", "verb": "w", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "w", "summary": "wiki-shaped", "risk": "read",
+              "actions": [
+                { "name": "open", "args": [{ "name": "slug", "complete": "note-slug" }] },
+                { "name": "new", "args": [{ "name": "type", "complete": "note-type" }] }
+              ]
+            }
+          },
+          {
+            "at": "engine", "verb": "t", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "t", "summary": "task-shaped", "risk": "read",
+              "actions": [
+                { "name": "done", "args": [{ "name": "id", "complete": "task-id" }] },
+                {
+                  "name": "move",
+                  "args": [
+                    { "name": "id", "complete": "task-id" },
+                    { "name": "status", "complete": "status" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "at": "engine", "verb": "f", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "f", "summary": "files-shaped", "risk": "read",
+              "actions": [
+                { "name": "open", "args": [{ "name": "slug", "complete": "asset-slug" }] },
+                {
+                  "name": "link",
+                  "args": [
+                    { "name": "file", "complete": "asset-slug" },
+                    { "name": "hub", "complete": "hub" }
+                  ]
+                }
+              ]
+            }
+          },
+          {
+            "at": "engine", "verb": "s", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "s", "summary": "setup-shaped", "risk": "read",
+              "actions": [{ "name": "layer", "args": [{ "name": "name", "complete": "layer" }] }]
+            }
+          },
+          {
+            "at": "engine", "verb": "u", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "u", "summary": "names a provider that does not exist", "risk": "read",
+              "actions": [{ "name": "go", "args": [{ "name": "a", "complete": "not-a-provider" }] }]
+            }
+          }
+        ],
+        "vault_files": [
+          { "path": "wiki/notes/alpha.md", "text": "---\ntype: note\ntitle: Alpha\n---\n# Alpha\n" },
+          { "path": "wiki/notes/beta.md", "text": "---\ntype: decision\ntitle: Beta\n---\n# Beta\n" },
+          { "path": "wiki/clients/acme.md", "text": "---\ntype: client\ntitle: Acme\n---\n# Acme\n" },
+          { "path": "wiki/projects/apollo.md", "text": "---\ntype: project\ntitle: Apollo\n---\n# Apollo\n" },
+          { "path": "wiki/files/q3-report.md", "text": "---\ntype: file\ntitle: Q3 Report: draft\n---\n# Q3\n" },
+          { "path": "tasks/active/T-20260101-01.md", "text": "---\ntype: task\nid: T-20260101-01\nstatus: active\n---\n# Fix the webhook\n" },
+          { "path": "tasks/waiting/T-20260101-02.md", "text": "---\ntype: task\nid: T-20260101-02\nstatus: waiting\n---\n# Await reply\n" }
+        ]
+      },
+      "invocations": [
+        {
+          "why": "note-slug — every wiki note with its frontmatter `type` as the description; reads the vault, so it falls through and the Python verb answers",
+          "compare": "dispatch", "verb": "__complete", "args": ["w", "open"],
+          "expect_stdout_contains": "alpha:note"
+        },
+        {
+          "why": "note-type — the notetype registry (built-in defaults here, no templates/wiki/types.json), hub types described as `hub`",
+          "compare": "dispatch", "verb": "__complete", "args": ["w", "new"],
+          "expect_stdout_contains": "client:hub"
+        },
+        {
+          "why": "task-id — the tasks/ tree, one row per task with its status and title",
+          "compare": "dispatch", "verb": "__complete", "args": ["t", "done"],
+          "expect_stdout_contains": "T-20260101-01:active"
+        },
+        {
+          "why": "status — filing.STATUSES, a provider whose rows carry NO description (bare values, no colon)",
+          "compare": "dispatch", "verb": "__complete", "args": ["t", "move", "T-20260101-01"],
+          "expect_stdout_contains": "inbox\nactive\nwaiting\ndone"
+        },
+        {
+          "why": "asset-slug — the narrow wiki/files/ subset, NOT every note; also carries a colon in its title, so it exercises _clean through the fall-through",
+          "compare": "dispatch", "verb": "__complete", "args": ["f", "open"],
+          "expect_stdout_contains": "q3-report:Q3 Report - draft",
+          "expect_stdout_excludes": "alpha"
+        },
+        {
+          "why": "hub — clients/projects/areas notes, reached as a SECOND positional (so the walk decides the arg before the provider is consulted)",
+          "compare": "dispatch", "verb": "__complete", "args": ["f", "link", "q3-report"],
+          "expect_stdout_contains": "acme:client"
+        },
+        {
+          "why": "layer — a declared provider whose Python implementation returns nothing. It still falls through: the boundary is `does a provider decide this`, not `is this provider empty today`",
+          "compare": "dispatch", "verb": "__complete", "args": ["s", "layer"]
+        },
+        {
+          "why": "a `complete` naming something that is NOT in the provider set is not a provider at all — Python answers nothing and so does the in-core path",
+          "compare": "dispatch", "verb": "__complete", "args": ["u", "go"]
+        }
+      ]
+    },
+    {
+      "name": "sidecar-shapes",
+      "fixture": {
+        "engine_from_repo": ["__complete"],
+        "verbs": [
+          {
+            "at": "engine", "verb": "colons", "files": ["cmd.json"],
+            "cmd": { "verb": "colons", "summary": "  a: b:c \u001c", "risk": "read" }
+          },
+          {
+            "at": "engine", "verb": "falsyhidden", "files": ["cmd.json"],
+            "cmd": { "verb": "falsyhidden", "summary": "hidden is an empty list", "risk": "read", "hidden": [] }
+          },
+          {
+            "at": "engine", "verb": "explicitlyvisible", "files": ["cmd.json"],
+            "cmd": { "verb": "explicitlyvisible", "summary": "hidden is false", "risk": "read", "hidden": false }
+          },
+          {
+            "at": "engine", "verb": "declared", "files": ["cmd.json"],
+            "cmd": { "verb": "renamed", "summary": "the field, not the directory", "risk": "read" }
+          },
+          {
+            "at": "engine", "verb": "arr", "files": ["cmd.json"],
+            "cmd": "[1,2,3]"
+          },
+          {
+            "at": "engine", "verb": "emptyactions", "files": ["cmd.json"],
+            "cmd": { "verb": "emptyactions", "summary": "actions is an empty list", "risk": "read", "actions": [] }
+          },
+          {
+            "at": "engine", "verb": "blank", "files": ["cmd.json"],
+            "cmd": {
+              "verb": "blank", "summary": "its one action has an empty name", "risk": "read",
+              "actions": [{ "name": "", "args": [] }]
+            }
+          }
+        ]
+      },
+      "invocations": [
+        {
+          "why": "_clean: every colon in a description becomes ' -', then the result is stripped with PYTHON's whitespace set — \\x1c is whitespace to str.strip() and not to JS trim()",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_contains": "colons:a - b -c\n"
+        },
+        {
+          "why": "`hidden` is PYTHON-truthy, not JS-truthy: bool([]) is False, Boolean([]) is true — an empty list must leave the verb VISIBLE",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_contains": "falsyhidden:hidden is an empty list"
+        },
+        {
+          "why": "an explicit `hidden: false` is visible too",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_contains": "explicitlyvisible:hidden is false"
+        },
+        {
+          "why": "the surface is keyed by the cmd.json `verb` FIELD, not by the directory name that resolved it",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_contains": "renamed:the field, not the directory",
+          "expect_stdout_excludes": "declared:"
+        },
+        {
+          "why": "a cmd.json whose top level is not an object is DROPPED by both sides (Python's .get raises into load_cmds()'s bare except)",
+          "compare": "dispatch", "verb": "__complete",
+          "expect_stdout_excludes": "arr"
+        },
+        {
+          "why": "an EMPTY actions[] takes the same branch as no actions[] at all — nothing, not an empty action list",
+          "compare": "dispatch", "verb": "__complete", "args": ["emptyactions"]
+        },
+        {
+          "why": "the empty-candidate boundary in the other direction: ONE candidate whose value and description are both empty prints exactly one blank line, which is not the same output as no candidates at all",
+          "compare": "dispatch", "verb": "__complete", "args": ["blank"],
+          "expect_stdout_contains": "\n"
+        },
+        {
+          "why": "no candidates prints NOTHING — no blank line, no trailing newline (the case the one above is only distinguishable from because both are asserted)",
+          "compare": "dispatch", "verb": "__complete", "args": ["colons"],
+          "expect_stdout_excludes": "\n"
+        }
+      ]
+    }
+  ]
+}

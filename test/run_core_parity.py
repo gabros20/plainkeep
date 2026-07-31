@@ -38,6 +38,7 @@ REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 RESOLVER_SRC = REPO / "bin" / "lib" / "resolver.py"
 GUARDRAIL_SRC = REPO / "bin" / "lib" / "guardrail.py"
+ENGINE_SRC = REPO / "bin"
 # The root shim (Task 4). Its `PLAINKEEP_CORE=off` path is the BASH FLOOR — the pre-core dispatcher,
 # preserved verbatim — and is the reference side of the dispatcher differential matrix.
 PLAINKEEP_SRC = REPO / "plainkeep"
@@ -120,6 +121,36 @@ class Fixture:
         self.resolver_py = self.root / "bin" / "lib" / "resolver.py"
         self.resolver_py.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(RESOLVER_SRC, self.resolver_py)
+
+        # Completion-catalog addition (Task 5): `engine_from_repo` installs REAL engine verbs from
+        # the repo's bin/ into the fixture, together with the whole bin/lib/ they import. The
+        # completion catalog needs it because its reference side is the bash floor RUNNING
+        # bin/__complete/run.py: a synthetic stub cannot produce the candidates being compared, and a
+        # hand-written copy of the completion brain would be the drift this oracle exists to catch.
+        # Only the named verb dirs are installed, so a case still controls its own verb surface.
+        from_repo = spec.get("engine_from_repo", [])
+        if from_repo:
+            ignore = shutil.ignore_patterns("__pycache__")
+            shutil.copytree(ENGINE_SRC / "lib", self.root / "bin" / "lib",
+                            dirs_exist_ok=True, ignore=ignore)
+            for verb in from_repo:
+                src = ENGINE_SRC / verb
+                if not src.is_dir():
+                    raise ValueError(f"engine_from_repo names a verb the repo has no bin/ dir for: {verb!r}")
+                shutil.copytree(src, self.root / "bin" / verb, dirs_exist_ok=True, ignore=ignore)
+
+        # Completion-catalog addition (Task 5): `vault_files` writes plain files under the vault
+        # root, which is what the completion PROVIDERS read (wiki/**.md, tasks/<status>/T-*.md).
+        # Paths are vault-RELATIVE by construction — that keeps field-guide item 3's problem out of
+        # reach entirely, since nothing here needs remapping into the per-side vault copies the way
+        # an absolute PLAINKEEP_PATH root would.
+        for vf in spec.get("vault_files", []):
+            rel = Path(vf["path"])
+            if rel.is_absolute() or ".." in rel.parts:
+                raise ValueError(f"vault_files path must be vault-relative: {vf['path']!r}")
+            dst = self.root / rel
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(_content(vf.get("text", "")), encoding="utf-8")
 
         # path_roots: ordered PLAINKEEP_PATH entries. Map ref -> (dir, env_entry_string).
         self._roots: dict[str, tuple[Path, str]] = {}
@@ -552,11 +583,20 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
         want = inv.get("expect_stdout_contains")
         if want is not None and want not in core.stdout:
             ok = False
+        # The negative half, and it is not symmetric decoration: for `__complete` the differential
+        # alone cannot prove an ABSENCE. Two sides that both wrongly LISTED a hidden verb compare
+        # equal and pass, so hidden-verb filtering — the one completion behavior whose whole content
+        # is "this name must not appear" — needs an assertion that no agreement can satisfy.
+        nope = inv.get("expect_stdout_excludes")
+        if nope is not None:
+            for s in ([nope] if isinstance(nope, str) else nope):
+                if s in core.stdout or s in floor.stdout:
+                    ok = False
         detail = (
             f"verb={verb!r} args={args!r} "
             f"core=(rc={core.returncode},out={core.stdout!r},err={core.stderr!r}) "
             f"floor=(rc={floor.returncode},out={floor.stdout!r},err={floor.stderr!r}) "
-            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r} "
+            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r} excludes={nope!r} "
             f"expect_rc={want_rc!r} resolved_rc(core,floor)={exp!r}"
         )
         return ok, detail

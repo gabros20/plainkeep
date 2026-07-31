@@ -18,8 +18,13 @@ try {
 } catch (e) {
   r = { stderr: `plainkeep-core: internal error (${e instanceof Error ? e.name : "Error"})`, code: EXIT_DENY };
 }
+// PRESENCE, not truthiness. `if (r.stdout)` also skipped the EMPTY string, which made "print one
+// empty line" inexpressible — and `__complete` can be asked for exactly that (a lone candidate whose
+// value and description are both empty, which the Python verb prints as a bare newline). No existing
+// producer sets stdout to "", so this changes nothing else: coreApi always emits JSON,
+// `--core-resolve` sets stdout only for a non-empty path, and the gate/dispatch paths never set it.
 try {
-  if (r.stdout) console.log(r.stdout);
+  if (r.stdout !== undefined) console.log(r.stdout);
   if (r.stderr) console.error(r.stderr);
 } catch {
   // a broken stdout/stderr pipe must not change the exit code

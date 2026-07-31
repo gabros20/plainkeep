@@ -3,7 +3,7 @@
 // with bin/lib/guardrail.py on exit code, stdout, stderr AND the audit log. This file spot-checks the
 // port in-process — most importantly the difflib did-you-mean ranking and the gate risk branches.
 import { test, expect, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gate, mainCli, getCloseMatches, decisionStr, EXIT_CONFIRM, EXIT_DENY, EXIT_NOT_FOUND } from "./guardrail.js";
@@ -28,6 +28,21 @@ function pack(name: string, verb: string, cmd: Record<string, unknown>): void {
   const d = path.join(vault, "plugins", name, verb);
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify(cmd));
+}
+// Writes a verb's cmd.json as RAW text — needed for a pathologically deep document, where
+// JSON.stringify would itself recurse per nesting level.
+function engineVerbRaw(name: string, cmdText: string): void {
+  const d = path.join(vault, "bin", name);
+  mkdirSync(d, { recursive: true });
+  writeFileSync(path.join(d, "run.py"), "def main(argv):\n    return 0\n");
+  writeFileSync(path.join(d, "cmd.json"), cmdText);
+}
+function nestedRisk(depth: number): string {
+  return `{"verb": "x", "risk": ${"[".repeat(depth)}1${"]".repeat(depth)}}`;
+}
+function readLog(): string {
+  const f = path.join(vault, ".logs", "plainkeep.log");
+  return existsSync(f) ? readFileSync(f, "utf-8") : "";
 }
 function lock(obj: unknown): void {
   const d = path.join(vault, "plugins");
@@ -141,6 +156,66 @@ test("dry_run field uses Python bool() truthiness, not JS Boolean()", () => {
   expect(gate("d_obj", ["--dry-run"]).verdict).toBe("confirm");
   expect(gate("d_strfalse", ["--dry-run"]).verdict).toBe("allow");
   expect(gate("d_one", ["--dry-run"]).verdict).toBe("allow");
+});
+
+test("plugin trust ceiling reads `trusted` with Python bool(), not JS truthiness", () => {
+  makeVault();
+  for (const p of ["t_list", "t_obj", "t_zero", "t_one", "t_str"]) pack(p, `pv_${p}`, { risk: "read" });
+  lock({
+    plugins: {
+      t_list: { trusted: [] },
+      t_obj: { trusted: {} },
+      t_zero: { trusted: 0 },
+      t_one: { trusted: 1 },
+      t_str: { trusted: "x" },
+    },
+  });
+  // Python bool([]) / bool({}) / bool(0) are FALSE, so the pack stays UNTRUSTED and the ceiling caps
+  // its declared read up to confirm. JS Boolean([]) / Boolean({}) are true — reading the lock the JS
+  // way let an untrusted pack escape the ceiling and exit 0 where the protocol demands 3.
+  expect(gate("pv_t_list", []).verdict).toBe("confirm");
+  expect(gate("pv_t_obj", []).verdict).toBe("confirm");
+  expect(gate("pv_t_zero", []).verdict).toBe("confirm");
+  // Truthy on both sides — the pack is trusted and its declared read stands.
+  expect(gate("pv_t_one", []).verdict).toBe("allow");
+  expect(gate("pv_t_str", []).verdict).toBe("allow");
+});
+
+test("nested risk values render exactly as Python str() at ordinary depths", () => {
+  makeVault();
+  engineVerbRaw("v_d5", nestedRisk(5));
+  engineVerbRaw("v_d50", nestedRisk(50));
+  expect(gate("v_d5", []).reason).toBe(`${"[".repeat(5)}1${"]".repeat(5)}`);
+  expect(gate("v_d50", []).reason).toBe(`${"[".repeat(50)}1${"]".repeat(50)}`);
+});
+
+test("a pathologically deep cmd.json caps to null, never throws, and still writes the audit line", () => {
+  makeVault();
+  engineVerbRaw("v_deep", nestedRisk(50000));
+  // Python's json.loads raises RecursionError here, which _cmd_field swallows to None -> the default
+  // confirm. The depth cap reproduces that verdict instead of allowing (unsafe) or blowing the JS
+  // call stack inside gate() — which used to escape as exit 1 with NO audit line written.
+  const r = mainCli(["v_deep"]);
+  expect(r.code).toBe(EXIT_CONFIRM);
+  expect(readLog()).toContain("\tv_deep \tconfirm\t'v_deep' is confirm-class");
+});
+
+test("getCloseMatches breaks score TIES by name descending (difflib's heapq.nlargest tuple order)", () => {
+  expect(getCloseMatches("abc", ["abd", "abe", "abf"])).toEqual(["abf", "abe", "abd"]);
+  expect(getCloseMatches("abc", ["abd", "abe"])).toEqual(["abe", "abd"]);
+  expect(getCloseMatches("capture", ["captura", "capturb", "capturz"])).toEqual([
+    "capturz",
+    "capturb",
+    "captura",
+  ]);
+});
+
+test("getCloseMatches iterates and orders by CODE POINT, not UTF-16 unit", () => {
+  // "ab😀" is 3 code points to Python but 4 UTF-16 units: iterating units would score it
+  // 2*2/7 = 0.571 and drop it below the 0.6 cutoff instead of tying with "ab" at 2*2/6.
+  // U+1F600 sorts ABOVE U+E000 by code point and BELOW it by UTF-16 unit (lead surrogate 0xD83D),
+  // so a descending tie-break puts the emoji first only if the comparison is Python's.
+  expect(getCloseMatches("abc", ["ab\u{1F600}", "ab"])).toEqual(["ab\u{1F600}", "ab"]);
 });
 
 test("non-string risk passes through raw and renders as Python str() (no clamp)", () => {

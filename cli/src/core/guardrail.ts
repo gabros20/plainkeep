@@ -51,16 +51,49 @@ function plainkeepHome(): string {
   return path.resolve(path.dirname(process.execPath), "..", "..");
 }
 
+// Deterministic nesting cap for JSON read off disk (a cmd.json is attacker-shaped input: a pack
+// ships it). CPython's json.loads recurses once per nesting level and raises RecursionError past the
+// interpreter's limit — measured here at depth 1498 with the default recursionlimit of 1000 — which
+// _cmd_field's bare `except Exception` swallows to None → the SAFE default-confirm. JS's JSON.parse
+// has no such limit, so WITHOUT this cap a pathologically nested cmd.json ALLOWS on the TS side while
+// Python CONFIRMS (the unsafe direction), and rendering that value used to blow the JS call stack.
+//
+// The cap is deliberately far BELOW CPython's threshold, so the residual divergence window (depth
+// 101 … ~1497) always falls the SAFE way: TS resolves the field to null and CONFIRMS where Python
+// still parses and allows. Exact threshold parity is neither achievable (CPython's limit depends on
+// how many frames are already on the stack) nor required — no unsafe-direction divergence at any
+// depth is. No realistic cmd.json nests a field 100 levels deep.
+const MAX_JSON_DEPTH = 100;
+
+// Iterative (explicit-stack) depth probe — recursing here would reintroduce the very stack overflow
+// the cap exists to prevent. `root` must be a JSON-decoded value, hence acyclic.
+function jsonDepthExceeds(root: unknown, max: number): boolean {
+  const stack: Array<[unknown, number]> = [[root, 1]];
+  while (stack.length) {
+    const [v, depth] = stack.pop() as [unknown, number];
+    if (v === null || typeof v !== "object") continue;
+    if (depth > max) return true;
+    for (const child of Array.isArray(v) ? v : Object.values(v as Record<string, unknown>)) {
+      stack.push([child, depth + 1]);
+    }
+  }
+  return false;
+}
+
 // _cmd_field: read one key from a verb's RESOLVED cmd.json (engine wins over plugins). Returns null
-// on ANY failure — missing file, unreadable, malformed JSON, or a non-object top level — NEVER
-// throws. Faithful to Python `json.loads(...).get(key)` guarded by a bare `except`: a missing key
-// yields null; `.get` on a non-dict raises in Python (→ caught → None), which a null return matches.
+// on ANY failure — missing file, unreadable, malformed JSON, a non-object top level, or nesting past
+// MAX_JSON_DEPTH — NEVER throws. Faithful to Python `json.loads(...).get(key)` guarded by a bare
+// `except`: a missing key yields null; `.get` on a non-dict raises in Python (→ caught → None), which
+// a null return matches; and json.loads' own RecursionError on deep input is what the depth cap
+// stands in for. The cap is checked over the WHOLE document, not just the requested key, because
+// that is the unit Python fails on (the parse).
 function cmdField(verb: string, key: string): unknown {
   const f = cmdJsonPath(verb);
   if (!f) return null;
   try {
     const data = JSON.parse(fs.readFileSync(f, "utf-8")) as unknown;
     if (data === null || typeof data !== "object") return null;
+    if (jsonDepthExceeds(data, MAX_JSON_DEPTH)) return null;
     const v = (data as Record<string, unknown>)[key];
     return v === undefined ? null : v;
   } catch {
@@ -93,6 +126,11 @@ export function pythonTruthy(v: unknown): boolean {
   if (typeof v === "string") return v.length > 0;
   if (Array.isArray(v)) return v.length > 0;
   if (typeof v === "object") return Object.keys(v).length > 0;
+  // Unreachable for a JSON-decoded value (the branches above are exhaustive over null/boolean/
+  // number/string/array/object). It stays as a total function for the remaining JS types, where
+  // Boolean() happens to agree with Python bool(): bigint 0n → false like Python's 0, and a
+  // function/symbol → true like any other Python object. It is NOT a JS-truthiness fallback for
+  // cmd.json values.
   return Boolean(v);
 }
 
@@ -123,19 +161,65 @@ function pyStrRepr(s: string): string {
   return out + quote;
 }
 
-function pythonRepr(v: unknown): string {
+function scalarRepr(v: unknown): string {
   if (v === null || v === undefined) return "None";
   if (typeof v === "boolean") return v ? "True" : "False";
   if (typeof v === "number") return pythonNumStr(v);
   if (typeof v === "string") return pyStrRepr(v);
-  if (Array.isArray(v)) return "[" + v.map(pythonRepr).join(", ") + "]";
-  if (typeof v === "object") {
-    const parts = Object.entries(v as Record<string, unknown>).map(
-      ([k, val]) => pyStrRepr(k) + ": " + pythonRepr(val),
-    );
-    return "{" + parts.join(", ") + "}";
-  }
   return String(v);
+}
+
+// ITERATIVE by construction: this renders a value read off disk, so recursing one frame per nesting
+// level would let a deep cmd.json blow the call stack — a throw inside gate() escaping to exit 1 with
+// no audit line written (IMP-2). An explicit work stack cannot. Input must be a JSON-decoded value
+// (acyclic); the depth cap in cmdField bounds what actually reaches here through the gate.
+interface ReprFrame {
+  open: string;
+  close: string;
+  values: unknown[];
+  keys: string[] | null;
+  i: number;
+  parts: string[];
+}
+
+function pythonRepr(v: unknown): string {
+  const stack: ReprFrame[] = [];
+  let value: unknown = v;
+  let done: string | null = null; // the repr of the value just finished, waiting to be attached
+  for (;;) {
+    if (done === null) {
+      if (Array.isArray(value)) {
+        stack.push({ open: "[", close: "]", values: value, keys: null, i: 0, parts: [] });
+      } else if (value !== null && value !== undefined && typeof value === "object") {
+        const entries = Object.entries(value as Record<string, unknown>);
+        stack.push({
+          open: "{",
+          close: "}",
+          values: entries.map(([, val]) => val),
+          keys: entries.map(([k]) => k),
+          i: 0,
+          parts: [],
+        });
+      } else {
+        done = scalarRepr(value);
+        continue;
+      }
+    }
+    const top = stack[stack.length - 1];
+    if (!top) return done as string; // a top-level scalar
+    if (done !== null) {
+      top.parts.push(top.keys ? pyStrRepr(top.keys[top.i]) + ": " + done : done);
+      top.i++;
+      done = null;
+    }
+    if (top.i < top.values.length) {
+      value = top.values[top.i];
+      continue;
+    }
+    stack.pop();
+    done = top.open + top.parts.join(", ") + top.close;
+    if (stack.length === 0) return done;
+  }
 }
 
 export function pythonStr(v: unknown): string {
@@ -150,7 +234,11 @@ function pluginLock(): Record<string, unknown> {
     const data = JSON.parse(fs.readFileSync(f, "utf-8")) as unknown;
     if (data === null || typeof data !== "object") return {};
     const plugins = (data as Record<string, unknown>).plugins;
-    return plugins && typeof plugins === "object" ? (plugins as Record<string, unknown>) : {};
+    // An explicit null check, NOT JS truthiness: nothing lock-derived may be coerced with `&&`/`!`
+    // (typeof null === "object" is the only case the old `plugins &&` actually decided). Python does
+    // not test truthiness here at all — `.get("plugins", {})` hands the raw value to `.get(pack)`,
+    // which raises on a non-dict; a non-object here yields {} instead (documented divergence).
+    return plugins !== null && typeof plugins === "object" ? (plugins as Record<string, unknown>) : {};
   } catch {
     return {};
   }
@@ -166,7 +254,12 @@ function pluginCeiling(verb: string): "confirm" | null {
   const pack = src.slice("plugin:".length);
   const entry = pluginLock()[pack];
   if (entry === undefined || entry === null) return null;
-  if (typeof entry === "object" && (entry as Record<string, unknown>).trusted) return null;
+  // Python `entry.get("trusted")` is evaluated with bool(), so pythonTruthy — NOT JS truthiness. A
+  // lock entry of {"trusted": []} or {"trusted": {}} is UNTRUSTED to Python (empty containers are
+  // falsy) but truthy to JS, and reading it the JS way lets an untrusted pack escape the ceiling
+  // entirely: allow (0) where the frozen protocol demands confirm (3), in the permissive direction,
+  // in the module whose job is to refuse.
+  if (typeof entry === "object" && pythonTruthy((entry as Record<string, unknown>).trusted)) return null;
   return "confirm";
 }
 
@@ -344,6 +437,22 @@ class SequenceMatcher {
 // bounds of ratio, so the cutoff membership equals ratio>=cutoff — computed anyway for fidelity),
 // then heapq.nlargest(n) = sort by (ratio, name) DESCENDING (name ties broken lexicographically
 // larger-first; verb names are distinct so the nlargest decoration counter never breaks a tie).
+// Python orders strings by CODE POINT; JS `<` / Array.sort order them by UTF-16 code UNIT, and the
+// two disagree whenever an astral character (encoded as surrogates 0xD800–0xDBFF) is compared against
+// a BMP character at or above U+E000 — "😀" < "" in Python, "😀" > "" in JS. The tie-break below
+// is decided by exactly this comparison, so it has to be Python's.
+function codePointCompare(a: string, b: string): number {
+  const ca = Array.from(a);
+  const cb = Array.from(b);
+  const n = Math.min(ca.length, cb.length);
+  for (let i = 0; i < n; i++) {
+    const x = ca[i].codePointAt(0) as number;
+    const y = cb[i].codePointAt(0) as number;
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return ca.length === cb.length ? 0 : ca.length < cb.length ? -1 : 1;
+}
+
 export function getCloseMatches(word: string, possibilities: string[], n = 3, cutoff = 0.6): string[] {
   const result: Array<[number, string]> = [];
   const s = new SequenceMatcher();
@@ -356,7 +465,7 @@ export function getCloseMatches(word: string, possibilities: string[], n = 3, cu
   }
   result.sort((p, q) => {
     if (p[0] !== q[0]) return q[0] - p[0]; // ratio descending
-    return p[1] < q[1] ? 1 : p[1] > q[1] ? -1 : 0; // name descending
+    return -codePointCompare(p[1], q[1]); // name descending, by code point like Python
   });
   return result.slice(0, n).map(([, x]) => x);
 }
@@ -368,16 +477,41 @@ export function getCloseMatches(word: string, possibilities: string[], n = 3, cu
 // remediation) and deny→5; allow→0 prints nothing.
 // --------------------------------------------------------------------------------------------------
 
+// The deterministic verdict for an exception that escapes the gate evaluation. Python has no
+// counterpart — an unexpected throw there is a traceback and exit 1 — but exit 1 is OFF the frozen
+// gate protocol (0/2/3/4/5) and, worse, an escaping throw skips _log, letting a pack suppress its own
+// audit record by shipping a pathological cmd.json. So an unevaluable gate REFUSES: deny (5) rather
+// than confirm (3), because an internal error must not be clearable with --yes, and never allow (0).
+// Nothing in the parity catalog can author this path (Python would crash instead), by construction.
+function internalErrorDecision(err: unknown): Decision {
+  const name = err instanceof Error ? err.name : "Error";
+  return { verdict: DENY, reason: `internal gate error (${name}) — refusing`, riskClass: "deny" };
+}
+
 export function mainCli(argv: string[]): CoreResult {
   const verb = argv.length ? argv[0] : "help";
   const args = argv.slice(1);
-  const known = knownVerbs();
-  if (!known.has(verb)) {
-    const near = getCloseMatches(verb, [...known].sort(), 3, 0.6);
-    const hint = near.length ? ` did you mean: ${near.join(", ")}?` : " (run: plainkeep help)";
-    return { stderr: `plainkeep: unknown verb '${verb}'.${hint}`, code: EXIT_NOT_FOUND };
+  let d: Decision;
+  try {
+    const known = knownVerbs();
+    if (!known.has(verb)) {
+      // The ranking is advisory: if it ever throws, the unknown verb still reports not-found (4)
+      // with the plain help hint rather than turning into a different verdict.
+      let hint = " (run: plainkeep help)";
+      try {
+        const near = getCloseMatches(verb, [...known].sort(codePointCompare), 3, 0.6);
+        if (near.length) hint = ` did you mean: ${near.join(", ")}?`;
+      } catch {
+        // fall through to the help hint
+      }
+      return { stderr: `plainkeep: unknown verb '${verb}'.${hint}`, code: EXIT_NOT_FOUND };
+    }
+    d = gate(verb, args);
+  } catch (e) {
+    d = internalErrorDecision(e);
   }
-  const d = gate(verb, args);
+  // Reached with a verdict in hand on EVERY path, so the audit line is always attempted (log() itself
+  // swallows its own failures, faithful to Python's bare `except: pass`).
   log(verb, args, d);
   if (d.verdict === CONFIRM) {
     return { stderr: `guardrail: ${decisionStr(d)}\n  ${remediation(verb, args)}`, code: EXIT_CONFIRM };

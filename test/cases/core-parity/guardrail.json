@@ -206,6 +206,37 @@
       ]
     },
     {
+      "name": "prototype-named-packs",
+      "rationale": "Task 3's MIN-4, closed. A PACK name is a directory name too, and the trust ceiling read it with `pluginLock()[pack]` — an object literal from JSON.parse, so a pack named after any Object.prototype member resolved to an inherited member instead of 'absent' and got the confirm ceiling applied, where Python's `lock.get(pack)` returns None and applies NO ceiling. It was left batched in Task 3 because the divergence is in the REFUSAL direction (TS stricter); it is fixed now because the same defect class turned out to be live in the dispatcher's interception table, where it silently swallowed whole verbs. Each pack below is UNLISTED in plugins.lock.json, exactly like a user-placed pack under plugins/local or $PLAINKEEP_PATH, so both sides must allow a read-class verb (exit 0). `unlisted-normal` is the control that this is about the NAME and not about being unlisted; `locked-untrusted` is the control that the ceiling still applies where it should, so the fix cannot be 'stop ceiling-ing everything'.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:toString", "verb": "v_in_0", "cmd": { "verb": "v_in_0", "risk": "read" } },
+          { "at": "plugin:constructor", "verb": "v_in_1", "cmd": { "verb": "v_in_1", "risk": "read" } },
+          { "at": "plugin:valueOf", "verb": "v_in_2", "cmd": { "verb": "v_in_2", "risk": "read" } },
+          { "at": "plugin:hasOwnProperty", "verb": "v_in_3", "cmd": { "verb": "v_in_3", "risk": "read" } },
+          { "at": "plugin:isPrototypeOf", "verb": "v_in_4", "cmd": { "verb": "v_in_4", "risk": "read" } },
+          { "at": "plugin:propertyIsEnumerable", "verb": "v_in_5", "cmd": { "verb": "v_in_5", "risk": "read" } },
+          { "at": "plugin:toLocaleString", "verb": "v_in_6", "cmd": { "verb": "v_in_6", "risk": "read" } },
+          { "at": "plugin:__proto__", "verb": "v_in_7", "cmd": { "verb": "v_in_7", "risk": "read" } },
+          { "at": "plugin:unlisted-normal", "verb": "v_control_unlisted", "cmd": { "verb": "v_control_unlisted", "risk": "read" } },
+          { "at": "plugin:locked-untrusted", "verb": "v_control_locked", "cmd": { "verb": "v_control_locked", "risk": "read" } }
+        ],
+        "plugins_lock": { "plugins": { "locked-untrusted": { "trusted": false } } }
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "v_in_0", "args": [] },
+        { "compare": "gate", "verb": "v_in_1", "args": [] },
+        { "compare": "gate", "verb": "v_in_2", "args": [] },
+        { "compare": "gate", "verb": "v_in_3", "args": [] },
+        { "compare": "gate", "verb": "v_in_4", "args": [] },
+        { "compare": "gate", "verb": "v_in_5", "args": [] },
+        { "compare": "gate", "verb": "v_in_6", "args": [] },
+        { "compare": "gate", "verb": "v_in_7", "args": [] },
+        { "compare": "gate", "verb": "v_control_unlisted", "args": [] },
+        { "compare": "gate", "verb": "v_control_locked", "args": [] }
+      ]
+    },
+    {
       "name": "did-you-mean-score-ties",
       "rationale": "Pins the did-you-mean tie-break, the single most surprising line in the difflib port and the one no other case reaches: when candidates score EQUAL, difflib's heapq.nlargest orders the (ratio, name) tuples descending, so equal scores break by name lexicographically LARGER-first. 'abc' scores abd/abe/abf at exactly 0.667 each -> 'abf, abe, abd'; 'capture' scores captura/capturb/capturz at 0.857 each -> 'capturz, capturb, captura'. An 'obvious cleanup' to ascending name order passes every other check in this catalog and every bun test but flips both of these.",
       "fixture": {

@@ -109,7 +109,12 @@ function cmdField(verb: string, key: string): unknown {
   try {
     const data = JSON.parse(fs.readFileSync(f, "utf-8")) as unknown;
     if (data === null || typeof data !== "object") return null;
-    const v = (data as Record<string, unknown>)[key];
+    // Own-property read, matching Python's `dict.get(key)` exactly: a dict has no inherited members,
+    // a JSON.parse result does. Today every `key` is a literal from THIS module (`risk`, `dry_run`)
+    // and none of them names an Object.prototype member, so this changes no current behavior — it
+    // removes the possibility that adding a key later does, in the module whose job is to refuse.
+    const obj = data as Record<string, unknown>;
+    const v = Object.hasOwn(obj, key) ? obj[key] : undefined;
     if (v === undefined) return null;
     // Probe the EXTRACTED value, never the document: a deep sibling key must not erase this key's
     // declaration (see MAX_JSON_DEPTH — that is how a deny-class verb turned into a --yes-clearable
@@ -271,7 +276,24 @@ function pluginCeiling(verb: string): "confirm" | null {
   const src = sourceOf(verb);
   if (!src || !src.startsWith("plugin:")) return null;
   const pack = src.slice("plugin:".length);
-  const entry = pluginLock()[pack];
+  // Own-property lookup, NOT `lock[pack]`. `pack` is a DIRECTORY NAME a pack ships, and the lock is a
+  // JSON.parse result with a normal prototype, so a pack named `toString`/`constructor`/`valueOf`/…
+  // resolved to an inherited member instead of "absent" and got the confirm ceiling applied to it —
+  // where Python's `lock.get(pack)` returns None (a dict has no such members) and applies NO ceiling.
+  //
+  // PARITY IMPLICATION, stated plainly because it moves in the permissive direction: fixing this
+  // makes a pack named after a prototype member behave like every other pack with no lock entry —
+  // user-placed packs (plugins/local, $PLAINKEEP_PATH) are unceilinged BY DESIGN, and that is what
+  // Python does. It grants such a pack nothing a pack named `mypack` does not already have; it
+  // removes an accidental, name-dependent difference. A pack that IS in the lock file is unaffected
+  // either way (JSON.parse creates own properties, `__proto__` included). Pinned by
+  // guardrail.json's prototype-named-pack case, which fails against the pre-fix binary.
+  //
+  // This was Task 3's MIN-4, batched then because the divergence was in the refusal direction. It is
+  // fixed now because the CLASS turned out to be live in dispatch.ts (same shape, real impact), and
+  // leaving the one benign instance unguarded is how the pattern gets copied again.
+  const lock = pluginLock();
+  const entry = Object.hasOwn(lock, pack) ? lock[pack] : undefined;
   if (entry === undefined || entry === null) return null;
   // Python `entry.get("trusted")` is evaluated with bool(), so pythonTruthy — NOT JS truthiness. A
   // lock entry of {"trusted": []} or {"trusted": {}} is UNTRUSTED to Python (empty containers are

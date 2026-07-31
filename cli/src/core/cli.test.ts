@@ -6,20 +6,20 @@ import { runCore, CORE_IDENTITY } from "./cli.js";
 import { EXIT_NOT_FOUND } from "./guardrail.js";
 import { CORE_VERSION } from "./version.js";
 
-test("--version prints the core identity and exits 0", () => {
-  const r = runCore(["--version"]);
+test("--version prints the core identity and exits 0", async () => {
+  const r = await runCore(["--version"]);
   expect(r.code).toBe(0);
   expect(r.stdout).toBe(CORE_IDENTITY);
   expect(r.stdout).toContain("plainkeep-core");
   expect(r.stdout).toContain(CORE_VERSION);
 });
 
-test("-v is an alias for --version", () => {
-  expect(runCore(["-v"])).toEqual(runCore(["--version"]));
+test("-v is an alias for --version", async () => {
+  expect(await runCore(["-v"])).toEqual(await runCore(["--version"]));
 });
 
-test("--core-selftest identifies the core binary and exits 0", () => {
-  const r = runCore(["--core-selftest"]);
+test("--core-selftest identifies the core binary and exits 0", async () => {
+  const r = await runCore(["--core-selftest"]);
   expect(r.code).toBe(0);
   expect(r.stdout).toContain("plainkeep-core");
   expect(r.stdout).toContain(CORE_VERSION);
@@ -32,13 +32,13 @@ test("--core-selftest identifies the core binary and exits 0", () => {
 // does for the same input. PLAINKEEP_HOME is pinned to an empty temp vault so the verb set is empty
 // by construction: the assertion can never depend on the developer's real vault, and dispatch can
 // never reach a spawn.
-test("a non-flag argv dispatches: an unknown verb is the gate's not-found (4)", () => {
+test("a non-flag argv dispatches: an unknown verb is the gate's not-found (4)", async () => {
   const prev = process.env.PLAINKEEP_HOME;
   const home = mkdtempSync(path.join(tmpdir(), "pk-core-cli-"));
   process.env.PLAINKEEP_HOME = home;
   try {
     for (const argv of [[], ["help"], ["capture", "hi"], ["--version", "extra"], ["--nope"]]) {
-      const r = runCore(argv);
+      const r = await runCore(argv);
       expect(r.code).toBe(EXIT_NOT_FOUND);
       expect(r.stdout).toBeUndefined();
       expect(r.stderr).toBeDefined();

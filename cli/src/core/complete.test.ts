@@ -13,6 +13,19 @@ import path from "node:path";
 import { completeIntercept } from "./complete.js";
 import { dispatch } from "./dispatch.js";
 
+// The async twin of withHome — see dispatch.test.ts: withHome restores the env when fn RETURNS, so
+// an async callback would run its awaits against the wrong vault. dispatch() may return a promise.
+async function withHomeAsync<T>(home: string, fn: () => Promise<T>): Promise<T> {
+  const prev = process.env.PLAINKEEP_HOME;
+  process.env.PLAINKEEP_HOME = home;
+  try {
+    return await fn();
+  } finally {
+    if (prev === undefined) delete process.env.PLAINKEEP_HOME;
+    else process.env.PLAINKEEP_HOME = prev;
+  }
+}
+
 function withHome<T>(home: string, fn: () => T): T {
   const prev = process.env.PLAINKEEP_HOME;
   process.env.PLAINKEEP_HOME = home;
@@ -288,7 +301,7 @@ test("`hidden` uses PYTHON truthiness: an empty list keeps the verb visible", ()
   }
 });
 
-test("dispatch: `__complete` is answered in-core AND the gate's audit line is written", () => {
+test("dispatch: `__complete` is answered in-core AND the gate's audit line is written", async () => {
   const home = vault({
     ...GRAMMAR,
     // The gate must know __complete to allow it; its run.py would print this marker if the
@@ -297,7 +310,7 @@ test("dispatch: `__complete` is answered in-core AND the gate's audit line is wr
     __complete: { verb: "__complete", summary: "internal", hidden: true, risk: "read" },
   });
   try {
-    const r = withHome(home, () => dispatch(["__complete", "share", "move", "T-1"]));
+    const r = await withHomeAsync(home, async () => dispatch(["__complete", "share", "move", "T-1"]));
     expect([r.code, r.stdout]).toEqual([0, "active\nwaiting\ndone"]);
     const log = readFileSync(path.join(home, ".logs", "plainkeep.log"), "utf-8").trimEnd().split("\n");
     expect(log).toHaveLength(1);

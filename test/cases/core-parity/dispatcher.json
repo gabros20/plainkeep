@@ -128,6 +128,32 @@
       ]
     },
     {
+      "name": "prototype-named-verbs",
+      "rationale": "A verb name is a DIRECTORY NAME a pack ships, so it is attacker-shaped, and the dispatcher's interception table is a JS object literal with a prototype. Indexing it as `INTERCEPTS[verb]` resolved an INHERITED member for each of these eight names and treated it as a registered interception: the verb never ran, and for `toString`/`constructor` the binary exited 0 while writing an audit line saying the verb was allowed — an enforcement tool reporting success for work it did not do. Nothing about that is visible to a differential unless a case actually uses such a name, which is why these exist. Each verb's run.py prints a marker, so the assertion is that the REAL verb ran on both sides, not merely that the two sides agreed. `__proto__` is included even though it is the one name that could not silently succeed (it threw, exit 5): it is the same defect class, and a fix that guards only the callable members would pass without it.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "toString", "cmd": { "verb": "toString", "risk": "read" }, "run": "print('RAN toString')\n" },
+          { "at": "engine", "verb": "constructor", "cmd": { "verb": "constructor", "risk": "read" }, "run": "print('RAN constructor')\n" },
+          { "at": "engine", "verb": "valueOf", "cmd": { "verb": "valueOf", "risk": "read" }, "run": "print('RAN valueOf')\n" },
+          { "at": "engine", "verb": "hasOwnProperty", "cmd": { "verb": "hasOwnProperty", "risk": "read" }, "run": "print('RAN hasOwnProperty')\n" },
+          { "at": "engine", "verb": "isPrototypeOf", "cmd": { "verb": "isPrototypeOf", "risk": "read" }, "run": "print('RAN isPrototypeOf')\n" },
+          { "at": "engine", "verb": "propertyIsEnumerable", "cmd": { "verb": "propertyIsEnumerable", "risk": "read" }, "run": "print('RAN propertyIsEnumerable')\n" },
+          { "at": "engine", "verb": "toLocaleString", "cmd": { "verb": "toLocaleString", "risk": "read" }, "run": "print('RAN toLocaleString')\n" },
+          { "at": "engine", "verb": "__proto__", "cmd": { "verb": "__proto__", "risk": "read" }, "run": "print('RAN __proto__')\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "toString", "args": ["extra-arg"], "expect_stdout_contains": "RAN toString" },
+        { "compare": "dispatch", "verb": "constructor", "args": ["extra-arg"], "expect_stdout_contains": "RAN constructor" },
+        { "compare": "dispatch", "verb": "valueOf", "args": ["extra-arg"], "expect_stdout_contains": "RAN valueOf" },
+        { "compare": "dispatch", "verb": "hasOwnProperty", "args": ["extra-arg"], "expect_stdout_contains": "RAN hasOwnProperty" },
+        { "compare": "dispatch", "verb": "isPrototypeOf", "args": ["extra-arg"], "expect_stdout_contains": "RAN isPrototypeOf" },
+        { "compare": "dispatch", "verb": "propertyIsEnumerable", "args": ["extra-arg"], "expect_stdout_contains": "RAN propertyIsEnumerable" },
+        { "compare": "dispatch", "verb": "toLocaleString", "args": ["extra-arg"], "expect_stdout_contains": "RAN toLocaleString" },
+        { "compare": "dispatch", "verb": "__proto__", "args": ["extra-arg"], "expect_stdout_contains": "RAN __proto__" }
+      ]
+    },
+    {
       "name": "symlinked-home-not-canonicalized",
       "rationale": "The realpath decision (field guide #1), pinned. Both sides are invoked with PLAINKEEP_HOME pointing at a SYMLINK to the vault (the macOS /tmp -> /private/tmp shape), and the verb reports whether the PLAINKEEP_HOME it inherited still differs from its realpath. The dispatcher treats PLAINKEEP_HOME as opaque text and canonicalizes nothing, so the answer must be 'not canonical' on BOTH sides: the value a caller supplied is the value every verb sees. If either side started calling realpath() on it, this case fails — as would every vault whose path runs through a symlink, silently relocating .logs and the resolver's engine bin/ relative to what the operator typed. The basename is compared too (both aliases are named `vault`), since the two sides necessarily live under different temp roots.",
       "fixture": {

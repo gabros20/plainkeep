@@ -145,10 +145,16 @@ const LINUX_SIGNAL_NUMBERS: Record<string, number> = {
 // The true number behind bun's reported name, or null when it cannot be established (a name in
 // neither table — Linux real-time signals are the realistic case). NEVER 0: signal 0 is the
 // existence probe, so a 0 here would re-raise nothing and render as the meaningless exit 128.
+// Both lookups are own-property-guarded for the reason interceptionFor() spells out: these are object
+// literals with a prototype, and `LINUX_SIGNAL_NUMBERS["toString"]` is an inherited FUNCTION that
+// passes `!== undefined`, which would make `128 + n` NaN and re-raise a signal number of NaN. `name`
+// comes from bun rather than from a pack, so this is defense in depth and not a live defect — but the
+// sweep that found the live one covered this file, and leaving one guarded lookup beside an unguarded
+// one is how the next reader learns the wrong pattern.
 export function signalNumberOf(name: string): number | null {
-  const linux = LINUX_SIGNAL_NUMBERS[name];
-  if (linux !== undefined) return linux;
-  const platform = (os.constants.signals as unknown as Record<string, number>)[name];
+  if (Object.hasOwn(LINUX_SIGNAL_NUMBERS, name)) return LINUX_SIGNAL_NUMBERS[name];
+  const signals = os.constants.signals as unknown as Record<string, number>;
+  const platform = Object.hasOwn(signals, name) ? signals[name] : undefined;
   return typeof platform === "number" && platform > 0 ? platform : null;
 }
 
@@ -286,13 +292,75 @@ function spawnVerb(py: string, script: string, args: string[], home: string): Co
 // entry is reached for all six spellings AND that the audit line is written for each. The keys are
 // also published through `--core-api intercepts` so the parity harness can see them without
 // mirroring this file by hand.
-export const INTERCEPTS: Record<string, (args: string[]) => CoreResult> = {
+//
+// WHAT AN INTERCEPTION MAY DO — the half that was precedent rather than contract until now. Two
+// shapes, both legitimate:
+//
+//   * BUFFERED (what `__complete` does): compute an answer, return it as `CoreResult.stdout`, and let
+//     main.ts render it. Only workable when the output is small and the verb is one-shot.
+//   * STDIO-OWNING: write to process.stdout/stderr DIRECTLY for the call's lifetime and return only
+//     `{ code }`. This is not a workaround, it is what a spawned verb already does — spawnVerb()
+//     above passes `stdio: "inherit"`, so the child owns the terminal and the CoreResult carries
+//     nothing but the exit status. An in-process TUI (Task 6) or an MCP session (Task 7) is the same
+//     shape. The natural reading of `CoreResult.stdout` — "an interception returns its output here" —
+//     does NOT scale to either, so it is written down rather than left to be rediscovered.
+//
+// ASYNC, deliberately allowed before anything needs it. A sync function cannot pump an event loop, so
+// it cannot read stdin, await a JSON-RPC frame, or drive @clack/prompts — and the TUI Task 6 must
+// absorb is already `main(): Promise<number>`. Widening the type now costs one line; widening it
+// during Task 6 means re-opening main.ts's exit protocol under implementation pressure. Two
+// consequences an implementer must handle, neither of which the sync path had:
+//
+//   1. main.ts awaits INSIDE its try. A rejected promise awaited outside it is an unhandled rejection
+//      and bun exits 1 — off the frozen protocol, from the very guard that exists to keep everything
+//      on it. Pinned by main.async.test.ts, which drives a rejecting interception through the real
+//      main.ts and asserts exit 5 plus the audit line.
+//   2. `process.exit()` TRUNCATES pending async writes to a pipe. An interception that has been
+//      writing to stdout must have drained before it resolves; main.ts drains what it can see, but it
+//      cannot drain what an interception wrote and did not wait for.
+export type Intercept = (args: string[]) => CoreResult | Promise<CoreResult>;
+
+export interface Interception {
+  run: Intercept;
+  // Whether the parity oracle may compare this verb's WHOLE invocation against the Python verb.
+  // Declared here, at the registration, because it is a property of the interception and nowhere else
+  // can it be kept honest: `__complete` is byte-comparable (that is what makes intercepting it
+  // legitimate at all), while a TUI's output is non-deterministic and an MCP session is not an
+  // invocation. Published through `--core-api intercepts` in two buckets so the harness reads the
+  // classification instead of a human remembering to update a skip-list.
+  comparable: boolean;
+}
+
+export const INTERCEPTS: Record<string, Interception> = {
   // Task 5 — tab completion. complete.ts answers only what the cmd.json surface derives (the verb
   // list, actions[], enums, and the many empty answers); the moment an answer needs a live-vault
   // PROVIDER it calls the fall-through below, which is this file's own spawn path, so that case
   // costs exactly what it cost before the interception existed.
-  __complete: (args) => completeIntercept(args, () => spawnPythonVerb("__complete", args)),
+  __complete: {
+    comparable: true,
+    run: (args) => completeIntercept(args, () => spawnPythonVerb("__complete", args)),
+  },
 };
+
+// The ONE way to read INTERCEPTS, and it exists because the obvious `INTERCEPTS[verb]` is wrong.
+//
+// A verb name is attacker-shaped: it is a DIRECTORY NAME a pack ships. `INTERCEPTS` is an object
+// literal, so it inherits Object.prototype, and `INTERCEPTS["toString"]` resolves to an inherited
+// FUNCTION that passes a truthiness test. The dispatcher then treated eight names — toString,
+// constructor, valueOf, hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toLocaleString,
+// __proto__ — as registered interceptions and never ran the verb. Two of them were the bad kind of
+// silent: `Object.prototype.toString.call(args)` returns the string "[object Array]", whose `.code`
+// is undefined, and `process.exit(undefined)` exits 0 — so an ENFORCEMENT binary reported success,
+// wrote an audit line saying the verb was allowed, and did not run it. (Measured against the floor,
+// which runs all eight normally: .orchestrate/raw/task5-fix1-proto-before.log.)
+//
+// Object.hasOwn at the call site rather than Object.create(null) on the table: a null-prototype table
+// is undone the moment someone writes an object literal again, and dispatch.test.ts's `INTERCEPTS.x =
+// …` mutation pattern would quietly reintroduce the prototype. Guarding the ACCESS cannot be undone
+// by how the table is written.
+export function interceptionFor(verb: string): Interception | undefined {
+  return Object.hasOwn(INTERCEPTS, verb) ? INTERCEPTS[verb] : undefined;
+}
 
 // The tail of dispatch(): resolve the verb's run.py and spawn it. Factored out (rather than left
 // inline) so an interception's fall-through is literally the same code path the dispatcher would
@@ -310,7 +378,7 @@ export function spawnPythonVerb(verb: string, args: string[]): CoreResult {
 // The dispatcher contract end to end. Order is the floor's and is not negotiable: the gate runs
 // BEFORE resolution (so an unknown or refused verb never touches the filesystem beyond the gate's
 // own reads) and resolution runs before the spawn.
-export function dispatch(argv: string[]): CoreResult {
+export function dispatch(argv: string[]): CoreResult | Promise<CoreResult> {
   const home = resolveHome();
   // Export it before anything reads it: guardrail.ts and resolver.ts each re-derive PLAINKEEP_HOME
   // per call, so assigning it here makes all three take the env branch and agree by construction —
@@ -325,9 +393,11 @@ export function dispatch(argv: string[]): CoreResult {
   if (gated.code !== EXIT_OK) return gated;
 
   // Post-normalization, post-gate, pre-spawn — the only point where an interception keeps both the
-  // audit line and every spelling of the verb. See INTERCEPTS above.
-  const intercept = INTERCEPTS[verb];
-  if (intercept) return intercept(args);
+  // audit line and every spelling of the verb. See INTERCEPTS above. The lookup goes through
+  // interceptionFor(), never `INTERCEPTS[verb]` — the verb name is a pack-supplied directory name and
+  // a bare index resolves Object.prototype members.
+  const intercept = interceptionFor(verb);
+  if (intercept) return intercept.run(args);
 
   return spawnPythonVerb(verb, args);
 }

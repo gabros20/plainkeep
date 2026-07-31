@@ -2,7 +2,7 @@
 // hidden `--core-*` introspection flags short-circuit here; EVERY other argv is a verb dispatch
 // (./dispatch.ts) — gate, resolve, one spawn — reproducing the bash floor exactly.
 import { CORE_VERSION } from "./version.js";
-import { dispatch, INTERCEPTS } from "./dispatch.js";
+import { dispatch, INTERCEPTS, interceptionFor } from "./dispatch.js";
 import {
   iterCmds,
   knownVerbs,
@@ -54,15 +54,30 @@ function coreApi(spec: string): CoreResult {
   //   flags — argv shapes short-circuited BEFORE dispatch. Not comparable against the bash floor at
   //           all (the floor has no notion of `--version`, so it gates it as an unknown verb); the
   //           harness refuses to author a dispatch case for them.
-  //   verbs — verbs answered in-process AFTER the gate (dispatch.ts INTERCEPTS, filled by Tasks
-  //           5–7). These stay fully comparable — byte-parity with the Python verb is exactly what
-  //           makes an interception legitimate — so the harness must NOT skip them. Exposed so a
-  //           future case author can see what is intercepted without reading the TS.
+  //   verbs — verbs answered in-process AFTER the gate (dispatch.ts INTERCEPTS), in TWO buckets,
+  //           because "an interception is byte-comparable with the Python verb" is true of
+  //           `__complete` and will be false of what Tasks 6–7 register:
+  //             comparable    — the whole invocation can be run through both dispatchers and
+  //                             byte-compared. Byte-parity is what makes intercepting these
+  //                             legitimate, so the harness must NOT skip them.
+  //             noncomparable — answered in-process but not comparable AS AN INVOCATION: a TUI's
+  //                             output is non-deterministic (it paints a terminal), an MCP server
+  //                             is a session rather than a command. Their behavior belongs in a bun
+  //                             test or a PTY/protocol harness, not the dispatcher differential.
+  //           The bucket is declared at each registration (Interception.comparable), so a new
+  //           interception cannot be added without classifying it, and the harness reads that
+  //           classification instead of carrying a skip-list that goes stale.
   if (spec === "intercepts") {
+    // Object.keys is own-keys-only, so these are the real registrations (the prototype hazard that
+    // interceptionFor() guards lives in the LOOKUP, not here) — and each key is then read back
+    // through that same accessor rather than indexed directly, so this file carries no second
+    // spelling of the rule.
+    const verbs = Object.keys(INTERCEPTS).sort();
+    const bucket = (want: boolean) => verbs.filter((v) => interceptionFor(v)?.comparable === want);
     return {
       stdout: JSON.stringify({
         flags: { always: [...INTERCEPTED_FLAGS_ALWAYS], bare: [...INTERCEPTED_FLAGS_BARE] },
-        verbs: Object.keys(INTERCEPTS).sort(),
+        verbs: { comparable: bucket(true), noncomparable: bucket(false) },
       }),
       code: 0,
     };
@@ -84,7 +99,7 @@ export const CORE_IDENTITY = `plainkeep-core ${CORE_VERSION}`;
 export const INTERCEPTED_FLAGS_BARE = ["--version", "-v", "--core-selftest"] as const;
 export const INTERCEPTED_FLAGS_ALWAYS = ["--core-resolve", "--core-api", "--core-gate"] as const;
 
-export function runCore(argv: string[]): CoreResult {
+export function runCore(argv: string[]): CoreResult | Promise<CoreResult> {
   const head = argv[0] ?? "";
   if (argv.length === 1 && (INTERCEPTED_FLAGS_BARE as readonly string[]).includes(head)) {
     if (head === "--core-selftest") return { stdout: `${CORE_IDENTITY} selftest ok`, code: 0 };

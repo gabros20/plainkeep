@@ -13,6 +13,7 @@ import {
   classifySpawnOutcome,
   dispatch,
   INTERCEPTS,
+  interceptionFor,
   pickPython,
   resolveHome,
   signalNumberOf,
@@ -25,6 +26,21 @@ function withHome<T>(home: string, fn: () => T): T {
   process.env.PLAINKEEP_HOME = home;
   try {
     return fn();
+  } finally {
+    if (prev === undefined) delete process.env.PLAINKEEP_HOME;
+    else process.env.PLAINKEEP_HOME = prev;
+  }
+}
+
+// The async twin, and it is not optional sugar: withHome's `finally` runs when fn RETURNS, so
+// handing it an async callback restores PLAINKEEP_HOME while the callback is still suspended and
+// every subsequent await runs against the wrong vault. dispatch() may now return a promise, so any
+// awaited dispatch belongs here.
+async function withHomeAsync<T>(home: string, fn: () => Promise<T>): Promise<T> {
+  const prev = process.env.PLAINKEEP_HOME;
+  process.env.PLAINKEEP_HOME = home;
+  try {
+    return await fn();
   } finally {
     if (prev === undefined) delete process.env.PLAINKEEP_HOME;
     else process.env.PLAINKEEP_HOME = prev;
@@ -96,20 +112,23 @@ function helpVault(): string {
   return home;
 }
 
-test("INTERCEPTS is reached for all six spellings of the verb, and the audit line is written", () => {
+test("INTERCEPTS is reached for all six spellings of the verb, and the audit line is written", async () => {
   const home = helpVault();
   const seen: string[][] = [];
-  INTERCEPTS.help = (args) => {
-    seen.push(args);
-    return { stdout: "in-core help", code: 0 };
+  INTERCEPTS.help = {
+    comparable: true,
+    run: (args) => {
+      seen.push(args);
+      return { stdout: "in-core help", code: 0 };
+    },
   };
   try {
     // The six argv shapes that mean `help`: bare, empty-string, both -h/--help spellings, the literal
     // verb, and a flag spelling carrying args (which must survive normalization).
     const spellings: string[][] = [[], [""], ["-h"], ["--help"], ["help"], ["--help", "topics"]];
-    withHome(home, () => {
+    await withHomeAsync(home, async () => {
       for (const argv of spellings) {
-        const r = dispatch(argv);
+        const r = await dispatch(argv);
         // Reached the interception, not the spawn: the fixture's run.py would have printed something
         // else entirely, and stdio: "inherit" means it would not show up here at all.
         expect([argv, r.code, r.stdout]).toEqual([argv, 0, "in-core help"]);
@@ -129,18 +148,59 @@ test("INTERCEPTS is reached for all six spellings of the verb, and the audit lin
   }
 });
 
-test("INTERCEPTS does not fire for a verb the gate refused — the gate still decides first", () => {
+// The eight names that live on Object.prototype. A verb name is a directory name a pack ships, so
+// `INTERCEPTS[verb]` resolved an inherited member for each of these and the dispatcher treated it as
+// a registered interception — the verb never ran, and toString/constructor exited 0 while the audit
+// line said the verb was allowed. The authority on this is dispatcher.json's prototype-named-verbs
+// case (both dispatchers, real verbs, real markers); these two pin the lookup itself.
+const PROTOTYPE_NAMES = [
+  "toString", "constructor", "valueOf", "hasOwnProperty",
+  "isPrototypeOf", "propertyIsEnumerable", "toLocaleString", "__proto__",
+];
+
+test("interceptionFor: an Object.prototype member name is NOT a registered interception", () => {
+  for (const name of PROTOTYPE_NAMES) {
+    expect([name, interceptionFor(name)]).toEqual([name, undefined]);
+  }
+  // ...and the one real registration still resolves, so this is not "always undefined".
+  expect(interceptionFor("__complete")?.comparable).toBe(true);
+});
+
+test("dispatch: a verb named after an Object.prototype member RUNS, it is not swallowed", async () => {
+  const home = mkdtempSync(path.join(tmpdir(), "pk-proto-verb-"));
+  try {
+    for (const name of PROTOTYPE_NAMES) {
+      const d = path.join(home, "bin", name);
+      mkdirSync(d, { recursive: true });
+      writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: name, risk: "read" }));
+      // Exit 7 is the discriminator: it can only come from the verb having actually run. The old
+      // behavior returned undefined (which process.exit renders as 0) or threw.
+      writeFileSync(path.join(d, "run.py"), "raise SystemExit(7)\n");
+    }
+    for (const name of PROTOTYPE_NAMES) {
+      const r = await withHomeAsync(home, async () => dispatch([name]));
+      expect([name, r.code]).toEqual([name, 7]);
+    }
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("INTERCEPTS does not fire for a verb the gate refused — the gate still decides first", async () => {
   const home = mkdtempSync(path.join(tmpdir(), "pk-intercept-deny-"));
   const d = path.join(home, "bin", "danger");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "danger", risk: "deny" }));
   let fired = false;
-  INTERCEPTS.danger = () => {
-    fired = true;
-    return { code: 0 };
+  INTERCEPTS.danger = {
+    comparable: true,
+    run: () => {
+      fired = true;
+      return { code: 0 };
+    },
   };
   try {
-    const r = withHome(home, () => dispatch(["danger"]));
+    const r = await withHomeAsync(home, async () => dispatch(["danger"]));
     expect(r.code).toBe(EXIT_DENY);
     expect(fired).toBe(false);
   } finally {

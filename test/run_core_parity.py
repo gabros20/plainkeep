@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -412,6 +413,34 @@ def _symlink_alias(root: Path, holder: list[Path]) -> Path:
     return alias
 
 
+# expect_returncodes vocabulary. A cell may be a literal returncode, or one of three SYMBOLIC forms
+# resolved against the signal the case names in args[0] — symbolic so the catalog stays portable:
+# SIGBUS is 10 on macOS and 7 on Linux, so a literal would pin one platform and lie on the other.
+#
+#   "signal"   — died by that signal (returncode -N), the floor's behavior for every terminating signal
+#   "fallback" — survived the re-raise and exited 128+N, the shell rendering (bun IGNORES the signal)
+#   "sigtrap"  — died by SIGTRAP instead (bun's crash handler intercepted the re-raise)
+#
+# The last two name the two measured classes of core/floor divergence, so a case says WHICH failure it
+# is pinning rather than just an opaque number. See .orchestrate/raw/task4-fix2-signal-matrix.log.
+def _signal_number(name: str) -> int:
+    return int(getattr(signal, name))
+
+
+def _expected_rc(spec, signum: int) -> int:
+    if isinstance(spec, bool):
+        raise ValueError(f"expect_returncodes cell must not be a bool: {spec!r}")
+    if isinstance(spec, int):
+        return spec
+    if spec == "signal":
+        return -signum
+    if spec == "fallback":
+        return 128 + signum
+    if spec == "sigtrap":
+        return -int(signal.SIGTRAP)
+    raise ValueError(f"unknown expect_returncodes form: {spec!r}")
+
+
 def _dispatch_env(fx: Fixture, inv: dict, home: Path) -> dict:
     e = fx.env(inv.get("path_order"))
     e["PLAINKEEP_HOME"] = str(home)
@@ -465,20 +494,35 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
 
         ok_log, log_detail = _compare_log(_read_log(core_root), _read_log(floor_root))
         mode_pinned = not marker.exists()
-        # expect_returncodes PINS A KNOWN DIVERGENCE instead of asserting agreement: the two sides
-        # must produce exactly these statuses and nothing else. It exists for SIGPIPE, which the bun
-        # runtime ignores process-wide with no way back to SIG_DFL, so the core cannot die by it and
-        # exits 141 where the floor dies by 13. Written as an equality in BOTH directions on purpose
-        # — the case goes red if the core stops exiting 141 (a future bun delivering SIGPIPE, which
-        # would be the fix) just as loudly as if the floor changed. Everything else (stdout, stderr,
-        # the audit line) is still compared for agreement.
+        # expect_returncodes states each side's exact status instead of only asserting the two agree.
+        # Agreement alone is too weak twice over: it passes when both sides are wrong together, and it
+        # cannot express a KNOWN divergence at all, so a divergent signal simply went uncovered — which
+        # is how a whole class of them stayed invisible until spec re-review r2. Every signal cell now
+        # carries one, whether it agrees or not, so a delivery change in ANY direction reddens a named
+        # case: a divergence cell fails if the core starts matching the floor (a future bun fixing
+        # delivery — the good outcome, which must still be noticed), and an agreement cell fails if it
+        # stops. Everything else (stdout, stderr, the audit line) is still compared for agreement.
         want_rc = inv.get("expect_returncodes")
         if want_rc is None:
             rc_ok = core.returncode == floor.returncode
+            exp = None
         else:
-            rc_ok = core.returncode == want_rc["core"] and floor.returncode == want_rc["floor"]
-        ok = (rc_ok and core.stdout == floor.stdout
-              and core.stderr == floor.stderr and ok_log and mode_pinned)
+            signum = _signal_number(args[0]) if args else 0
+            exp = (_expected_rc(want_rc["core"], signum), _expected_rc(want_rc["floor"], signum))
+            rc_ok = (core.returncode, floor.returncode) == exp
+        # expect_stderr_divergence pins the SECOND facet of the fault-signal divergence, found by the
+        # exhaustive sweep and not by any returncode table: when bun's crash handler intercepts a
+        # re-raised fault signal it also DUMPS A CRASH REPORT to stderr ("Bun v1.3.14 … macOS Silicon
+        # …"), where the floor prints nothing at all. That is the user-visible half — terminal noise
+        # attributed to plainkeep — so it is asserted in both directions rather than papered over by
+        # relaxing the stderr comparison.
+        want_err = inv.get("expect_stderr_divergence")
+        if want_err is None:
+            err_ok = core.stderr == floor.stderr
+        else:
+            err_ok = (want_err["core_contains"] in core.stderr
+                      and core.stderr != "" and floor.stderr == want_err["floor"])
+        ok = (rc_ok and core.stdout == floor.stdout and err_ok and ok_log and mode_pinned)
         # An absolute assertion on top of the differential: two sides that agree on the WRONG answer
         # (e.g. both ignoring a live venv) would still compare equal. Cases that care state what the
         # shared stdout must contain.
@@ -489,7 +533,8 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
             f"verb={verb!r} args={args!r} "
             f"core=(rc={core.returncode},out={core.stdout!r},err={core.stderr!r}) "
             f"floor=(rc={floor.returncode},out={floor.stdout!r},err={floor.stderr!r}) "
-            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r} expect_rc={want_rc!r}"
+            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r} "
+            f"expect_rc={want_rc!r} resolved_rc(core,floor)={exp!r}"
         )
         return ok, detail
     finally:

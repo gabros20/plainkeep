@@ -106,6 +106,59 @@ test("signalNumberOf never yields 0 or a bogus number for an unknown name", () =
   for (const n of TERMINATING_SIGNALS) expect(signalNumberOf(`SIG_${n}`)).toBeNull();
 });
 
+// Signal DELIVERY, the half the r1 sweep left unmeasured. Recovering the right number proves nothing
+// about whether re-raising it kills us by it: spec re-review r2 found five signals where it does not,
+// and neither the r1 unit sweep (which stopped at number recovery) nor the r1 matrix (seven signals,
+// none of the five) could see it. So this pins the DELIVERY class of every signal the matrix pins
+// end-to-end, and it does so by re-raising in a CHILD bun — the same runtime that will do it for
+// real, without killing the test runner.
+//
+// This is deliberately NOT a re-implementation of the end-to-end dispatcher check: whether a verb's
+// death reaches the CALLER intact needs a real vault, a real floor and a real binary, which is the
+// Python matrix's job (dispatcher.json, signal-passthrough-matrix). This is the runtime primitive
+// underneath it, measured here because a bun upgrade is the thing that moves it.
+//
+// bun 1.3.14 / macOS arm64, from .orchestrate/raw/task4-fix2-signal-matrix.log.
+const DELIVERY: Array<[string, number, "delivered" | "sigtrap" | "ignored"]> = [
+  ["SIGHUP", 1, "delivered"],
+  ["SIGINT", 2, "delivered"],
+  ["SIGQUIT", 3, "delivered"],
+  ["SIGILL", 4, "sigtrap"],
+  ["SIGTRAP", 5, "delivered"],
+  ["SIGABRT", 6, "delivered"],
+  ["SIGFPE", 8, "sigtrap"],
+  ["SIGKILL", 9, "delivered"],
+  ["SIGBUS", 10, "sigtrap"],
+  ["SIGSEGV", 11, "sigtrap"],
+  ["SIGSYS", 12, "delivered"],
+  ["SIGPIPE", 13, "ignored"],
+  ["SIGALRM", 14, "delivered"],
+  ["SIGTERM", 15, "delivered"],
+  ["SIGXCPU", 24, "delivered"],
+  ["SIGXFSZ", 25, "ignored"],
+  ["SIGVTALRM", 26, "delivered"],
+  ["SIGPROF", 27, "delivered"],
+  ["SIGUSR1", 30, "delivered"],
+  ["SIGUSR2", 31, "delivered"],
+];
+
+test("re-raising a signal in the bun runtime delivers exactly the classes the matrix pins", () => {
+  // macOS numbers; on another platform the same numbers name different signals, so only assert the
+  // classes where the two agree — the Python matrix, which resolves names per platform, is the
+  // portable guard.
+  if (process.platform !== "darwin") return;
+  for (const [name, n, expected] of DELIVERY) {
+    const r = spawnSync(process.execPath, ["-e", `process.kill(process.pid, ${n})`], { stdio: "ignore" });
+    const actual =
+      r.signal === null ? "ignored" : signalNumberOf(r.signal) === n ? "delivered" : "sigtrap";
+    // WHEN THIS GOES RED for a "sigtrap" or "ignored" row: bun now delivers that signal, so the
+    // dispatcher reproduces the floor for it — flip that row, flip the matching cell in
+    // dispatcher.json to {"core":"signal","floor":"signal"}, and delete its bullet in dispatch.ts.
+    expect([name, actual]).toEqual([name, expected]);
+    if (actual === "sigtrap") expect(signalNumberOf(r.signal as string)).toBe(5);
+  }
+});
+
 test("SIGPIPE is still ignored by the bun runtime — the documented 141 divergence still applies", () => {
   // Run in a CHILD so a future bun that stops ignoring SIGPIPE reddens this test instead of killing
   // the test runner. WHEN THIS GOES RED: bun now delivers SIGPIPE, so the dispatcher's re-raise will

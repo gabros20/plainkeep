@@ -33,9 +33,11 @@ try {
 // killed the verb (dispatch.ts, signalNumberOf). dispatch() has already resolved the number; if it
 // could not, it returns no signal at all and a distinct exit code instead of guessing.
 //
-// If the signal is ignored process-wide (SIGPIPE, which bun ignores and offers no way to restore)
-// or blocked, we survive and fall through to the 128+N that dispatch() supplied — which is what a
-// shell would have reported for the same death.
+// Two runtime behaviors keep this from being universal, and dispatch.ts carries the measured table of
+// exactly which signals they affect (do not restate it here — it went stale twice): bun ignores some
+// signals process-wide, so we survive and fall through to the 128+N that dispatch() supplied (what a
+// shell would have reported anyway), and bun's crash handler turns a re-raised fault signal into
+// SIGTRAP. Both are pinned per signal by the parity matrix.
 if (r.signal) {
   try {
     process.kill(process.pid, r.signal);

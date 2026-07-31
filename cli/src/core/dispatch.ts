@@ -151,16 +151,40 @@ export function signalNumberOf(name: string): number | null {
 // the plainkeep process itself dead-by-signal: a waitpid() caller sees WIFSIGNALED (Python's
 // subprocess reports returncode -15), and only a shell RENDERS that as 128+15=143. A binary that
 // merely `process.exit(143)`s is therefore NOT equivalent — it exits normally, and every waitpid
-// caller can tell. So a signal death is re-raised on ourselves (main.ts), reproducing the floor's
-// wait status for every signal a verb can actually die of; 128+N is kept as the fallback exit code
-// for the case where the re-raise does not kill us, which is what a shell would have reported anyway.
+// caller can tell. So a signal death is re-raised on ourselves (main.ts); 128+N is kept as the
+// fallback exit code for when the re-raise does not kill us, which is what a shell would have
+// reported anyway.
 //
-// The one signal that always takes that fallback is SIGPIPE: the bun runtime ignores it process-wide
-// and offers no way back to SIG_DFL without native code, so re-raising is a no-op and the dispatcher
-// exits 141 where the floor dies by 13. A DOCUMENTED divergence, invisible from a shell ($?=141 both
-// ways) and visible to a waitpid caller, pinned in both directions by dispatcher.json's
-// signal-sigpipe-divergence case and by a dispatch.test.ts test — if a future bun stops ignoring
-// SIGPIPE, both go red and this comment is what should be deleted.
+// WHAT THAT ACTUALLY ACHIEVES — the enumerated, measured result, NOT a general claim. Two rounds of
+// review caught a general claim here that was false both times, so this is the whole table, measured
+// end-to-end floor-vs-core on **bun 1.3.14 / macOS arm64**
+// (.orchestrate/raw/task4-fix2-signal-matrix.log), over every signal that terminates by default:
+//
+//   REPRODUCED (15) — the dispatcher's wait status equals the floor's:
+//     SIGHUP SIGINT SIGQUIT SIGTRAP SIGABRT SIGEMT SIGKILL SIGSYS SIGALRM SIGTERM SIGXCPU
+//     SIGVTALRM SIGPROF SIGUSR1 SIGUSR2
+//
+//   PINNED DIVERGENCES (6) — the dispatcher CANNOT reproduce the floor, for two runtime reasons:
+//     * bun's crash handler intercepts the re-raise and kills us with SIGTRAP (5) instead:
+//       SIGILL (floor -4 / core -5), SIGFPE (-8 / -5), SIGBUS (-10 / -5), SIGSEGV (-11 / -5).
+//       It ALSO dumps a bun crash report to stderr ("Bun v1.3.14 … macOS Silicon …") where the floor
+//       prints nothing — the user-visible half of this divergence, and the reason the matrix pins
+//       these four cells on stderr as well as on wait status. Removing that handler would need bun to
+//       expose it; there is no API, and napi is barred.
+//     * bun ignores the signal process-wide with no way back to SIG_DFL, so the re-raise is a no-op
+//       and we take the 128+N fallback: SIGPIPE (floor -13 / core 141), SIGXFSZ (-25 / 153).
+//
+// All six are invisible through a shell (`$?` renders both sides the same) and visible to any
+// waitpid/subprocess caller. None is reachable by plainkeep's own code — nothing under bin/ sets a
+// signal disposition — but SIGSEGV/SIGBUS are reachable by a CRASHING NATIVE EXTENSION, which the
+// optional search/model plane can load, and there the substituted SIGTRAP misnames the one class of
+// failure where the signal is the diagnosis. Recorded in .orchestrate/field-guide.md for Phase 2.
+//
+// No special case is coded for any of them: the re-raise is always attempted, so if a future bun
+// delivers these signals the behavior becomes correct on its own. Every cell above — agreeing and
+// diverging alike — is a named case in dispatcher.json's signal-passthrough-matrix, so a change in
+// EITHER direction reddens a specific test; delivery classes are additionally pinned in
+// dispatch.test.ts. When a divergence cell goes red, delete its bullet here.
 function spawnVerb(py: string, script: string, args: string[], home: string): CoreResult {
   const r = spawnSync(py, [script, ...args], {
     stdio: "inherit",

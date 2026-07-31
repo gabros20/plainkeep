@@ -465,7 +465,19 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
 
         ok_log, log_detail = _compare_log(_read_log(core_root), _read_log(floor_root))
         mode_pinned = not marker.exists()
-        ok = (core.returncode == floor.returncode and core.stdout == floor.stdout
+        # expect_returncodes PINS A KNOWN DIVERGENCE instead of asserting agreement: the two sides
+        # must produce exactly these statuses and nothing else. It exists for SIGPIPE, which the bun
+        # runtime ignores process-wide with no way back to SIG_DFL, so the core cannot die by it and
+        # exits 141 where the floor dies by 13. Written as an equality in BOTH directions on purpose
+        # — the case goes red if the core stops exiting 141 (a future bun delivering SIGPIPE, which
+        # would be the fix) just as loudly as if the floor changed. Everything else (stdout, stderr,
+        # the audit line) is still compared for agreement.
+        want_rc = inv.get("expect_returncodes")
+        if want_rc is None:
+            rc_ok = core.returncode == floor.returncode
+        else:
+            rc_ok = core.returncode == want_rc["core"] and floor.returncode == want_rc["floor"]
+        ok = (rc_ok and core.stdout == floor.stdout
               and core.stderr == floor.stderr and ok_log and mode_pinned)
         # An absolute assertion on top of the differential: two sides that agree on the WRONG answer
         # (e.g. both ignoring a live venv) would still compare equal. Cases that care state what the
@@ -477,7 +489,7 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
             f"verb={verb!r} args={args!r} "
             f"core=(rc={core.returncode},out={core.stdout!r},err={core.stderr!r}) "
             f"floor=(rc={floor.returncode},out={floor.stdout!r},err={floor.stderr!r}) "
-            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r}"
+            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r} expect_rc={want_rc!r}"
         )
         return ok, detail
     finally:

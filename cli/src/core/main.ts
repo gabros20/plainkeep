@@ -26,14 +26,21 @@ try {
 }
 // A verb killed by a signal must leave THIS process dead by the same signal, not merely exiting
 // 128+N: the bash floor `exec`s the verb, so plainkeep IS the signalled process and every waitpid()
-// caller sees WIFSIGNALED (Python's subprocess reports -N). Re-raising reproduces that wait status
-// exactly. If the signal is blocked or ignored and we survive, fall through to the 128+N that
-// dispatch() supplied — which is what a shell would have reported for the same death.
+// caller sees WIFSIGNALED (Python's subprocess reports -N). Re-raising reproduces that wait status.
+//
+// By NUMBER, never by bun's signal name — on macOS bun names a child's death signal with the LINUX
+// name for that number, so re-raising the name kills us with a different signal than the one that
+// killed the verb (dispatch.ts, signalNumberOf). dispatch() has already resolved the number; if it
+// could not, it returns no signal at all and a distinct exit code instead of guessing.
+//
+// If the signal is ignored process-wide (SIGPIPE, which bun ignores and offers no way to restore)
+// or blocked, we survive and fall through to the 128+N that dispatch() supplied — which is what a
+// shell would have reported for the same death.
 if (r.signal) {
   try {
     process.kill(process.pid, r.signal);
   } catch {
-    // an unknown/undeliverable signal name falls through to the numeric exit below
+    // an undeliverable signal number falls through to the numeric exit below
   }
 }
 process.exit(r.code);

@@ -97,11 +97,51 @@ function runPyFile(verb: string): string | null {
   }
 }
 
-// Signal name → number, for the FALLBACK exit code only (see below). os.constants.signals is the
-// same table `kill -l` reports.
-function signalNumber(sig: NodeJS.Signals): number {
-  const n = (os.constants.signals as unknown as Record<string, number>)[sig];
-  return typeof n === "number" ? n : 0;
+// The exit code for a signal death whose NUMBER could not be recovered (see signalNumberOf). It has
+// to be a value nothing else in this system can produce, because it means "the wait status could not
+// be reproduced" and must never be mistaken for one that was: outside the frozen protocol (0/2/3/4/5),
+// outside a verb's own plausible exits, outside the shell conventions 126/127, and above the whole
+// 128+N band for every signal that exists on either platform — including Linux's real-time signals,
+// which run to 64 (128+64 = 192). 200 is the first round number clear of all of it. It is always
+// accompanied by a stderr line naming the signal, so it is diagnosable rather than merely distinct.
+const EXIT_UNKNOWN_SIGNAL = 200;
+
+// Bun reports a child's death signal as a NAME, and that name is NOT trustworthy as a name: on macOS
+// bun emits the LINUX name for the number it received. Measured on bun 1.3.14 / macOS arm64 for every
+// catchable signal 1..31 (.orchestrate/raw/task4-fix1-bun-signal-table.log) — a child killed by macOS
+// 30 (SIGUSR1) is reported "SIGPWR", by 31 (SIGUSR2) "SIGSYS", by 10 (SIGBUS) "SIGUSR1", by 12
+// (SIGSYS) "SIGUSR2", by 7 (SIGEMT) "SIGBUS". Every one of those is the Linux name for that exact
+// number, so the reported name is a faithful function of the true NUMBER even though it is the wrong
+// name for this platform.
+//
+// Therefore: resolve through the LINUX table, which inverts bun's own naming and recovers the true
+// number on macOS; on Linux the same table is correct by definition. Reading the PLATFORM table
+// (os.constants.signals) instead is what the first implementation did, and it is actively wrong here
+// — "SIGSYS" would resolve to macOS's 12, re-raising the WRONG signal, so a caller would be told the
+// verb died of "bad system call" when it died of SIGUSR2. os.constants remains a fallback for names
+// this table does not carry.
+//
+// BUN-VERSION SENSITIVITY, stated plainly: this inverts a defect. If a later bun starts emitting
+// PLATFORM names, "SIGUSR2" on macOS would mean 31 while this table says 12, and the fix would become
+// the bug. That is pinned by dispatch.test.ts's "recovers the true number for every signal a child
+// can die of" test, which kills real children and asserts the recovered number equals the number sent
+// — it goes red the moment the convention moves, in either direction.
+const LINUX_SIGNAL_NUMBERS: Record<string, number> = {
+  SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGILL: 4, SIGTRAP: 5, SIGABRT: 6, SIGBUS: 7, SIGFPE: 8,
+  SIGKILL: 9, SIGUSR1: 10, SIGSEGV: 11, SIGUSR2: 12, SIGPIPE: 13, SIGALRM: 14, SIGTERM: 15,
+  SIGSTKFLT: 16, SIGCHLD: 17, SIGCONT: 18, SIGSTOP: 19, SIGTSTP: 20, SIGTTIN: 21, SIGTTOU: 22,
+  SIGURG: 23, SIGXCPU: 24, SIGXFSZ: 25, SIGVTALRM: 26, SIGPROF: 27, SIGWINCH: 28, SIGIO: 29,
+  SIGPWR: 30, SIGSYS: 31,
+};
+
+// The true number behind bun's reported name, or null when it cannot be established (a name in
+// neither table — Linux real-time signals are the realistic case). NEVER 0: signal 0 is the
+// existence probe, so a 0 here would re-raise nothing and render as the meaningless exit 128.
+export function signalNumberOf(name: string): number | null {
+  const linux = LINUX_SIGNAL_NUMBERS[name];
+  if (linux !== undefined) return linux;
+  const platform = (os.constants.signals as unknown as Record<string, number>)[name];
+  return typeof platform === "number" && platform > 0 ? platform : null;
 }
 
 // The one spawn. `stdio: "inherit"` hands the child our own fds, so it owns the terminal exactly as
@@ -112,17 +152,31 @@ function signalNumber(sig: NodeJS.Signals): number {
 // subprocess reports returncode -15), and only a shell RENDERS that as 128+15=143. A binary that
 // merely `process.exit(143)`s is therefore NOT equivalent — it exits normally, and every waitpid
 // caller can tell. So a signal death is re-raised on ourselves (main.ts), reproducing the floor's
-// wait status bit-for-bit; 128+N is kept as the fallback exit code for the case where the re-raise
-// does not kill us (a blocked or ignored signal), which is what a shell would have reported anyway.
-// Verified on macOS/arm64 for SIGTERM and for a group-delivered SIGINT (the real Ctrl-C shape) —
-// both sides yield returncode -15 / -2. See .orchestrate/raw/task4-signal-probe.log.
+// wait status for every signal a verb can actually die of; 128+N is kept as the fallback exit code
+// for the case where the re-raise does not kill us, which is what a shell would have reported anyway.
+//
+// The one signal that always takes that fallback is SIGPIPE: the bun runtime ignores it process-wide
+// and offers no way back to SIG_DFL without native code, so re-raising is a no-op and the dispatcher
+// exits 141 where the floor dies by 13. A DOCUMENTED divergence, invisible from a shell ($?=141 both
+// ways) and visible to a waitpid caller, pinned in both directions by dispatcher.json's
+// signal-sigpipe-divergence case and by a dispatch.test.ts test — if a future bun stops ignoring
+// SIGPIPE, both go red and this comment is what should be deleted.
 function spawnVerb(py: string, script: string, args: string[], home: string): CoreResult {
   const r = spawnSync(py, [script, ...args], {
     stdio: "inherit",
     env: { ...process.env, PLAINKEEP_HOME: home },
   });
   if (r.signal) {
-    return { code: 128 + signalNumber(r.signal), signal: r.signal };
+    const n = signalNumberOf(r.signal);
+    if (n === null) {
+      // Unreachable for any signal in the table above; reported rather than guessed, because a wrong
+      // guess here re-raises the WRONG signal on ourselves.
+      return {
+        stderr: `plainkeep: verb killed by an unrecognized signal '${r.signal}' — its exit status cannot be reproduced`,
+        code: EXIT_UNKNOWN_SIGNAL,
+      };
+    }
+    return { code: 128 + n, signal: n };
   }
   if (r.status !== null && r.status !== undefined) {
     return { code: r.status };

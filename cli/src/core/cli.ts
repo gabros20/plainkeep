@@ -18,10 +18,12 @@ export interface CoreResult {
   stdout?: string;
   stderr?: string;
   code: number;
-  // Set ONLY when a dispatched verb was killed by a signal. main.ts re-raises it on this process so
-  // the wait status a caller sees is a signal death, exactly like the bash floor's `exec`'d child —
-  // `code` (128+N) is then just the fallback for a signal that does not kill us. See dispatch.ts.
-  signal?: NodeJS.Signals;
+  // Set ONLY when a dispatched verb was killed by a signal, and always as a NUMBER — bun's signal
+  // NAMES are wrong on macOS for the numbers where Linux and macOS disagree, so the name never
+  // leaves dispatch.ts (see signalNumberOf). main.ts re-raises this number on the process so the
+  // wait status a caller sees is a signal death, exactly like the bash floor's `exec`'d child;
+  // `code` (128+N) is then the fallback for a signal that does not kill us.
+  signal?: number;
 }
 
 // Compact JSON, no inter-token spaces — matches the parity probe's

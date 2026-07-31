@@ -13,9 +13,11 @@ code + exact stdout:
                importing that same resolver.py and printing the same compact JSON shapes for the APIs.
 
 The catalog + fixture-vault + comparison machinery here is the FOUNDATION later tasks extend: Task 3
-adds guardrail.json + a `--core-gate` comparator, Tasks 4/5 add dispatcher/completion catalogs. New
-catalogs drop a JSON file next to resolver.json and (if they need a new comparator) register one in
-COMPARATORS — the vault builder and runner are catalog-agnostic.
+added guardrail.json + a `--core-gate` comparator; Task 4 added dispatcher.json + a `dispatch`
+comparator (the WHOLE dispatch, binary vs the bash floor reached through `PLAINKEEP_CORE=off
+./plainkeep`) plus the shim/root-discovery checks in _shim_checks(); Task 5 adds the completion
+catalog. New catalogs drop a JSON file next to resolver.json and (if they need a new comparator)
+register one in COMPARATORS — the vault builder and runner are catalog-agnostic.
 
 Binary discovery: $PLAINKEEP_CORE_BIN else <repo>/.local/bin/plainkeep-core. Absent (or not
 executable) => print a LOUD single SKIP line and exit 0, UNLESS PLAINKEEP_REQUIRE_CORE=1, in which
@@ -35,6 +37,9 @@ REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 RESOLVER_SRC = REPO / "bin" / "lib" / "resolver.py"
 GUARDRAIL_SRC = REPO / "bin" / "lib" / "guardrail.py"
+# The root shim (Task 4). Its `PLAINKEEP_CORE=off` path is the BASH FLOOR — the pre-core dispatcher,
+# preserved verbatim — and is the reference side of the dispatcher differential matrix.
+PLAINKEEP_SRC = REPO / "plainkeep"
 CATALOG_DIR = REPO / "test" / "cases" / "core-parity"
 GREEN, RED, YELLOW, DIM, BOLD, RESET = (
     "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[1m", "\033[0m",
@@ -131,7 +136,27 @@ class Fixture:
             self._root_order.append(ref)
 
         for v in spec.get("verbs", []):
-            self._make_verb(v["at"], v["verb"], v.get("files", ["run.py", "cmd.json"]), v.get("cmd"))
+            self._make_verb(v["at"], v["verb"], v.get("files", ["run.py", "cmd.json"]),
+                            v.get("cmd"), v.get("run"))
+
+        # Dispatcher-catalog addition (Task 4): a fake $PLAINKEEP_HOME/.venv/bin/python3, so the
+        # interpreter-selection probe (exists AND actually starts) can be driven from a catalog.
+        #   "live"   — a SYMLINK to the running python3. CPython reports sys.executable as the
+        #              symlink path, so a verb can tell that the venv interpreter was the one picked.
+        #   "broken" — executable but exits 1 on `-c ''`, the exact "survived an ABI break" shape the
+        #              probe exists for. Both sides must fall back to bare python3.
+        venv = spec.get("venv")
+        if venv is not None:
+            vbin = self.root / ".venv" / "bin"
+            vbin.mkdir(parents=True, exist_ok=True)
+            vpy = vbin / "python3"
+            if venv == "live":
+                vpy.symlink_to(PY)
+            elif venv == "broken":
+                vpy.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+                vpy.chmod(0o755)
+            else:
+                raise ValueError(f"unknown venv fixture: {venv!r}")
 
         # Guardrail-catalog additions (additive; resolver.json declares neither): plugins_lock writes
         # plugins/plugins.lock.json verbatim (a str for a malformed-JSON fixture) or json.dumps()'d
@@ -156,12 +181,17 @@ class Fixture:
             return self._roots[ref][0]
         raise ValueError(f"unknown verb location: {at!r}")
 
-    def _make_verb(self, at: str, verb: str, files: list[str], cmd=None) -> None:
+    def _make_verb(self, at: str, verb: str, files: list[str], cmd=None, run=None) -> None:
         d = self._base_dir(at) / verb
         d.mkdir(parents=True, exist_ok=True)
         for f in files:
+            # verbs[].run (Task 4) is to run.py what verbs[].cmd is to cmd.json: the CONTENT, so a
+            # dispatcher case can ship a verb that exits 7, prints its argv, or kills itself. The
+            # default stays the inert stub — resolver/guardrail cases never execute a verb.
             if f == "cmd.json" and cmd is not None:
                 content = _content(cmd)
+            elif f == "run.py" and run is not None:
+                content = _content(run)
             else:
                 content = _VERB_FILES[f](verb)
             (d / f).write_text(content, encoding="utf-8")
@@ -312,11 +342,268 @@ def _compare_gate(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
         shutil.rmtree(py_root, ignore_errors=True)
 
 
+# --------------------------------------------------------------------------------------------------
+# Dispatcher differential matrix (Task 4) — the WHOLE dispatch, both ways.
+#
+# Reference side: the BASH FLOOR, reached as `PLAINKEEP_CORE=off <vault>/plainkeep <verb> <args...>`
+# (the pre-core dispatcher, preserved verbatim inside the shim). Core side: the compiled binary
+# invoked directly. Compared: exit status (including a signal death, which subprocess reports as a
+# NEGATIVE returncode — the whole point of the signal cases), stdout, stderr, and the gate's audit
+# log line. Same vault-copy-per-side isolation as the gate comparator, for the same reason.
+#
+# MODE PINNING (a run whose mode is ambiguous proves nothing): the floor side is handed a TRACER as
+# its PLAINKEEP_CORE_BIN — a fake core that is executable and passes --core-selftest, so `auto` or
+# `require` WOULD exec it — and every case asserts the tracer's marker file does not exist. That is a
+# positive proof the floor side really took the bash path rather than silently re-entering the core.
+# The core side needs no such proof: it IS the binary, invoked by absolute path with no shell in
+# between.
+# --------------------------------------------------------------------------------------------------
+
+def _install_floor(root: Path) -> None:
+    """Make a built fixture vault runnable by the bash floor: the shim at the vault root, plus
+    guardrail.py next to the resolver.py the Fixture already copied (the floor spawns both)."""
+    shutil.copy2(GUARDRAIL_SRC, root / "bin" / "lib" / "guardrail.py")
+    dst = root / "plainkeep"
+    shutil.copy2(PLAINKEEP_SRC, dst)
+    dst.chmod(0o755)
+
+
+def _write_tracer(path: Path, marker: Path) -> None:
+    """A fake core binary: executable, passes --core-selftest (exit 0 for any argv), and RECORDS that
+    it was invoked. Used to pin dispatcher mode — and, in the shim checks, to prove the opposite."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(f'#!/bin/sh\nprintf \'%s\\n\' "$@" >> "{marker}"\nexit 0\n', encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _symlink_alias(root: Path, holder: list[Path]) -> Path:
+    """A second, NON-canonical path to `root` (a symlink named `vault` in a fresh temp dir) — the
+    macOS /tmp vs /private/tmp shape. `holder` collects the temp dirs for cleanup."""
+    d = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-alias-")))
+    holder.append(d)
+    alias = d / "vault"
+    alias.symlink_to(root)
+    return alias
+
+
+def _dispatch_env(fx: Fixture, inv: dict, home: Path) -> dict:
+    e = fx.env(inv.get("path_order"))
+    e["PLAINKEEP_HOME"] = str(home)
+    e["HOME"] = str(home / "_home")
+    # Never let the OUTER suite's mode leak in: run_all.py is run once with PLAINKEEP_CORE=require
+    # and once with =off, and this comparator must drive both sides itself either way.
+    e.pop("PLAINKEEP_CORE", None)
+    e.pop("PLAINKEEP_CORE_BIN", None)
+    return e
+
+
+def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
+    # An OMITTED verb means no argv at all — the default-verb path (`plainkeep` bare). Distinct from
+    # an EMPTY verb string, which bash's `${1:-help}` also turns into `help` but which does reach the
+    # dispatcher as an argument.
+    verb = inv.get("verb")
+    args = inv.get("args", [])
+    argv = list(args) if verb is None else [verb, *args]
+    core_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-core-")))
+    floor_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-floor-")))
+    aliases: list[Path] = []
+    try:
+        for r in (core_root, floor_root):
+            # symlinks=True: a "live" venv fixture is a SYMLINK to the running python3; copying its
+            # target instead would produce a python binary that cannot find its own framework.
+            shutil.copytree(fx.root, r, dirs_exist_ok=True, symlinks=True)
+            _install_floor(r)
+        marker = floor_root / "_core_was_used"
+        tracer = floor_root / "_fake_core"
+        _write_tracer(tracer, marker)
+
+        core_home = floor_home = None
+        if inv.get("home_via_symlink"):
+            core_home = _symlink_alias(core_root, aliases)
+            floor_home = _symlink_alias(floor_root, aliases)
+        core_env = _dispatch_env(fx, inv, core_home or core_root)
+        floor_env = dict(_dispatch_env(fx, inv, floor_home or floor_root),
+                         PLAINKEEP_CORE="off", PLAINKEEP_CORE_BIN=str(tracer))
+
+        core = _run([binary, *argv], core_env)
+        floor = _run([str(floor_root / "plainkeep"), *argv], floor_env)
+
+        ok_log, log_detail = _compare_log(_read_log(core_root), _read_log(floor_root))
+        mode_pinned = not marker.exists()
+        ok = (core.returncode == floor.returncode and core.stdout == floor.stdout
+              and core.stderr == floor.stderr and ok_log and mode_pinned)
+        # An absolute assertion on top of the differential: two sides that agree on the WRONG answer
+        # (e.g. both ignoring a live venv) would still compare equal. Cases that care state what the
+        # shared stdout must contain.
+        want = inv.get("expect_stdout_contains")
+        if want is not None and want not in core.stdout:
+            ok = False
+        detail = (
+            f"verb={verb!r} args={args!r} "
+            f"core=(rc={core.returncode},out={core.stdout!r},err={core.stderr!r}) "
+            f"floor=(rc={floor.returncode},out={floor.stdout!r},err={floor.stderr!r}) "
+            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r}"
+        )
+        return ok, detail
+    finally:
+        for d in (core_root, floor_root, *aliases):
+            shutil.rmtree(d, ignore_errors=True)
+
+
 COMPARATORS = {
     "cli": _compare_cli,
     "api": _compare_api,
     "gate": _compare_gate,
+    "dispatch": _compare_dispatch,
 }
+
+
+# --------------------------------------------------------------------------------------------------
+# Shim + root-discovery checks (Task 4)
+#
+# These are NOT TS-vs-Python differentials — they are behavioral assertions about the root `plainkeep`
+# shim's own contract, which no catalog case can express because each needs a differently-shaped
+# vault (an in-vault core binary, no core at all, a core that lies about being alive). They live here
+# rather than in a bun test because the contract is a bash script's, and because the same Fixture
+# builder already produces the vaults.
+#
+# The contract under test (proposal §3 / plan-phase1 "The shim + root-discovery contract"):
+#   * a caller-supplied PLAINKEEP_HOME survives the shim AND the binary, unmodified;
+#   * invoked directly with no PLAINKEEP_HOME, the binary derives home from its own execPath;
+#   * a copied vault dispatches through its own copied core, with no reference back to the original;
+#   * no core installed -> auto takes the bash floor SILENTLY, require fails loudly (exit 1), off
+#     takes the floor;
+#   * a core that is executable but fails --core-selftest -> auto takes the floor after EXACTLY ONE
+#     warning line, require fails loudly. A broken core must never poison plainkeep.
+# --------------------------------------------------------------------------------------------------
+
+_SHIM_FIXTURE = {
+    "verbs": [
+        {"at": "engine", "verb": "v_ok", "cmd": {"verb": "v_ok", "risk": "read"},
+         "run": "print('ok')\n"},
+        {"at": "engine", "verb": "v_home", "cmd": {"verb": "v_home", "risk": "read"},
+         "run": "import os\nprint(os.environ.get('PLAINKEEP_HOME', '<unset>'))\n"},
+    ],
+}
+
+
+def _shim_env(home: Path | None, **over) -> dict:
+    e = dict(os.environ)
+    for k in ("PLAINKEEP_CORE", "PLAINKEEP_CORE_BIN", "PLAINKEEP_HOME", "PLAINKEEP_PATH"):
+        e.pop(k, None)
+    if home is not None:
+        e["PLAINKEEP_HOME"] = str(home)
+        e["HOME"] = str(home / "_home")
+    for k, v in over.items():
+        e[k] = str(v)
+    return e
+
+
+def _clone_vault(src: Path, holder: list[Path], prefix: str) -> Path:
+    dst = Path(os.path.realpath(tempfile.mkdtemp(prefix=prefix))) / "vault"
+    holder.append(dst.parent)
+    shutil.copytree(src, dst, symlinks=True)
+    return dst
+
+
+def _shim_checks(binary: str) -> None:
+    tmps: list[Path] = []
+    try:
+        fx = Fixture(_SHIM_FIXTURE)
+    except Exception as e:  # a broken fixture must be a localized FAIL, not a traceback
+        check("[shim] fixture-build", False, f"exception: {e!r}")
+        return
+    try:
+        _install_floor(fx.root)
+        base, shim = fx.root, str(fx.root / "plainkeep")
+
+        # 1-2. A caller-supplied PLAINKEEP_HOME is the vault, whichever path took the dispatch: the
+        # shim script lives in `base` but every read/write must happen in `other`.
+        other = _clone_vault(base, tmps, "pk-shim-home-")
+        for mode, extra in (("require", {"PLAINKEEP_CORE_BIN": binary}), ("off", {})):
+            r = _run([shim, "v_home"], _shim_env(other, PLAINKEEP_CORE=mode, **extra))
+            check(f"[shim] caller PLAINKEEP_HOME preserved through the shim (mode={mode})",
+                  r.returncode == 0 and r.stdout.strip() == str(other),
+                  f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(other)!r}")
+
+        # 3. Direct binary invocation, no PLAINKEEP_HOME: home is two parents above the REAL path of
+        # the executable, so a vault-local copy of the binary finds its own vault.
+        withcore = _clone_vault(base, tmps, "pk-shim-core-")
+        core_dst = withcore / ".local" / "bin" / "plainkeep-core"
+        core_dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(binary, core_dst)
+        core_dst.chmod(0o755)
+        r = _run([str(core_dst), "v_home"], _shim_env(None))
+        check("[shim] direct binary invocation derives PLAINKEEP_HOME from execPath",
+              r.returncode == 0 and r.stdout.strip() == str(withcore),
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(withcore)!r}")
+
+        # 4. A COPIED vault (the scout-Q1 shape: run_terminal/run_mcp copy a vault to temp) with no
+        # PLAINKEEP_HOME and no PLAINKEEP_CORE_BIN: bash discovers home from $0, auto finds the
+        # vault's own core, and the binary trusts the home the shim exported.
+        copied = _clone_vault(withcore, tmps, "pk-shim-copy-")
+        r = _run([str(copied / "plainkeep"), "v_home"], _shim_env(None, PLAINKEEP_CORE="auto"))
+        check("[shim] copied vault dispatches through its OWN copied core",
+              r.returncode == 0 and r.stdout.strip() == str(copied),
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(copied)!r}")
+
+        # 5. No core installed at all (`base` has no .local/bin).
+        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="auto"))
+        check("[shim] absent core · auto falls back to the bash floor, silently",
+              r.returncode == 0 and r.stdout == "ok\n" and r.stderr == "",
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="require"))
+        check("[shim] absent core · require fails loudly (exit 1), never silently falls back",
+              r.returncode == 1 and r.stdout == "" and "require" in r.stderr,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="off"))
+        check("[shim] absent core · off takes the bash floor",
+              r.returncode == 0 and r.stdout == "ok\n",
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+
+        # 6. Executable but DEAD: passes `-x`, fails --core-selftest. The failure mode the probe
+        # exists for (wrong platform, truncated download, missing dylib).
+        broken = _clone_vault(base, tmps, "pk-shim-broken-")
+        bpath = broken / ".local" / "bin" / "plainkeep-core"
+        bpath.parent.mkdir(parents=True, exist_ok=True)
+        bpath.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+        bpath.chmod(0o755)
+        r = _run([str(broken / "plainkeep"), "v_ok"], _shim_env(broken, PLAINKEEP_CORE="auto"))
+        warn_lines = [ln for ln in r.stderr.split("\n") if ln]
+        check("[shim] broken-but-executable core · auto = bash floor + EXACTLY ONE warning line",
+              r.returncode == 0 and r.stdout == "ok\n" and len(warn_lines) == 1
+              and "liveness probe" in warn_lines[0],
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} warn_lines={len(warn_lines)}")
+        r = _run([str(broken / "plainkeep"), "v_ok"], _shim_env(broken, PLAINKEEP_CORE="require"))
+        check("[shim] broken-but-executable core · require fails loudly (exit 1)",
+              r.returncode == 1 and r.stdout == "" and "no live core binary" in r.stderr,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+
+        # 7. Mode pinning, positively both ways: a tracer core that IS live. `off` must never even
+        # probe it (no marker file at all); auto/require must EXEC it with the verb's argv. This is
+        # what makes "the matrix ran the floor" a claim with evidence behind it.
+        for mode, want_exec in (("off", False), ("auto", True), ("require", True)):
+            traced = _clone_vault(base, tmps, f"pk-shim-trace-{mode}-")
+            marker = traced / "_core_was_used"
+            tracer = traced / "_fake_core"
+            _write_tracer(tracer, marker)
+            r = _run([str(traced / "plainkeep"), "v_ok"],
+                     _shim_env(traced, PLAINKEEP_CORE=mode, PLAINKEEP_CORE_BIN=str(tracer)))
+            got = marker.read_text(encoding="utf-8") if marker.exists() else ""
+            check(f"[shim] mode pinning · PLAINKEEP_CORE={mode} "
+                  f"{'execs the core' if want_exec else 'never touches the core'}",
+                  ("v_ok" in got) == want_exec and (r.stdout == "" if want_exec else r.stdout == "ok\n"),
+                  f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} marker={got!r}")
+
+        # 8. An unrecognized mode is a usage error, not a silent choice.
+        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="Require"))
+        check("[shim] unknown PLAINKEEP_CORE value is a loud usage error (exit 2)",
+              r.returncode == 2 and r.stdout == "" and "unknown PLAINKEEP_CORE" in r.stderr,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+    finally:
+        fx.cleanup()
+        for d in tmps:
+            shutil.rmtree(d, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -374,10 +661,13 @@ def main() -> int:
     for catalog, doc in catalogs:
         for case in doc.get("cases", []):
             _run_case(binary, catalog, case)
-
     ncases = sum(len(doc.get("cases", [])) for _, doc in catalogs)
-    print(f"{BOLD}core-parity differential oracle — {len(results)} checks "
-          f"across {ncases} cases (binary: {binary}){RESET}\n")
+    ncatalog_checks = len(results)
+    _shim_checks(binary)
+
+    print(f"{BOLD}core-parity differential oracle — {ncatalog_checks} checks across {ncases} "
+          f"catalog cases + {len(results) - ncatalog_checks} shim/root-discovery checks "
+          f"(binary: {binary}){RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)
     for name, ok, detail in results:
         mark = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"

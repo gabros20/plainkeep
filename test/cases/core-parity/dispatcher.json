@@ -1,0 +1,112 @@
+{
+  "description": "Language-neutral parity catalog for the WHOLE dispatch (Task 4): the compiled core binary invoked directly vs the BASH FLOOR reached as `PLAINKEEP_CORE=off <vault>/plainkeep <verb> <args...>` — the pre-core dispatcher preserved verbatim inside the shim. test/run_core_parity.py's 'dispatch' comparator builds the fixture vault, gives each side its OWN copy (isolated .logs), installs the floor's pieces (the shim script + bin/lib/guardrail.py next to the copied resolver.py), and compares exit status, stdout, stderr, and the appended gate audit line. A signal death is compared as subprocess's NEGATIVE returncode, so `exec`-style death-by-signal cannot be faked by exiting 128+N. The floor side is additionally handed a LIVE tracer as PLAINKEEP_CORE_BIN and every case asserts the tracer never ran — an ambiguous-mode run is not a gate. Fixture grammar additions over guardrail.json (additive): verbs[].run sets a verb's run.py CONTENT (so a verb can exit 7, print its argv, or kill itself) and the top-level `venv` key writes a fake $PLAINKEEP_HOME/.venv/bin/python3 that is either 'live' (a symlink to the running python3 — CPython then reports sys.executable AS that path, which is how a verb can tell which interpreter was picked) or 'broken' (executable, exits 1 on `-c ''`). Invocation shape: {compare:'dispatch', verb?, args?:[...], home_via_symlink?:bool, expect_stdout_contains?:'...'} — verb omitted means NO argv at all (the default-verb path), and expect_stdout_contains adds an absolute assertion on top of the differential so two sides cannot agree on the wrong answer.",
+  "cases": [
+    {
+      "name": "exit-code-matrix",
+      "rationale": "Every code in the frozen protocol, each reached the way it is actually reached in production: 0 from a read verb that ran; 2 from the VERB'S OWN usage error inside run.py (not the gate — the dispatcher must pass a child's 2 through untouched); 3 from the gate refusing a confirm verb, and 0 once --yes clears it; 5 from a deny verb; 4 twice over, once from the gate's unknown-verb path (with the did-you-mean line the floor prints) and once from the dispatcher's own 'has no run.py' line (byte-exact vs floor line 40) for a verb that resolves from its cmd.json but ships no script. Far-miss included so the help-hint branch is compared too.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "v_ok", "cmd": { "verb": "v_ok", "risk": "read" }, "run": "print('ok')\n" },
+          { "at": "engine", "verb": "v_usage", "cmd": { "verb": "v_usage", "risk": "read" }, "run": "import sys\nsys.stderr.write('v_usage: missing <thing>\\n')\nsys.exit(2)\n" },
+          { "at": "engine", "verb": "v_confirm", "cmd": { "verb": "v_confirm", "risk": "confirm" }, "run": "print('ran')\n" },
+          { "at": "engine", "verb": "v_deny", "cmd": { "verb": "v_deny", "risk": "deny" }, "run": "print('MUST NEVER RUN')\n" },
+          { "at": "engine", "verb": "v_nopy", "files": ["cmd.json"], "cmd": { "verb": "v_nopy", "risk": "read" } }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "v_ok", "args": [], "expect_stdout_contains": "ok" },
+        { "compare": "dispatch", "verb": "v_usage", "args": [] },
+        { "compare": "dispatch", "verb": "v_confirm", "args": [] },
+        { "compare": "dispatch", "verb": "v_confirm", "args": ["--yes"], "expect_stdout_contains": "ran" },
+        { "compare": "dispatch", "verb": "v_deny", "args": [] },
+        { "compare": "dispatch", "verb": "v_nopy", "args": [] },
+        { "compare": "dispatch", "verb": "v_okk", "args": [] },
+        { "compare": "dispatch", "verb": "zzzzzzzz", "args": [] }
+      ]
+    },
+    {
+      "name": "argv-forwarding-and-child-status",
+      "rationale": "What the dispatcher owes the child and what it owes the caller. Forwarding: the verb prints its own sys.argv[1:] as JSON, so an empty arg, an arg with spaces, non-ASCII, an astral emoji, a leading-dash arg and a bare `--` are all proven to arrive positionally intact through both dispatchers (the gate sees the same args, so the audit line's naive space-join is compared too). Status: a child exiting 7 must pass through as 7 (not collapsed to 1), and a child that kills itself with SIGTERM must leave the DISPATCHER dead by that signal — the floor `exec`s the verb, so its wait status is WIFSIGNALED, and a binary that merely exits 143 would differ here (subprocess reports -15 vs 143).",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "v_args", "cmd": { "verb": "v_args", "risk": "read" }, "run": "import json, sys\nprint(json.dumps(sys.argv[1:], ensure_ascii=False))\n" },
+          { "at": "engine", "verb": "v_exit7", "cmd": { "verb": "v_exit7", "risk": "read" }, "run": "import sys\nprint('before exit 7')\nsys.exit(7)\n" },
+          { "at": "engine", "verb": "v_sig", "cmd": { "verb": "v_sig", "risk": "read" }, "run": "import os, signal, sys\nsys.stdout.write('dying by signal\\n')\nsys.stdout.flush()\nos.kill(os.getpid(), signal.SIGTERM)\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "v_args", "args": [], "expect_stdout_contains": "[]" },
+        { "compare": "dispatch", "verb": "v_args", "args": ["", "a b c", "héllo wörld", "😀", "-x", "--", "tail"], "expect_stdout_contains": "héllo wörld" },
+        { "compare": "dispatch", "verb": "v_exit7", "args": [], "expect_stdout_contains": "before exit 7" },
+        { "compare": "dispatch", "verb": "v_sig", "args": [], "expect_stdout_contains": "dying by signal" }
+      ]
+    },
+    {
+      "name": "default-verb-and-help-alias",
+      "rationale": "The floor's argv preamble, which is easy to get subtly wrong: `VERB=\"${1:-help}\"` substitutes on unset OR EMPTY (so `plainkeep ''` is `help`, and the empty string is consumed by the shift rather than forwarded), and the `-h|--help -> help` rewrite happens AFTER the shift so the remaining args survive. The fixture ships a real `help` verb printing its own argv, so each of these DISPATCHES rather than 404ing and the forwarded args are visible in stdout.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "help", "cmd": { "verb": "help", "risk": "read" }, "run": "import json, sys\nprint('helped ' + json.dumps(sys.argv[1:], ensure_ascii=False))\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "expect_stdout_contains": "helped []" },
+        { "compare": "dispatch", "verb": "", "expect_stdout_contains": "helped []" },
+        { "compare": "dispatch", "verb": "-h", "expect_stdout_contains": "helped []" },
+        { "compare": "dispatch", "verb": "--help", "expect_stdout_contains": "helped []" },
+        { "compare": "dispatch", "verb": "--help", "args": ["extra", "args"], "expect_stdout_contains": "helped [\"extra\", \"args\"]" },
+        { "compare": "dispatch", "verb": "help", "args": ["--yes"], "expect_stdout_contains": "helped [\"--yes\"]" }
+      ]
+    },
+    {
+      "name": "interpreter-venv-absent",
+      "rationale": "The zero-install path: no $PLAINKEEP_HOME/.venv exists, so both dispatchers must run the verb on bare `python3` from PATH. The verb reports which interpreter carried it by comparing sys.executable against $PLAINKEEP_HOME/.venv, and the expected token is asserted absolutely — otherwise two sides agreeing on 'system' would prove nothing about the live-venv case.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "v_interp", "cmd": { "verb": "v_interp", "risk": "read" }, "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "v_interp", "args": [], "expect_stdout_contains": "system" }
+      ]
+    },
+    {
+      "name": "interpreter-venv-live",
+      "rationale": "ADR-008's reason the probe exists at all: when $PLAINKEEP_HOME/.venv/bin/python3 is present AND starts, BOTH dispatchers must prefer it, so `plainkeep index`/`search` see the optional deps with no PATH surgery. Asserted absolutely ('venv'), which is what distinguishes this case from the absent/broken ones.",
+      "fixture": {
+        "venv": "live",
+        "verbs": [
+          { "at": "engine", "verb": "v_interp", "cmd": { "verb": "v_interp", "risk": "read" }, "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "v_interp", "args": [], "expect_stdout_contains": "venv" }
+      ]
+    },
+    {
+      "name": "interpreter-venv-broken",
+      "rationale": "The failure the `-x`-only check misses and the floor's comments warn about: a .venv/bin/python3 that survived a system-python upgrade or an ABI break is still executable but no longer STARTS, and picking it would return 126/127 on every verb. Both dispatchers must run the `-c ''` probe and fall back to bare python3 — proven absolutely ('system') against the live case's 'venv'.",
+      "fixture": {
+        "venv": "broken",
+        "verbs": [
+          { "at": "engine", "verb": "v_interp", "cmd": { "verb": "v_interp", "risk": "read" }, "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "v_interp", "args": [], "expect_stdout_contains": "system" }
+      ]
+    },
+    {
+      "name": "symlinked-home-not-canonicalized",
+      "rationale": "The realpath decision (field guide #1), pinned. Both sides are invoked with PLAINKEEP_HOME pointing at a SYMLINK to the vault (the macOS /tmp -> /private/tmp shape), and the verb reports whether the PLAINKEEP_HOME it inherited still differs from its realpath. The dispatcher treats PLAINKEEP_HOME as opaque text and canonicalizes nothing, so the answer must be 'not canonical' on BOTH sides: the value a caller supplied is the value every verb sees. If either side started calling realpath() on it, this case fails — as would every vault whose path runs through a symlink, silently relocating .logs and the resolver's engine bin/ relative to what the operator typed. The basename is compared too (both aliases are named `vault`), since the two sides necessarily live under different temp roots.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "v_symhome", "cmd": { "verb": "v_symhome", "risk": "read" }, "run": "import json, os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nprint(json.dumps({'canonical': h == os.path.realpath(h), 'base': os.path.basename(h), 'argv': sys.argv[1:]}))\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "v_symhome", "args": ["arg"], "home_via_symlink": true, "expect_stdout_contains": "{\"canonical\": false, \"base\": \"vault\", \"argv\": [\"arg\"]}" }
+      ]
+    }
+  ]
+}

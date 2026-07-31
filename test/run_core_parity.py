@@ -128,6 +128,19 @@ class Fixture:
         # bin/__complete/run.py: a synthetic stub cannot produce the candidates being compared, and a
         # hand-written copy of the completion brain would be the drift this oracle exists to catch.
         # Only the named verb dirs are installed, so a case still controls its own verb surface.
+        #
+        # The WHOLE bin/lib/ goes in, deliberately, even though the measured transitive closure of
+        # `from lib import completion` (plus every provider) is only six files — completion.py,
+        # filing.py, manifest.py, notetype.py, paths.py, resolver.py
+        # (.orchestrate/raw/task5-lib-closure.log). Copying the closure instead would encode an import
+        # graph HERE that lives THERE, and the day a verb gains an import the fixture fails with an
+        # ImportError from inside a temp vault — the confusing failure this note exists to prevent.
+        # Copying the directory costs a few hundred KB per fixture and cannot go stale.
+        #
+        # Both per-side vault copies in _compare_dispatch() are copytree'd from THIS one built
+        # fixture, so the two sides run byte-identical engine code by construction; a provider
+        # fall-through reading different engine code on the two sides could otherwise compare equal
+        # for the wrong reason. Verified once end to end: .orchestrate/raw/task5-side-identity.log.
         from_repo = spec.get("engine_from_repo", [])
         if from_repo:
             ignore = shutil.ignore_patterns("__pycache__")
@@ -522,6 +535,20 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
             f"exit 4 — plan-phase1 'Binary introspection flags', advisor B4). Comparing it across "
             f"modes proves nothing. Assert the flag's behavior in a bun test or a shim check instead."
         )
+    # An exclusion with nothing positive beside it is a case that passes in the failure it exists to
+    # catch: an EMPTY stdout satisfies every "must not contain", so a completion path that silently
+    # returned NOTHING would go green while asserting a hidden verb is absent. Refused structurally,
+    # here, rather than left to each case author to remember — the same reasoning that made
+    # agreement-only returncode cells useless in Task 4's signal matrix.
+    if inv.get("expect_stdout_excludes") is not None and not (
+        inv.get("expect_stdout_contains") or inv.get("expect_stdout")
+    ):
+        return False, (
+            "invalid dispatcher case: expect_stdout_excludes needs a NON-EMPTY positive assertion in "
+            "the same invocation (expect_stdout_contains, or an exact expect_stdout). Without one, "
+            "empty stdout satisfies the exclusion and the case is green in exactly the failure mode "
+            "it is meant to detect. To assert that output is empty, use expect_stdout: \"\"."
+        )
     core_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-core-")))
     floor_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-floor-")))
     aliases: list[Path] = []
@@ -592,12 +619,19 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
             for s in ([nope] if isinstance(nope, str) else nope):
                 if s in core.stdout or s in floor.stdout:
                     ok = False
+        # The strongest form, for outputs small enough to state in full: BOTH sides' stdout must equal
+        # this byte for byte. It is the only way to assert an output is EMPTY (a `contains` cannot,
+        # since every string contains ""), which `__complete` needs in two directions — no candidates
+        # prints nothing at all, and one empty candidate prints exactly one newline.
+        want_exact = inv.get("expect_stdout")
+        if want_exact is not None and (core.stdout != want_exact or floor.stdout != want_exact):
+            ok = False
         detail = (
             f"verb={verb!r} args={args!r} "
             f"core=(rc={core.returncode},out={core.stdout!r},err={core.stderr!r}) "
             f"floor=(rc={floor.returncode},out={floor.stdout!r},err={floor.stderr!r}) "
             f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r} excludes={nope!r} "
-            f"expect_rc={want_rc!r} resolved_rc(core,floor)={exp!r}"
+            f"expect_exact={want_exact!r} expect_rc={want_rc!r} resolved_rc(core,floor)={exp!r}"
         )
         return ok, detail
     finally:

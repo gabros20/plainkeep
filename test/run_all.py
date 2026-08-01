@@ -44,6 +44,7 @@ SUITES = [
     ("multi-root verb resolution: plugins + PLAINKEEP_PATH (2.1/0.2)", "run_resolver.py"),
     ("core-parity: TS<->Python resolver differential oracle (hybrid-core)", "run_core_parity.py"),
     ("core-fuzz: TS<->Python difflib + bool()/str() differential fuzz (hybrid-core)", "run_fuzz.py"),
+    ("core-tui: in-core terminal UI on a real pty (hybrid-core)", "run_tui_pty.py"),
     ("frozen SDK + plainkeep plugin: api.py + trust ceiling (2.2/2.3)", "run_plugin.py"),
     ("agent transport: plainkeep mcp stdio server (2.4)", "run_mcp.py"),
     ("obsidian frontend zero + canvas/bases (3.1/3.2)", "run_obsidian.py"),

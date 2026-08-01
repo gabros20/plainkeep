@@ -89,7 +89,16 @@ failure to *launch*, not at a verdict. They are deliberately outside 0–5 and a
 
 `126`, `127` and death-by-signal are shared with the bash floor and predate the core binary; `200`
 and `201` are the core's, and exist because a compiled dispatcher can fail to spawn in ways `exec`
-cannot. All of them are pinned against the floor by `test/run_core_parity.py`.
+cannot.
+
+**What tests actually hold each of them**, stated exactly, because "covered" and "covered *against the
+floor*" are different claims: **death-by-signal and `128+N` are pinned differentially** by
+`test/run_core_parity.py` — every terminating signal is a named cell comparing the core against the
+bash floor. **`126`, `127`, `200` and `201` are not.** They are covered *absolutely*, by unit tests on
+`classifySpawnOutcome` in `cli/src/core/dispatch.test.ts`, which hand it synthetic spawn outcomes
+(reaching `EMFILE`/`EAGAIN` for real would mean exhausting the machine's descriptors or process
+slots). For `200` and `201` no differential test is possible even in principle: the floor cannot
+produce them.
 
 ## 3. The `--dry-run` contract
 

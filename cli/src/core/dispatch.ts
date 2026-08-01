@@ -322,7 +322,11 @@ export function stdioNeedsBlockingRestore(): boolean {
 // did its job, and otherwise the shortest true statement about why it did not — never a diagnosis the
 // outcome does not support (the same rule classifySpawnOutcome follows).
 export function blockingRestoreFailure(r: SpawnOutcome): string | null {
-  if (r.error?.code) return r.error.code;
+  // PRESENCE, not truthiness, and the errno is optional: an `error` with no `.code` is still a spawn
+  // that failed, and `r.error?.code` alone would fall through every branch below and answer null —
+  // "the helper ran fine" — from the one function whose whole purpose is that this failure is never
+  // silent. Same presence-vs-truthiness lesson this run has now learned three times.
+  if (r.error) return r.error.code ?? "unknown error";
   if (typeof r.signal === "string" && r.signal !== "") return `killed by ${r.signal}`;
   if (r.status !== null && r.status !== undefined && r.status !== 0) return `exit ${r.status}`;
   return null;

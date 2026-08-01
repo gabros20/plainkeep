@@ -403,7 +403,12 @@ outlive this branch's review.
   (`.orchestrate/raw/task8-timing.log`, 25 reps per cell): piped **103.0 vs 95.5** and **103.0 vs
   94.5 ms** — the core **7.5–8.5 ms (~8–9%) slower** — against ~7% faster to a file (86.7–88.5 vs
   93.3–95.5). Different baseline, same finding, so the number to carry is the direction: **piped is
-  slower, everything else is faster.** Interactive use pays none of it;
+  slower, everything else is faster.** The two figures in this bullet are different quantities and a
+  reader who subtracts them will not get the third: **~13–15 ms is the helper's own cost**, and
+  **~7 ms is the net against the floor** — the core's ~6 ms head start on the non-piped path absorbs
+  half the helper, which is why a 14 ms helper shows up as a 7 ms regression. (The floor's own
+  pipe-vs-file delta is +0.6 ms, so essentially all of the 14 is the helper.) Interactive use pays
+  none of it;
   agents driving MCP still win (59.2 ms/call vs the floor's 78.8 over 200 calls); the caller who pays
   is the shell script running piped verbs in a loop. **The durable fix belongs to Phase 2** — the
   helper spawns a Python interpreter to work around a bun limitation, inside a binary whose point is
@@ -441,8 +446,11 @@ outlive this branch's review.
 - **Toolchain: bun >= 1.2.21 to build.** Older bun DROPS empty-string entries when spawning a child,
   so the dispatcher would silently eat an empty verb argument (verified broken on 1.1.45 and 1.2.0,
   fixed on 1.2.21; `cli/package.json`'s `check:bun` refuses to build below it). `.bun-version` pins
-  **1.3.14**, the revision every measurement in this entry was taken on, and CI installs from that
-  file rather than `latest` — pinning behaviour that is measured, not assumed.
+  **1.3.14**, the revision every measurement in this entry was taken on, and **`ci.yml`** installs
+  from that file rather than `latest` — pinning behaviour that is measured, not assumed. Named as
+  that one workflow rather than as "CI", because it is not true of the other: `release-ui.yml` still
+  says `bun-version: latest`, so the artifact a floor user installs would be built on an unpinned
+  toolchain. Moot only because that workflow is dead (see below) — reviving it means pinning it.
 - **MCP is byte-identical to the Python server with one irreducible exception.** Whole sessions are
   byte-compared across both modes. The exception is key ORDER inside a non-string cmd.json value:
   `JSON.parse` hoists integer-like keys before any serializer sees them, so no serializer can recover
@@ -466,7 +474,19 @@ outlive this branch's review.
   for** (`cli/src/core/mcp.ts` vs `guardrail.ts` — the two walkers have begun to drift), and
   **`check:bun` does not gate `build:ui`**, so a bun older than 1.2.21 can still build the floor's UI
   binary.
+**One operational consequence that is live right now, not deferred:** the `ui-v*` release pipeline
+(`.github/workflows/release-ui.yml`) is **already non-functional**. Phase 1 moved the TUI's source
+from `ui/` into `cli/` and deleted `ui/`; that workflow still reads `ui/package.json` and
+`ui/src/version.ts` and still sets `working-directory: ui`, so pushing a `ui-v*` tag fails on its
+first step. It was left byte-identical deliberately — it is tag-triggered, so it could not fire during
+Phase 1, and whether the floor's separately-downloaded `plainkeep-ui` survives at all is a Phase 2/3
+question. **Until it is repointed or deleted, the floor's `plainkeep-ui` cannot be re-released**:
+`plainkeep setup ui --yes` still installs the last published asset and a contributor checkout still
+builds from source (`cd cli && bun run build:ui`), but no new release can be cut. The workflow now
+says so at the top of its own file, which is where a maintainer stands when it goes red.
+
 **Phases 2–3, unchanged from the proposal** and NOT decided by promoting this entry: Phase 2 packages
 `bin/**` as a uv-provisioned `plainkeep-engine` and takes the code out of the vault (and owns the
 durable fix for the O_NONBLOCK helper); Phase 3 deletes `script/`, `engine.txt`,
-`.plainkeep-engine-ref` and the `ui-v*` pipeline.
+`.plainkeep-engine-ref` and the `ui-v*` pipeline — which, per the paragraph above, is dead already
+rather than working until then.

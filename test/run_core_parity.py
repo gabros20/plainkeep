@@ -158,6 +158,14 @@ class Fixture:
     <vault>/plugins/<pack>/<verb>/, PLAINKEEP_PATH roots under <vault>/_roots/<ref> (absolute) or
     <vault>/_home/<ref> (referenced as ~/<ref>). The vault root is REALPATH-canonical so Python's
     ENGINE_BIN `.resolve()` is a no-op and matches the binary's unresolved $PLAINKEEP_HOME/bin.
+
+    STANDING CONSTRAINT ON EVERY CASE AUTHOR, recorded here because it is a permanent property of
+    this oracle: **sorted-set comparisons between the two sides agree only for ASCII names.**
+    JavaScript's default `sort()` orders by UTF-16 code UNITS, Python's `sorted()` by code POINTS,
+    so the two disagree for astral and some private-use characters. Verb and pack names are ASCII in
+    practice, which is why resolver parity holds. A case with non-ASCII ARGUMENTS must therefore
+    compare them POSITIONALLY / byte-exactly and never route them through a sorted comparison in this
+    harness — the guardrail catalog already complies. (Found in Task 2, applied by Task 3.)
     """
 
     def __init__(self, spec: dict):

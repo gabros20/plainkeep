@@ -55,6 +55,12 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   — and the ordinary `ops setup ui --yes` re-downloads, pinned to the expected release tag
   (`ui-v<version>`). The release workflow fails on any drift between the tag, `ui/package.json`,
   `bin/ui/version.txt`, and `ui/src/version.ts`.
+  **Superseded — read this before pushing a `ui-v*` tag:** the hybrid-core work (ADR-013) moved the
+  TUI's source into `cli/` and deleted `ui/`, and that release workflow was left pointing at the old
+  paths. It no longer fails "on drift" — it fails on its first step, every time. The floor's
+  `plainkeep-ui` therefore cannot be re-released until Phase 2/3 repoints or deletes the pipeline;
+  installing the last published asset and building from source both still work. The workflow file
+  says the same at the top.
 
 ### Changed
 - **Renamed: `opskit` → `plainkeep`, full consistency** (ADR-012). `opskit` collided with 40+

@@ -19,6 +19,9 @@
 > Re-measured twice on the real `status --json` verb through the shim while writing this correction
 > (`.orchestrate/raw/task8-timing.log`): piped 103.0 vs 95.5 and 103.0 vs 94.5 ms — 7.5–8.5 ms
 > (~8–9%) slower — against ~7% faster to a file. Different baseline, same conclusion.
+> **Two distinct quantities appear above and subtracting them gives neither:** ~13–15 ms is the
+> helper's own cost (the core's pipe-minus-file delta; the floor's own is +0.6 ms), while ~7 ms is the
+> net against the floor — the core's ~6 ms head start elsewhere absorbs half the helper.
 > The trade was taken deliberately — losing a verb's output is a correctness defect and 13 ms is not —
 > but the durable fix is Phase 2's: today's stopgap spawns a *Python interpreter* to work around a
 > *bun* limitation, inside a binary whose stated point is not needing Python. Mechanism and cost:

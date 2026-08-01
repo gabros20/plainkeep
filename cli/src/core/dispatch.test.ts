@@ -277,6 +277,9 @@ test("blockingRestoreFailure: every way the helper can fail produces a reason", 
   expect(blockingRestoreFailure({ status: null, signal: null, error: { code: "EAGAIN" } })).toBe("EAGAIN");
   expect(blockingRestoreFailure({ status: null, signal: "SIGKILL" })).toBe("killed by SIGKILL");
   expect(blockingRestoreFailure({ status: 1, signal: null })).toBe("exit 1");
+  // An error object with no errno on it. `r.error?.code` would be undefined here and every later
+  // branch is also false, so a truthiness test answers null — success — for a spawn that failed.
+  expect(blockingRestoreFailure({ status: null, signal: null, error: {} })).toBe("unknown error");
 });
 
 test("classifySpawnOutcome: agrees with what spawnSync really reports for a missing interpreter", () => {

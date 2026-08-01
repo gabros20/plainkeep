@@ -4,7 +4,9 @@
 build a frontend, an MCP layer, or any tool that shells out to `plainkeep`.
 
 Everything here is frozen per version and covered by a contract test (`test/run_json.py`). The
-envelope only ever changes with an explicit `ops_json` version bump.
+envelope only ever changes with an explicit `ops_json` version bump. The one exception is explicitly
+labelled where it appears: the statuses a *dispatcher* returns when it never managed to start a verb
+(§2's second table) are outside the protocol and are not frozen.
 
 **The hybrid core (ADR-013) does not change anything on this page.** The dispatcher is now a compiled
 binary rather than a bash script, and the guardrail and resolver it runs are a TypeScript
@@ -67,6 +69,27 @@ same. The error surface is identical for humans and machines.
 
 Constants: `output.EXIT_OK / EXIT_UNEXPECTED / EXIT_USAGE / EXIT_CONFIRM / EXIT_NOT_FOUND / EXIT_DENY`.
 The dispatcher propagates guardrail codes verbatim — a refused call is `3`/`5`, never a flattened `1`.
+
+### What the DISPATCHER itself can exit with, outside the protocol
+
+The table above is the protocol: it is what a *verb* or the *guardrail* decides, it is frozen, and it
+is what a caller should branch on. It is not the complete set of statuses a caller can observe,
+because a dispatcher that never managed to start a verb has no protocol answer to give. Those
+statuses are listed here so that a program reading an unexpected number knows it is looking at a
+failure to *launch*, not at a verdict. They are deliberately outside 0–5 and are **not** frozen.
+
+| Status | Meaning | Notes |
+|---|---|---|
+| `126` | the interpreter exists but could not be executed (`EACCES`) | the bash floor reaches the same code through `exec`'s own failure |
+| `127` | the interpreter was not found (`ENOENT`) | same on both dispatchers; the message text differs (the core's is its own, since a bash line number is not reproducible) |
+| **dead by signal** | the verb was killed by a signal, and the dispatcher re-raises it on itself | the normal case, and what the floor does by `exec`ing the verb: `plainkeep` *is* the signalled process, so `waitpid()` reports `WIFSIGNALED` |
+| `128+N` | the verb was killed by signal `N` and the re-raise did not take | reachable under the core because bun ignores some signals process-wide (measured: SIGPIPE, SIGXFSZ) — a shell would have reported the same number |
+| `200` | the verb was killed by a signal the runtime would not name, so its status cannot be reproduced | always accompanied by a stderr line saying so; chosen above the whole `128+N` band (Linux real-time signals reach 192) so it can never be mistaken for one |
+| `201` | the verb could not be started for some other reason — `EAGAIN`, `EMFILE`, `ENOMEM`, `ENOEXEC` | deliberately not `127`: "command not found" is a diagnosis, and a process-table limit sends the operator hunting for a file that is sitting right there |
+
+`126`, `127` and death-by-signal are shared with the bash floor and predate the core binary; `200`
+and `201` are the core's, and exist because a compiled dispatcher can fail to spawn in ways `exec`
+cannot. All of them are pinned against the floor by `test/run_core_parity.py`.
 
 ## 3. The `--dry-run` contract
 

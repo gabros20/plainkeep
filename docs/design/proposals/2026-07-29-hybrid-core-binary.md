@@ -16,6 +16,9 @@
 > Medians over 25 reps on bun 1.3.14 / macOS arm64: piped **core 84.2 ms vs bash floor 76.8 ms** — on
 > the piped path the core is now ~10% SLOWER than the bash it replaces, not faster. On a TTY or a file
 > it is ~11% faster (69.7 vs 78.3 ms), and an MCP tool call still wins outright (59.2 vs 78.8 ms/call).
+> Re-measured twice on the real `status --json` verb through the shim while writing this correction
+> (`.orchestrate/raw/task8-timing.log`): piped 103.0 vs 95.5 and 103.0 vs 94.5 ms — 7.5–8.5 ms
+> (~8–9%) slower — against ~7% faster to a file. Different baseline, same conclusion.
 > The trade was taken deliberately — losing a verb's output is a correctness defect and 13 ms is not —
 > but the durable fix is Phase 2's: today's stopgap spawns a *Python interpreter* to work around a
 > *bun* limitation, inside a binary whose stated point is not needing Python. Mechanism and cost:

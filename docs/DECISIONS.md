@@ -394,18 +394,21 @@ outlive this branch's review.
   the first write it cannot satisfy in full — a verb's output past the pipe buffer was silently lost
   (measured: 81,920 bytes delivered and exit 1, where the floor delivered 500,062 and exit 0). The
   fix spawns one `python3` helper to clear the flag, and it runs only when fd 1 or 2 is a pipe.
-  Medians over 25 reps on a trivial verb (`.orchestrate/review-task7-quality-r1.md` §R1): piped **core
-  84.2 ms vs floor 76.8 ms** — about 10% slower, spreads non-overlapping — where on a TTY or a file
-  the core is ~11% faster (69.7 vs 78.3 ms). The helper itself costs +13.4 ms. Reproduced
-  independently while writing this entry, on the real `status --json` verb through the shim
-  (`.orchestrate/raw/task8-timing.log`, 25 reps): piped 103.0 vs the floor's 95.5 ms, to a file 88.5
-  vs 95.5 — same direction, same magnitude, and the core's own pipe-minus-file delta of 14.5 ms is the
-  helper. Interactive use pays none of it;
+  **The cost is not merely "one extra spawn" — on that path the port is now a latency REGRESSION
+  against the bash it replaces.** Medians over 25 reps on a trivial verb
+  (`.orchestrate/review-task7-quality-r1.md` §R1): piped **core 84.2 ms vs floor 76.8 ms**, ~10%
+  slower with non-overlapping spreads, where on a TTY or a file the core is ~11% faster (69.7 vs
+  78.3 ms) and the helper itself accounts for +13.4 ms. Measured again independently while writing
+  this entry, twice, on the real `status --json` verb through the shim
+  (`.orchestrate/raw/task8-timing.log`, 25 reps per cell): piped **103.0 vs 95.5** and **103.0 vs
+  94.5 ms** — the core **7.5–8.5 ms (~8–9%) slower** — against ~7% faster to a file (86.7–88.5 vs
+  93.3–95.5). Different baseline, same finding, so the number to carry is the direction: **piped is
+  slower, everything else is faster.** Interactive use pays none of it;
   agents driving MCP still win (59.2 ms/call vs the floor's 78.8 over 200 calls); the caller who pays
   is the shell script running piped verbs in a loop. **The durable fix belongs to Phase 2** — the
   helper spawns a Python interpreter to work around a bun limitation, inside a binary whose point is
   not needing Python, which is the dependency direction backwards. It is a stopgap carried
-  deliberately: correctness first, and 13 ms is the price of not truncating output.
+  deliberately: correctness first, and ~13–15 ms is the price of not truncating a verb's output.
 - **The Python guardrail and resolver are PERMANENT, so parity is a standing obligation rather than a
   migration step.** They cannot be deleted in any phase: the frozen plugin SDK re-exports the gate
   (`bin/lib/api.py:37`, `classify = guardrail.classify`), `bin/doctor/run.py:15` imports the
@@ -452,10 +455,15 @@ outlive this branch's review.
   action has run, on floor and core alike — `@clack/prompts` 0.7.0 never removes the SIGINT/SIGTERM
   listeners each `spinner()` adds, which drops bun's default disposition. It is a pre-existing
   disclosure pinned by `test/run_tui_pty.py`, and the ~15-line `withSpinner()` fix is deliberately NOT
-  in Phase 1 because it changes TUI behaviour. The Minor and INFO findings from this run's fourteen
-  reviews — batched rather than fixed, none blocking — are collected in `.orchestrate/followups.md`
-  (a run artifact, untracked: read it before the branch's review notes are cleared, and promote the
-  entries worth keeping into issues).
+  in Phase 1 because it changes TUI behaviour. The 110 Minor/LOW/INFO findings from this run's
+  fourteen reviews — batched rather than fixed, none blocking — are collected in
+  `.orchestrate/followups.md` (a run artifact, untracked: read it before the branch's review notes are
+  cleared, and promote the entries worth keeping into issues). Three are named here so that promoting
+  this ADR does not depend on that file surviving: **`pyJsonDumps` emits invalid JSON for a `Map` with
+  non-string keys** and **is a line-for-line clone of `pythonRepr` that only it got the key-order fix
+  for** (`cli/src/core/mcp.ts` vs `guardrail.ts` — the two walkers have begun to drift), and
+  **`check:bun` does not gate `build:ui`**, so a bun older than 1.2.21 can still build the floor's UI
+  binary.
 **Phases 2–3, unchanged from the proposal** and NOT decided by promoting this entry: Phase 2 packages
 `bin/**` as a uv-provisioned `plainkeep-engine` and takes the code out of the vault (and owns the
 durable fix for the O_NONBLOCK helper); Phase 3 deletes `script/`, `engine.txt`,

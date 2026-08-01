@@ -49,3 +49,7 @@ bin/share/worker/wrangler.toml
 # regenerable; the installed binaries under .local/bin are caches.
 cli/node_modules/
 /.local/
+
+# The vault marker (ADR-014 / Task 1a). A plain clone of the template must NOT be adoptable as a
+# vault — no marker means walk-up can never select an arbitrary checkout.
+.plainkeep/

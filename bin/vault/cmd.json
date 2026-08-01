@@ -1,0 +1,73 @@
+{
+  "verb": "vault",
+  "summary": "register, name and re-point plainkeep vaults (marker + registry)",
+  "usage": "plainkeep vault list | status | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
+  "risk": "safe_write",
+  "reads": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
+  "writes": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
+  "args": [
+    {"name": "action", "required": false, "default": "list"},
+    {"name": "target", "required": false, "default": "-"}
+  ],
+  "hints": "A vault is identified by an immutable id in <vault>/.plainkeep/vault.json and NAMED by the registry outside every vault, so renaming or moving one never writes into it. `register` is also the bootstrap for a vault that predates init/migration. A moved vault is `rebind`, not a second `register` — rebind refuses if the marker at the new path carries a different id. Everything fails closed: unknown schema, malformed JSON, or a duplicate id/name/path refuses with the file named. NOTE: this does not yet change how a root is DISCOVERED (Task 1b) — `vault status` reports what today's rules select.",
+  "output": {
+    "mode": "rows",
+    "fields": {
+      "name": "string",
+      "id": "string",
+      "path": "string",
+      "default": "bool",
+      "marker": "bool"
+    }
+  },
+  "actions": [
+    {
+      "name": "list",
+      "summary": "registered vaults, which is the default, and whether each still has its marker (the default action)",
+      "risk": "read",
+      "args": []
+    },
+    {
+      "name": "status",
+      "summary": "which root this environment selects and why, plus this vault's marker and registration",
+      "risk": "read",
+      "args": []
+    },
+    {
+      "name": "register",
+      "summary": "mark a directory as a vault (if unmarked) and add it to the registry; needs --yes",
+      "risk": "confirm",
+      "dry_run": false,
+      "args": [
+        { "name": "path", "type": "string", "required": false, "help": "the vault directory; defaults to the current directory", "example": "~/plainkeep" },
+        { "name": "--name", "type": "string", "required": false, "help": "registry name (lowercase slug); defaults to the directory name", "example": "work" },
+        { "name": "--default", "type": "flag", "required": false, "help": "also make it the default vault" }
+      ]
+    },
+    {
+      "name": "rebind",
+      "summary": "re-point a registered vault at its new location (same id); needs --yes",
+      "risk": "confirm",
+      "args": [
+        { "name": "selector", "type": "string", "required": true, "help": "registered name or id" },
+        { "name": "new-path", "type": "string", "required": true, "help": "where the vault lives now" }
+      ]
+    },
+    {
+      "name": "deregister",
+      "summary": "remove a registry entry; the vault and its marker are untouched; needs --yes",
+      "risk": "confirm",
+      "args": [
+        { "name": "selector", "type": "string", "required": true, "help": "registered name or id" }
+      ]
+    },
+    {
+      "name": "default",
+      "summary": "set the default vault; needs --yes",
+      "risk": "confirm",
+      "args": [
+        { "name": "selector", "type": "string", "required": true, "help": "registered name or id" }
+      ]
+    }
+  ]
+}

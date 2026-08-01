@@ -189,6 +189,18 @@ EXEMPT: dict[str, dict[str, str]] = {
             "the ingest move itself; the verb's own uniquifying loop is what guarantees it never "
             "overwrites an existing original",
     },
+    "bin/lib/vaultreg.py": {
+        'self.path.parent.mkdir(parents=True, exist_ok=True)':
+            "the REGISTRY's config directory ($XDG_CONFIG_HOME/plainkeep) — it lives outside every "
+            "vault by design, since it is the thing that knows which vaults exist",
+    },
+    "bin/vault/run.py": {
+        'vaultreg.marker_path(target).write_text(vaultreg.marker_bytes(marker), encoding="utf-8")':
+            "the vault MARKER — the one write that establishes where the wall goes. The target is "
+            "by definition not yet the active data root, so classifying it against the active root "
+            "would refuse every registration but the current vault's. One file, --yes only",
+        'd.mkdir(parents=True, exist_ok=True)': "the marker's .plainkeep/ directory, same reason",
+    },
     "bin/repo/run.py": {
         'dest.parent.mkdir(parents=True, exist_ok=True)': "~/work fleet clone + adopt destination",
         'shutil.move(str(src), str(dest))': "~/work fleet adopt: moves an existing repo into the fleet",
@@ -253,9 +265,10 @@ def main() -> int:
     exempt_total = sum(len(v) for v in EXEMPT.values())
     if exempt_total:
         print(f"\nSUITE-NOTE: {exempt_total} raw write site(s) in bin/ are NOT behind the wall — "
-              f"~/work fleet trees, ~/.Trash, a human-supplied `--out`, and the guardrail's own "
-              f"audit log. The wall as written DENIES all of them; whether its model should cover "
-              f"verb-owned writes outside the three roots is a policy decision, not a wiring fix.")
+              f"~/work fleet trees, ~/.Trash, a human-supplied `--out`, the guardrail's own audit "
+              f"log, and the vault marker/registry (the writes that ESTABLISH where the wall goes). "
+              f"The wall as written DENIES all of them; whether its model should cover verb-owned "
+              f"writes outside the three roots is a policy decision, not a wiring fix.")
     print("SUITE-NOTE: a MISRESOLVED data root is still not detectable here — the wall is anchored "
           "to the root it would have to doubt. Root validation is ADR-014 / Phase 2 Task 1.")
     print(f"\n{BOLD}Result:{RESET} {GREEN}{passed} passed{RESET}, "

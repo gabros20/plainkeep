@@ -351,6 +351,27 @@ export const INTERCEPTS: Record<string, Interception> = {
   // be proven honestly instead: test/run_tui_pty.py drives a real PTY and asserts the menu rendered,
   // an action ran, and the audit line was written.
   ui: { comparable: false, run: (args) => uiIntercept(args) },
+  // Task 7 — the stdio MCP server, in-process. The second STDIO-OWNING interception and the first
+  // with a STDIN lifecycle: it reads newline-delimited JSON-RPC for its whole lifetime and returns
+  // only `{ code }`.
+  //
+  // comparable: FALSE. Not for `ui`'s reason (nondeterministic output) — an MCP frame stream is in
+  // fact byte-deterministic, and test/run_mcp_protocol.py byte-compares whole frames across the two
+  // modes — but because an MCP SESSION IS NOT AN INVOCATION. The dispatcher differential runs one
+  // argv and compares what came back; `plainkeep mcp` with no stdin is a server that reads EOF and
+  // exits, which would compare two empty outputs and prove nothing. The protocol suite drives real
+  // sessions instead, which is where the comparison has content.
+  //
+  // The DYNAMIC import is load-bearing in the same way ui.ts's is, and for a second reason ui.ts does
+  // not have: beyond keeping the module graph off the `__complete` path, it means the session's stdin
+  // reader, signal handlers and streaming decoder are never even CONSTRUCTED for any other verb.
+  mcp: {
+    comparable: false,
+    run: async (args) => {
+      const { mcpIntercept } = await import("./mcp.js");
+      return mcpIntercept(args);
+    },
+  },
 };
 
 // The ONE way to read INTERCEPTS, and it exists because the obvious `INTERCEPTS[verb]` is wrong.

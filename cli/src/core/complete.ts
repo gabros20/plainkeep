@@ -52,7 +52,11 @@ const MAX_JSON_DEPTH = 100;
 
 // Iterative (explicit-stack) depth probe — recursion here would reintroduce the stack overflow the
 // cap exists to avoid. `root` is a JSON-decoded value, hence acyclic.
-function jsonDepthExceeds(root: unknown, max: number): boolean {
+//
+// Exported for mcp.ts, which loads the same sidecars under the same cap. Shared rather than copied
+// because the cap is a CLAIM about CPython's recursion limit: two copies would drift, and the second
+// one would be the one nobody re-measured.
+export function jsonDepthExceeds(root: unknown, max: number): boolean {
   const stack: Array<[unknown, number]> = [[root, 1]];
   while (stack.length) {
     const [v, depth] = stack.pop() as [unknown, number];
@@ -337,7 +341,10 @@ const PY_STRIP_CHARS = new Set([
   "\u2008", "\u2009", "\u200a", "\u2028", "\u2029", "\u202f", "\u205f", "\u3000",
 ]);
 
-function pyStrip(s: string): string {
+// Exported for mcp.ts: bin/mcp/run.py `.strip()`s every stdin line and every captured child stream,
+// and JS trim() is a different character set (see PY_STRIP_CHARS above) — so the port has to use
+// Python's, and it must be the one set, not a second table that agrees today.
+export function pyStrip(s: string): string {
   let start = 0;
   let end = s.length;
   while (start < end && PY_STRIP_CHARS.has(s[start])) start += 1;

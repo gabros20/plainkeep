@@ -36,6 +36,14 @@ IGNORE_PARTS = {".obsidian", ".trash", ".smart-env"}
 import sys as _sys
 _sys.path.insert(0, str(Path(__file__).resolve().parent))  # let sibling `embed`/`vectorstore` import in both contexts
 
+# The write seam (lib/vaultio.py). This module is imported BOTH as `lib.indexlib` (verbs) and
+# top-level as `indexlib` (test/run_search_impl.py:27 puts bin/lib on sys.path), so the import has
+# to work either way — same reason the line above exists.
+try:
+    from . import vaultio  # type: ignore  # (namespace sibling)
+except ImportError:
+    import vaultio  # type: ignore
+
 
 def _vectors_on() -> bool:
     return os.environ.get("PLAINKEEP_VECTORS", "").lower() in ("1", "true", "yes", "on")
@@ -78,7 +86,7 @@ def _candidate_texts(paths: list[str], limit: int = 1200) -> dict:
 
 
 def connect() -> sqlite3.Connection:
-    INDEX_DIR.mkdir(parents=True, exist_ok=True)
+    vaultio.mkdir(INDEX_DIR)
     con = sqlite3.connect(DB)
     con.execute("PRAGMA journal_mode=WAL")
     con.executescript(
@@ -285,14 +293,14 @@ def log_query(query: str, hits: list[tuple[str, str, float]]) -> None:
     """Append a search to .logs/queries.jsonl — the real query log that settles the vector
     question over time (ADR-002). Add the slug that actually answered as `relevant` later to
     turn a logged query into a labeled benchmark case (`plainkeep search --mark`, future)."""
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    vaultio.mkdir(LOG_DIR)
     rec = {
         "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "q": query,
         "hits": [p for p, _h, _s in hits[:5]],
         "relevant": None,
     }
-    with open(QUERY_LOG, "a", encoding="utf-8") as f:
+    with vaultio.open_append(QUERY_LOG, encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 

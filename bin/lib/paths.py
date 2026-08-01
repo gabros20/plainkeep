@@ -35,22 +35,31 @@ def journal_path(d: date | None = None) -> Path:
     return JOURNAL / f"{d.year:04d}" / f"{d.month:02d}" / f"{d.isoformat()}.md"
 
 
+def _io():
+    """lib.vaultio, imported lazily: vaultio imports guardrail, guardrail's CLI is exec'd standalone,
+    and paths is imported by everything — a module-level import here would be a cycle. Journalling is
+    guarded from inside paths so every caller inherits the wall, including plugins reaching it
+    through the frozen SDK's `append_journal` re-export (lib/api.py)."""
+    from . import vaultio  # type: ignore  # (namespace sibling)
+    return vaultio
+
+
 def ensure_journal(d: date | None = None) -> tuple[Path, bool]:
     """Return (path, created). Creates today's journal note with a header if missing."""
     d = d or date.today()
     note = journal_path(d)
     created = not note.exists()
     if created:
-        note.parent.mkdir(parents=True, exist_ok=True)
-        note.write_text(f"---\ntype: journal\ndate: {d.isoformat()}\n---\n# {d.isoformat()}\n\n", encoding="utf-8")
+        io = _io()
+        io.mkdir(note.parent)
+        io.write_text(note, f"---\ntype: journal\ndate: {d.isoformat()}\n---\n# {d.isoformat()}\n\n")
     return note, created
 
 
 def append_journal(line: str) -> Path:
     """Append one timestamped line to today's journal note (the shared activity record, §8)."""
     note, _ = ensure_journal()
-    with open(note, "a", encoding="utf-8") as f:
-        f.write(f"- {datetime.now().strftime('%H:%M')} {line}\n")
+    _io().append_text(note, f"- {datetime.now().strftime('%H:%M')} {line}\n")
     return note
 
 

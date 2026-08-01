@@ -11,7 +11,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 
 def _find_repo(slug: str):
@@ -48,7 +48,7 @@ def main(argv):
         return output.emit(data, "archive", human=lambda _:
                            f"would archive '{slug}' -> {bundle}  (dry run — nothing written)")
 
-    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest_dir.mkdir(parents=True, exist_ok=True)   # ~/work/archive — see test/run_pathwall.py EXEMPT
     r = subprocess.run(["git", "-C", str(repo), "bundle", "create", str(bundle), "--all"],
                        capture_output=True, text=True)
     if r.returncode != 0:
@@ -61,7 +61,7 @@ def main(argv):
         t = re.sub(r"(?m)^updated:.*$", f"updated: {paths.today()}", t, count=1)
         if "## Timeline" in t:
             t = t.replace("## Timeline", f"## Timeline\n- {paths.today()} archived → {bundle}", 1)
-        hub.write_text(t, encoding="utf-8")
+        vaultio.write_text(hub, t, encoding="utf-8")
 
     shutil.rmtree(repo)
     paths.append_journal(f"archived {slug} -> {bundle}")

@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enrichlib, output, paths  # noqa: E402
+from lib import enrichlib, output, paths, vaultio  # noqa: E402
 
 GREEN, YEL, DIM, RESET = "\033[32m", "\033[33m", "\033[2m", "\033[0m"
 BATCH_KEEP_ALIVE = "5m"  # a multi-GB model shouldn't reload per note on `--all` (proposal §5 QA R6)
@@ -80,7 +80,7 @@ def _stamp(note: Path, meta: dict) -> None:
     body.append("keywords:")
     body += [f"- {kw}" for kw in meta["keywords"]]
     body.append(f"enrich_key: {meta['key']}")
-    note.write_text("\n".join(["---", *body, "---", *lines[end + 1:]]) + "\n", encoding="utf-8")
+    vaultio.write_text(note, "\n".join(["---", *body, "---", *lines[end + 1:]]) + "\n", encoding="utf-8")
 
 
 def enrich_note(slug: str, reenrich: bool = False) -> dict:

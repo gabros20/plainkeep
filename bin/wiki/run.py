@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import notetype, output, paths, render  # noqa: E402
+from lib import notetype, output, paths, render, vaultio  # noqa: E402
 
 CANVAS_DIR = "canvas"  # emitted under wiki/canvas/
 
@@ -195,9 +195,9 @@ def main(argv):
             return output.emit(data, "wiki",
                                human=lambda _: f"would create -> {rel}  (dry run — nothing written)")
         d = paths.WIKI / notetype.type_dir(typ)
-        d.mkdir(parents=True, exist_ok=True)
+        vaultio.mkdir(d)
         f = d / f"{slug}.md"
-        f.write_text(notetype.render(typ, title=name, slug=slug), encoding="utf-8")
+        vaultio.write_text(f, notetype.render(typ, title=name, slug=slug), encoding="utf-8")
         paths.append_journal(f"wiki new {typ}: {slug}")
         data = {"path": str(rel), "type": typ, "slug": slug}
         return output.emit(data, "wiki", human=lambda _: f"created -> {rel}")
@@ -272,8 +272,8 @@ def main(argv):
             return output.emit(data, "wiki",
                                human=lambda _: f"would create -> {rel}  ({len(ordered)} nodes, {len(edges)} edges)  (dry run — nothing written)")
         outp = paths.PLAINKEEP_HOME / rel
-        outp.parent.mkdir(parents=True, exist_ok=True)
-        outp.write_text(text, encoding="utf-8")
+        vaultio.mkdir(outp.parent)
+        vaultio.write_text(outp, text, encoding="utf-8")
         paths.append_journal(f"wiki canvas: {base} ({len(ordered)} nodes)")
         data = {"path": str(rel), "slug": base, "nodes": len(ordered), "edges": len(edges)}
         return output.emit(data, "wiki",

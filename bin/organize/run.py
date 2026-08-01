@@ -30,7 +30,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import agent, output, paths  # noqa: E402
+from lib import agent, output, paths, vaultio  # noqa: E402
 
 GREEN, RED, YEL, DIM, CYAN, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[36m", "\033[0m"
 
@@ -86,7 +86,7 @@ def _read_queue(path: Path):
 def _append_status(path: Path, oid: str, st: str) -> None:
     from datetime import datetime, timezone
     rec = {"id": oid, "status": st, "ts": datetime.now(timezone.utc).isoformat(timespec="seconds")}
-    with open(path, "a", encoding="utf-8") as f:
+    with vaultio.open_append(path, encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False) + "\n")
 
 
@@ -345,8 +345,8 @@ def cmd_scan(argv, dry):
     rows = [{"id": o["id"], "op": o["op"], "target": o["target"], "confidence": o["confidence"],
              "rationale": o["rationale"], "status": "proposed"} for o in ops]
     if not dry:
-        QUEUE_DIR.mkdir(parents=True, exist_ok=True)
-        qpath.write_text("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in ops), encoding="utf-8")
+        vaultio.mkdir(QUEUE_DIR)
+        vaultio.write_text(qpath, "".join(json.dumps(o, ensure_ascii=False) + "\n" for o in ops), encoding="utf-8")
         paths.append_journal(f"organize scan -> {len(ops)} proposed op(s) in {rel}")
 
     def render(rs):
@@ -506,7 +506,7 @@ def cmd_apply(argv, dry: bool = False):
             break
         if not dry:                                     # a true dry-run IS a read: no write/commit/ledger
             rel = path.relative_to(paths.PLAINKEEP_HOME).as_posix()
-            path.write_text(new, encoding="utf-8")
+            vaultio.write_text(path, new, encoding="utf-8")
             _commit(rel, f"organize: {o['op']} {o['target']} — {o['rationale']}")
             _append_status(qpath, oid, "applied")
         applied += 1; changed_lines += nlines

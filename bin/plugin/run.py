@@ -26,7 +26,7 @@ import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import manifest, output, paths, resolver  # noqa: E402
+from lib import manifest, output, paths, resolver, vaultio  # noqa: E402
 
 GREEN, RED, YEL, DIM, CYAN, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[36m", "\033[0m"
 RISK_CLASSES = ("read", "safe_write", "confirm", "deny")
@@ -69,8 +69,8 @@ def _load_lock() -> dict:
 
 
 def _save_lock(lock: dict) -> None:
-    LOCK.parent.mkdir(parents=True, exist_ok=True)
-    LOCK.write_text(json.dumps(lock, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    vaultio.mkdir(LOCK.parent)
+    vaultio.write_text(LOCK, json.dumps(lock, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 # --- manifest validation -------------------------------------------------------------------------
@@ -209,8 +209,8 @@ def cmd_add(argv):
         output.fail(output.EXIT_USAGE,
                     f"pack '{name}' is already installed — `plainkeep plugin update {name} --yes` or "
                     f"`plainkeep plugin remove {name} --yes` first", verb="plugin")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(staging, dest, ignore=shutil.ignore_patterns(".git"))
+    vaultio.mkdir(dest.parent)
+    vaultio.copytree(staging, dest, ignore=shutil.ignore_patterns(".git"))
     if not is_local:  # clone tempdir is disposable once copied
         shutil.rmtree(staging, ignore_errors=True)
 
@@ -294,7 +294,7 @@ def cmd_update(argv):
                     f"source now declares name '{data['name']}', not '{name}' — refuse to update", verb="plugin")
     dest = paths.PLAINKEEP_HOME / "plugins" / name
     shutil.rmtree(dest, ignore_errors=True)
-    shutil.copytree(staging, dest, ignore=shutil.ignore_patterns(".git"))
+    vaultio.copytree(staging, dest, ignore=shutil.ignore_patterns(".git"))
     if not is_local:
         shutil.rmtree(staging, ignore_errors=True)
 

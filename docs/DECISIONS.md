@@ -501,4 +501,281 @@ says so at the top of its own file, which is where a maintainer stands when it g
 `bin/**` as a uv-provisioned `plainkeep-engine` and takes the code out of the vault (and owns the
 durable fix for the O_NONBLOCK helper); Phase 3 deletes `script/`, `engine.txt`,
 `.plainkeep-engine-ref` and the `ui-v*` pipeline — which, per the paragraph above, is dead already
-rather than working until then.
+rather than working until then. **Amended in part by ADR-014 (proposed):** the word "packages" in
+that sentence is wrong about the mechanism — the engine ships as a versioned immutable FILE TREE
+exec'd by installed path, not as an importable Python package or a wheel. The phase boundary
+(deletion is Phase 3) is unchanged and reaffirmed there.
+
+## ADR-014 — plainkeep is an installed tool with registered data roots, not a directory named `~/plainkeep` (2026-08-01)
+**Status.** **Accepted** (2026-08-02) — proposed 2026-08-01, accepted by the maintainer the next day.
+It is the gate on Phase 2, and it is now open: Phase 2 implementation may start. It
+**amends ADR-013's Phase 2 description**
+in exactly one respect (the engine ships as a versioned immutable *file tree* exec'd by installed
+path, not as an importable Python package), noted in place at the end of that entry; ADR-013's
+Phase 1 record and its Phase 2/3 deletion boundary stand unchanged. Basis:
+`.orchestrate/panel-synthesis-phase2.md` over two blind panel answers
+(`.orchestrate/panel-fable-phase2.md`, `.orchestrate/raw/panel-codex-phase2.log`) and
+`.orchestrate/scout-phase2.md`. Every file:line below was re-read while writing this entry.
+> **Amended by ADR-015 (2026-08-02).** The snippet quoted just below is `guardrail.py` as it stood
+> when this entry was written. ADR-015 anchored the wall to the active data root and converged the
+> sibling-roots variable, so those four lines have moved. Nothing in this entry's reasoning changes:
+> the wall still cannot police a *misresolved* root, and validating the root is still Task 1.
+
+**Context — the thing nobody had written down.** Phase 2 has been discussed as a packaging exercise.
+The line that decides its real nature is `bin/lib/guardrail.py:42-49`:
+
+```python
+HOME = os.environ.get("PLAINKEEP_TEST_HOME", os.environ.get("HOME", "/Users/tamas"))
+PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))
+BIN = Path(__file__).resolve().parents[1]
+
+VAULT = f"{HOME}/plainkeep"
+```
+
+The path-wall's vault segment is the literal string `$HOME/plainkeep`. **`PLAINKEEP_HOME` — the
+variable every other subsystem uses — does not move it.** `_write_verdict` is a chain
+(`guardrail.py:119-138`) whose ALLOW arms test `_under(path, VAULT)`, `_under(path, FILES)`,
+`_under(path, WORK)` and `_under(path, DOTFILES)`; anything else falls through to
+`return Decision(DENY, f"path escapes the three roots: {path}", "deny")` (`:138`). So a vault at any
+path other than `~/plainkeep` has **every guarded write DENIED today**. "Moved vault" and "multiple
+vaults" are not migration edge cases to be handled — they are capabilities the guardrail has never
+had, and taking the engine out of the vault forces them into existence. plainkeep, as shipped, is not
+"a tool that operates on vaults"; it is *one directory with a name*, and the whole safety story is
+anchored to that name. That is a product-identity and trust-model change, and it is the prerequisite
+for Phase 2 rather than a detail inside it.
+
+Three further facts make the change non-optional rather than aspirational:
+
+1. **`PLAINKEEP_HOME` is two variables wearing one name.** `bin/lib/paths.py:8` —
+   `PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))` —
+   copied verbatim into `guardrail.py:43`, `indexlib.py:23` and `vectorstore.py:12`. That
+   `parents[2]` fallback *is* the "engine lives in the vault" assumption, in code, four times. Two
+   modules already draw the right distinction and need no change: `resolver.py:24`
+   (`ENGINE_BIN = Path(__file__).resolve().parents[1]  # bin/ — ships with the CODE, reserved`) and
+   `manifest.py:18-19` (`BIN = …parents[1]   # the verbs live with the CODE (bin/), not under
+   PLAINKEEP_HOME` / `MANIFEST = paths.PLAINKEEP_HOME / "plainkeep.json"  # …written to the data
+   root`).
+2. **The wall is not on every write path, so a misresolved root is not necessarily a loud refusal.**
+   `bin/capture/run.py:21` computes `f = paths.INBOX / …` and `:27-30` does
+   `paths.INBOX.mkdir(parents=True, exist_ok=True)` / `f.write_text(…)` / `paths.append_journal(…)`
+   without ever calling `guardrail.classify`; the dispatcher gate admits the verb on *declared risk*
+   alone (`guardrail.py:261-277`). A wrong data root therefore creates `inbox/`, `journal/` and logs
+   wherever it points and returns success. The 217-check parity oracle stays green through this: it
+   proves two dispatchers agree, not that the shared child wrote to the right root.
+3. **Installed-binary self-location is already wrong for an installed binary.** `resolveHome()`
+   (`cli/src/core/dispatch.ts:52-56`) falls back to `path.resolve(path.dirname(process.execPath),
+   "..", "..")` — for `~/.local/bin/plainkeep-core` that is `~`. And the launchd renderer bakes the
+   vault-local shim into every scheduled job: `bin/job/run.py:60` builds
+   `[str(paths.PLAINKEEP_HOME / "plainkeep"), *toks[1:]]`, `:86` writes `PLAINKEEP_HOME` into the
+   plist's `EnvironmentVariables`. Removing that shim without regenerating the jobs is `ENOENT` at
+   2am.
+
+A smaller divergence, found while writing this entry and not previously recorded: the sibling-roots
+anchor is relocatable by **two different environment variables** depending on which module you ask —
+`paths.py:17` reads `PLAINKEEP_ROOTS_HOME`, `guardrail.py:42` reads `PLAINKEEP_TEST_HOME`. The
+decomposition below has to name one owner for that anchor too, or the wall and the paths module can
+be pointed at different homes.
+
+**Decision.**
+1. **plainkeep becomes an installed tool that operates on registered data roots.** The vault is data
+   the tool is *pointed at*, identified by a marker and a registry entry, at any path. It is no
+   longer a directory whose name is part of the safety model. This is the product statement the rest
+   of Phase 2 implements.
+2. **`PLAINKEEP_HOME` splits, by name, ownership and precedence:**
+
+   | Name | Meaning | Owner | Failure |
+   |---|---|---|---|
+   | `PLAINKEEP_HOME` | the selected vault's **data root, only** — kept because it is public SDK/API surface (`docs/plugins.md`, the scaffold, the test harness, `resolver.py:16-17` reads it per call) | invocation selector; the core **validates it and overwrites it in the child environment** | mandatory, **no fallback**: unset/invalid/unregistered → refuse before any I/O |
+   | `PLAINKEEP_ENGINE` | the activated immutable engine tree | the core/updater; **caller input must not control it** — the core replaces any inherited value | absent/unverified → refuse; never derived from a user-writable fallback |
+   | `PLAINKEEP_ROOTS_HOME` | the `~/work`/`~/files`/`~/dotfiles` anchor (`paths.py:17`), independent of which vault is selected | user/machine configuration | `guardrail.py:42`'s `PLAINKEEP_TEST_HOME` converges on this variable, or the divergence is recorded as deliberate |
+   | vault registry | names/ids and canonical paths of known vaults | the installed core, stored **outside every vault** under user configuration | stale entry → refuse loudly, never rescan or substitute |
+
+   The four `parents[2]` fallbacks (`paths.py:8`, `guardrail.py:43`, `indexlib.py:23`,
+   `vectorstore.py:12`) and `resolveHome()`'s executable-relative fallback
+   (`dispatch.ts:55`) are **deleted**, not narrowed.
+3. **The data root is validated and mandatory, and validation happens before anything else.** Before
+   the guardrail, the audit log, the resolver, the plugin scan or any verb spawn: absolute, existing,
+   canonicalized for enforcement, structurally a vault (marker present), registered, not inside the
+   engine root and the engine root not inside it, not inside a walled-off or cloud-sync tree
+   (`guardrail.py:51-60`). Missing or stale selection exits **2** (`EXIT_USAGE`, `guardrail.py:29`
+   with the isolation fallback at `:31`) naming the path and the mechanism that failed; a
+   policy-denied location exits **5** (`EXIT_DENY`). Neither may create a log, an index or a
+   directory on the way out. Because of Context 2, "it refuses" is proven by a **wrong-root
+   side-effect test** — a `capture` against a bad root must create zero files — not by a guardrail
+   unit test.
+4. **The discovery contract for an installed binary with no vault-local shim**, checked in this
+   order, each step validated before acceptance, no silent fall-through from an explicitly supplied
+   value:
+   1. explicit `--vault <registered-name|absolute-path>`;
+   2. `PLAINKEEP_HOME` from the environment;
+   3. **marker walk-up from `$PWD`** (git-style, nearest ancestor wins) — and the marker alone does
+      not establish trust: walk-up may select only a marker whose id/path is **already registered**,
+      so an arbitrary checkout of the public template cannot spoof a vault;
+   4. the configured default vault in user configuration;
+   5. otherwise **refuse**, listing the mechanisms. Never derive the vault from the installed
+      executable.
+
+   This resolves the four cases that have no answer today. **Multiple vaults:** only the selected
+   vault is authorized for the invocation — registering several must not widen the wall to all of
+   them. **A moved vault:** invocation from inside it identifies it by marker id, but rebinding the
+   canonical path is an explicit act; invocation from elsewhere against a stale registry fails loudly
+   rather than scanning the filesystem or silently choosing another vault. **cron/launchd:** never
+   depend on discovery at all — jobs are regenerated to invoke the stable installed launcher with the
+   validated root baked in absolutely (`job/run.py:60,86` is the code that must change), and a
+   sanitized-environment launch is a gate, not documentation. **An agent shelling in from an
+   arbitrary cwd:** step 3 serves it inside a vault; outside any vault it gets step 4 or a refusal —
+   never a guess.
+5. **The path-wall follows the validated data root.** `VAULT = f"{HOME}/plainkeep"`
+   (`guardrail.py:46`) becomes the validated selected root. Without this, moved and multiple vaults
+   stay blanket-DENY and the migration's own canary — a full clone of the real vault at some other
+   path — cannot be exercised under the real wall.
+6. **Amendment to ADR-013's Phase 2 description: the engine ships as a versioned immutable FILE
+   TREE, exec'd by installed path — not as a Python package.** ADR-013's closing paragraph says
+   Phase 2 "packages `bin/**` as a uv-provisioned `plainkeep-engine`", inheriting the proposal's
+   wording (`docs/design/proposals/2026-07-29-hybrid-core-binary.md:209-210`). Both panelists reached
+   the same correction independently, and the controller verified the linchpin: **no verb is ever
+   imported.** Verbs are spawned by path (`cli/src/core/dispatch.ts:525`,
+   `return spawnVerb(pickPython(home), script, args, home);`; the bash floor at `plainkeep:45`), and
+   the only `importlib` use in the engine is capability probing that deliberately never imports —
+   `bin/lib/imagelib.py:49` (`"""Optional dep present? importlib probe only — never imports…"""`) and
+   `bin/lib/manifest.py:79`. There are no `__init__.py` files under `bin/` (verified: zero), and each
+   verb's `sys.path.insert(0, str(Path(__file__).resolve().parents[1]))` is *correct for any location
+   of an intact `bin/` tree* — it is only wrong if the tree is shredded into site-packages.
+   Consequently: no `pyproject.toml`-shaped conversion of the verbs, no `__init__.py` campaign, no 34
+   console entrypoints, no wheel. **uv's role shrinks to what uv is good at — pinning a CPython and
+   locking/installing dependencies** (a deps-only project; no build backend). Phase 2's largest and
+   riskiest task, as previously scoped, does not exist.
+**Alternatives.**
+(a) **Keep `PLAINKEEP_HOME` dual-meaning and let the engine derive its own root only.** Rejected: the
+`parents[2]` fallback resolves *silently* into wherever the engine is installed, and per Context 2
+the write path does not consult the wall, so the failure is a successful write to the wrong root
+rather than a refusal. Nothing red ever appears.
+(b) **Leave the wall anchored at `$HOME/plainkeep` and require every vault to live there.** Rejected:
+it forecloses moved and multiple vaults permanently, and it makes the migration's mandatory canary —
+a full clone of `gabros20/ops` at a scratch path — unrunnable against the real wall, which is the
+one gate that stands between the design and irreplaceable notes.
+(c) **Convert the engine into an importable package with 34 console entrypoints.** Rejected per
+Decision 6: it buys nothing the runtime asks for and expands the parity surface.
+(d) **A vault-local forwarding stub so old plugins keep resolving `lib.api`.** Rejected by both
+panelists: it creates an engine-owned file in the vault that must still be installed, updated,
+merged and eventually migrated — precisely the machinery Phase 2 exists to remove. The mechanism
+Phase 2 adopts instead (the dispatcher exporting the engine's own `bin/` on `PYTHONPATH`) is a plan
+detail, recorded in `.orchestrate/plan-phase2.md`, not an ADR-level commitment.
+(e) **Marker-only discovery with no registry.** Rejected: any checkout carrying a marker could then
+present itself as a vault and position the wall.
+**Consequences — what this buys, what it costs, what it forecloses.**
+- **It buys** the capabilities the wall has silently denied since it was written — a vault at any
+  path, more than one of them, and a canary migration on a clone — plus the closure of the
+  silent-wrong-root write class, which is the only known path to *data loss with a zero exit code*
+  in a system whose entire guarantee is that the wall holds.
+- **It costs a change to the trust model, and this is the honest headline.** Today the wall's vault
+  segment is a constant: `$HOME/plainkeep`. Afterwards it is **configuration** — whoever supplies a
+  root that passes validation positions one segment of the wall. Judgement, not measurement: this is
+  not a new class of exposure, because `HOME` itself is environment-controlled at `guardrail.py:42`
+  (and `PLAINKEEP_TEST_HOME` overrides it outright), so the wall was always env-movable; what changes
+  is that it becomes *intentionally* movable, and validation — marker plus registration plus the
+  engine-root disjointness check — is the only thing keeping it a wall rather than a suggestion. An
+  unvalidated environment value moving the wall is the one genuinely new risk this entry creates, and
+  it is why Decision 3 puts validation ahead of every other subsystem.
+- **Anyone relying on today's behaviour loses two things.** "Writes outside `~/plainkeep` are denied"
+  stops being an invariant of the binary and becomes an invariant *of the selected root*. And an
+  unset `PLAINKEEP_HOME` stops being survivable: every caller, script, scheduled job or agent that
+  leaned on the `parents[2]` fallback now exits 2 with a remediation. That is the intent — a loud
+  break replacing a silent misresolution — but it is a break, and migration owns regenerating the
+  jobs and symlinks that depend on it.
+- **Registration becomes a real object with a lifecycle** — register, rebind, deregister, "which is
+  the default" — that must be designed rather than implied. So does the contributor case: a checkout
+  that is simultaneously an engine source tree and a vault now needs an explicit answer, because the
+  fallback that used to answer it is gone.
+- **The parity oracle's scope is now understood, not assumed.** 217 green checks prove the two
+  dispatchers agree; they do not prove the child wrote to the right root. Phase 2 adds the
+  side-effect test the oracle structurally cannot contain.
+- **No deletion is authorized by this entry.** ADR-013's Phase 3 boundary — `script/`, `engine.txt`,
+  `.plainkeep-engine-ref`, the `ui-v*` pipeline — stands; Phase 2 may stop *using* the vault's engine
+  copy but does not remove it.
+- **Carried open, deliberately unmeasured**: no `uv lock` has ever been run here (verified: no
+  `pyproject.toml`, no `setup.py`, no `uv.lock` exist), so universal resolution and installed-artifact
+  behaviour are unproven; whether `PYTHONPATH` set for a verb leaks into unrelated grandchildren is
+  to be proven per-spawn, not assumed; and the contents, plugins and schedules of `gabros20/ops` have
+  not been inspected by anyone in this design round, which is why the canary is mandatory evidence
+  rather than a formality.
+
+## ADR-015 — the path-wall is enforced on the write path, not just modelled (2026-08-02)
+**Status.** **Accepted** (2026-08-02). Independent of ADR-014's status: it changes no discovery
+contract and introduces no new variable. It is the prerequisite that makes ADR-014's Task 1 gate
+observable at all, and it **supersedes the snippet quoted in ADR-014's Context** — that entry quotes
+`bin/lib/guardrail.py:42-49` as it stood before this change; the reasoning it draws from the snippet
+is unaffected, but the four lines themselves have moved.
+
+**Context — the wall existed and nothing called it.** `bin/lib/guardrail.py`'s own docstring says
+`classify()` is the reusable seam, "a write-verb calls this on the path IT computes (Iron Law — the
+verb owns placement), so the wall holds where the path is actually known." No verb ever did. The
+only callers in the tree were the test harness and `lib/api.py`'s re-export for plugins; the single
+`classify(` hit inside a verb (`bin/triage/run.py`) is an unrelated local text classifier. What the
+dispatcher enforced was `gate()` — the verb's **declared risk class** — after which
+`bin/capture/run.py` computed `paths.INBOX / …` and went straight to `mkdir` / `write_text` /
+`append_journal` with nothing between it and the disk.
+
+This was found while designing Phase 2, by a panelist that refused to inherit the brief's claim, and
+it had already survived being asserted in both directions by other readers. A guardrail unit test
+could not have caught it: the failing region is not inside `classify()`, it is the absence of a call
+to it. The scored-verdict lesson is recorded as a standing rule — **a gate that never exercises the
+failing region is a green test of nothing**.
+
+**Decision.**
+1. **`bin/lib/vaultio.py`** is the enforced seam: `guard()` classifies
+   `{"kind": "write", "path": …, "realpath": …}` and refuses `DENY` on the shared exit-code protocol
+   (5 = `EXIT_DENY`). `mkdir` / `write_text` / `write_bytes` / `append_text` / `open_append` /
+   `move` / `copy2` / `copytree` / `replace` wrap it. The verb still owns placement — the Iron Law is
+   unchanged; the seam only asks whether the placement is allowed, at the one moment it is knowable.
+2. **Every vault-data write in `bin/` routes through it** — 80 call sites across 28 files — including
+   `paths.ensure_journal`/`append_journal`, so plugins reaching them through the frozen SDK
+   (`lib/api.py`) inherit the wall with no plugin edits and no API change.
+3. **The wall follows the active data root.** `VAULT = f"{HOME}/plainkeep"` alone is the
+   *conventional* location and does not move with `PLAINKEEP_HOME`; anchored there, a vault anywhere
+   else had every guarded write denied. `VAULT_ROOTS` now carries the conventional root **and** the
+   active `PLAINKEEP_HOME`. Each root also carries its `realpath`, because `classify()` re-runs the
+   verdict on the resolved path and takes the stricter one — on macOS a root under `/tmp` or
+   `/var/folders` resolves through `/private/…` and would otherwise read as an escape.
+4. **The sibling-roots anchor is converged.** `bin/lib/paths.py` read `PLAINKEEP_ROOTS_HOME`;
+   `guardrail.py` read only `PLAINKEEP_TEST_HOME`. Two variables were relocating the same conceptual
+   thing, which was invisible while nothing consulted the wall and would have denied every write to
+   a relocated `~/files` once something did. `guardrail.HOME` now falls back
+   `PLAINKEEP_TEST_HOME → PLAINKEEP_ROOTS_HOME → $HOME`, test-first so the validated spec model
+   (`test/lib/guardrail.py`) and its 51 parity cases resolve exactly as before.
+5. **`test/run_pathwall.py`** is the gate, and every assertion in it is a **filesystem walk**, not an
+   exit code. During development the walled-root case exited 5 *while having already written the
+   note* — the journal append refused after the inbox write succeeded — which is the whole argument
+   for the assertion shape, observed live. It also ratchets: any new raw write in `bin/` fails the
+   suite unless it joins the exemption list, keyed by source text with a stated reason.
+
+**What this does NOT do, stated so a green suite is not over-read.**
+- **It cannot police a misresolved data root**, because the wall is anchored to the value it would
+  have to doubt. That is ADR-014 / Phase 2 Task 1 (marker, registry, no silent fallback), and this
+  entry does not pre-empt it. What changes is that Task 1's gate is now *provable*: "a `capture`
+  against a bad root creates zero files" is a real assertion instead of an unreachable one.
+- **15 write sites stay outside the wall**, each listed with a reason: `~/work` fleet trees
+  (`new project`, `repo clone/adopt`, `archive`) which the wall denies without task context, `~/.Trash`
+  (the recoverable end of the decay machine, outside the three roots by design), a human-supplied
+  `--out` on `share`, and the guardrail's own audit log (it records the refusal, so it cannot be
+  subject to it).
+- **One of those is a contradiction, not an omission, and it is the sharpest thing this work
+  surfaced.** `_in_originals` denies every write under `~/files/**/in/` — "originals are read-only
+  evidence", a *validated* case (`originals-in-readonly`) — while `files ingest --client` and
+  `new client` exist precisely to put an original into `in/`. Creating a new original is not
+  modifying evidence, but the rule as validated does not draw that line and the fix would flip a
+  validated case, so it is recorded rather than quietly redrawn. Today only the verb's own
+  uniquifying loop guarantees ingest never overwrites an original.
+
+**Alternatives rejected.** Adding `classify()` calls verb-by-verb with no shared helper (nothing
+stops verb #35 from skipping it — the exact failure being fixed). Widening the wall so the exempt
+destinations pass (it would delete the rule for `~/work` and `in/` to avoid writing down a policy
+question). Refining `_in_originals` to "deny only an existing path" (correct-looking, but it flips a
+validated case, and a wiring commit is the wrong place to move the spec).
+
+**Consequences.** One `guardrail.classify()` call per guarded write — a pure in-process path
+decision, no I/O beyond one `realpath`. A verb whose computed path escapes now exits 5 with the
+wall's reason instead of writing; that is the point, and the ratchet is what keeps it true. Test
+fixtures that symlink the repo into a temp `PLAINKEEP_HOME` now refuse writes that resolve back into
+the real checkout — `test/run_setup_layers.py` was doing exactly that to `plainkeep.json` and now
+copies it, which the wall was right to catch.

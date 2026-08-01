@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import paths, filing, output  # noqa: E402
+from lib import filing, output, paths, vaultio  # noqa: E402
 
 STATUSES = filing.STATUSES
 
@@ -23,7 +23,7 @@ def _set_status(f: Path, status: str):
     txt = f.read_text(encoding="utf-8")
     txt = re.sub(r"(?m)^status:.*$", f"status: {status}", txt, count=1)
     txt = re.sub(r"(?m)^updated:.*$", f"updated: {paths.today()}", txt, count=1)
-    f.write_text(txt, encoding="utf-8")
+    vaultio.write_text(f, txt, encoding="utf-8")
 
 
 def cmd_list():
@@ -92,7 +92,7 @@ def main(argv):
             return output.emit(data, "task",
                                human=lambda _: f"would move {tid}: {cur} -> {status}  (dry run — nothing written)")
         dest = paths.TASKS / status
-        dest.mkdir(parents=True, exist_ok=True)
+        vaultio.mkdir(dest)
         new = dest / f.name
         f.rename(new)
         _set_status(new, status)

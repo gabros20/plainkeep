@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 BIN = Path(__file__).resolve().parents[1]
@@ -137,11 +137,11 @@ def main(argv):
             cmd = [str(paths.PLAINKEEP_HOME / "plainkeep"), *toks[1:]]
         else:
             cmd = toks  # allowlisted external
-        logdir = paths.PLAINKEEP_HOME / ".logs" / "jobs"; logdir.mkdir(parents=True, exist_ok=True)
+        logdir = paths.PLAINKEEP_HOME / ".logs" / "jobs"; vaultio.mkdir(logdir)
         print(f"running '{name}': {job['command']}")
         r = subprocess.run(cmd, capture_output=True, text=True,
                            env={**__import__("os").environ, "PLAINKEEP_HOME": str(paths.PLAINKEEP_HOME)})
-        (logdir / f"{name}.log").write_text(r.stdout + r.stderr, encoding="utf-8")
+        vaultio.write_text((logdir / f"{name}.log"), r.stdout + r.stderr, encoding="utf-8")
         sys.stdout.write(r.stdout)
         if r.stderr:
             sys.stderr.write(r.stderr)
@@ -164,13 +164,13 @@ def main(argv):
                     print(f"{YEL}skipped (not schedulable): {', '.join(skipped)}{RESET}")
             return output.emit(data, "job", human=render_dry)
 
-        out.mkdir(parents=True, exist_ok=True)
+        vaultio.mkdir(out)
         written = []
         for name, job in jobs.items():
             if job.get("risk") not in SCHEDULABLE:
                 continue
             f = out / f"com.plainkeep.{name}.plist"
-            f.write_text(_plist(name, job), encoding="utf-8")
+            vaultio.write_text(f, _plist(name, job), encoding="utf-8")
             written.append(f)
         data = {"rendered": [f.name for f in written], "skipped": skipped,
                 "dir": str(out.relative_to(paths.PLAINKEEP_HOME))}

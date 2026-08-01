@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import guardrail, output, paths, setuplib  # noqa: E402
+from lib import guardrail, output, paths, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
@@ -144,7 +144,7 @@ def main(argv):
         if p.is_dir():
             ok(f"folder: {d}/")
         elif init:
-            p.mkdir(parents=True, exist_ok=True)
+            vaultio.mkdir(p)
             (p / ".gitkeep").touch()
             ok(f"folder: {d}/ (created)")
         else:
@@ -167,8 +167,8 @@ def main(argv):
                 if d.exists():
                     kept += 1
                     continue
-                d.parent.mkdir(parents=True, exist_ok=True)
-                d.write_text(s.read_text(encoding="utf-8"), encoding="utf-8")
+                vaultio.mkdir(d.parent)
+                vaultio.write_text(d, s.read_text(encoding="utf-8"), encoding="utf-8")
                 copied += 1
             ok(f"obsidian: config pack (.obsidian/: {copied} copied, {kept} kept)")
         elif not (dest / "app.json").exists():

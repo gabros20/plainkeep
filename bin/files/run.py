@@ -44,7 +44,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import agent, imagelib, notetype, output, paths  # noqa: E402
+from lib import agent, imagelib, notetype, output, paths, vaultio  # noqa: E402
 from enrich import run as enrichverb  # noqa: E402
 
 YEL, GREEN, DIM, CYAN, RESET = "\033[33m", "\033[32m", "\033[2m", "\033[36m", "\033[0m"
@@ -244,8 +244,8 @@ def _write_extract(slug: str, sha: str, tool: str, ntype: str, text: str, shadow
         vlm_fm = f"vlm_caption: {cap}\nvlm_backend: {vbackend}\n"
         if desc.strip():
             body += f"\n\n## Description\n\n{desc.strip()}\n"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(
+    vaultio.mkdir(dest.parent)
+    vaultio.write_text(dest,
         f"---\ntype: {ntype}\ntitle: {title} (extract)\nstatus: derived\n"
         f"derived_from: \"[[{slug}]]\"\nsource_sha256: {sha}\ntool: {tool}\n{vlm_fm}"
         f"created: {created}\nupdated: {today}\ntags: []\n---\n"
@@ -365,12 +365,12 @@ def _link_into_hub(hub: Path, shadow_slug: str, title: str) -> bool:
         text = "\n".join(out) + ("\n" if text.endswith("\n") else "")
     else:
         text = text.rstrip("\n") + f"\n\n## Files\n{line}\n"
-    hub.write_text(text, encoding="utf-8")
+    vaultio.write_text(hub, text, encoding="utf-8")
     return True
 
 
 def _shadow(dest: Path, title: str, sha: str, hub_slug: str | None) -> Path:
-    d = paths.WIKI / "files"; d.mkdir(parents=True, exist_ok=True)
+    d = paths.WIKI / "files"; vaultio.mkdir(d)
     base = paths.slugify(Path(title).stem)
     existing = {p.stem for p in paths.WIKI.rglob("*.md")}
     slug, i = base, 2
@@ -392,7 +392,7 @@ def _shadow(dest: Path, title: str, sha: str, hub_slug: str | None) -> Path:
         # Pillow; format+bytes are stdlib-only and always present) — never fabricate a missing field.
         meta_fm = "".join(f"{k}: {meta[k]}\n" for k in ("format", "bytes", "width", "height", "taken", "camera")
                           if k in meta)
-    f.write_text(f"---\ntype: file\n{kind_fm}{meta_fm}title: {title}\nstatus: active\nsource: ingest\n"
+    vaultio.write_text(f, f"---\ntype: file\n{kind_fm}{meta_fm}title: {title}\nstatus: active\nsource: ingest\n"
                  f"ingested: {paths.today()}\npath: {dest}\nsha256: {sha}\n{hub_fm}tags: []\n---\n# {title}\n\n"
                  f"{asset}{hub_body}", encoding="utf-8")
     return f
@@ -470,6 +470,10 @@ def cmd_ingest(argv, dry=False, extract=False):
                 events.append(f"    {GREEN}would link{RESET} -> [[{hub_slug}]]"); linked += 1
             continue
 
+        # NOT behind the wall — see test/run_pathwall.py EXEMPT. `--client` routes here into
+        # ~/files/<hub>/in/, and the wall DENIES every write under in/ ("originals are read-only
+        # evidence"). Ingest is how an original ARRIVES; the uniquifying loop just below is what
+        # keeps it from ever overwriting one.
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / src.name
         i = 2
@@ -527,7 +531,7 @@ def cmd_link(argv):
     # make the back-reference explicit in the shadow note too
     stext = shadow.read_text(encoding="utf-8")
     if f"[[{hub_slug}]]" not in stext:
-        shadow.write_text(stext.rstrip("\n") + f"\n\nFiled under [[{hub_slug}]].\n", encoding="utf-8")
+        vaultio.write_text(shadow, stext.rstrip("\n") + f"\n\nFiled under [[{hub_slug}]].\n", encoding="utf-8")
     data = {"file": file_slug, "hub": hub_slug, "already_linked": not changed}
     return output.emit(data, "files", human=lambda _:
                        f"{GREEN}linked{RESET} [[{file_slug}]] -> [[{hub_slug}]]"
@@ -696,13 +700,13 @@ def cmd_distill(argv, dry=False):
              "links": c["wikilinks"], "status": "would-write" if dry else "written"}
             for c in concepts]
     if not dry:
-        dest_dir.mkdir(parents=True, exist_ok=True)
+        vaultio.mkdir(dest_dir)
         for c in concepts:
             md = c["summary"].strip() or "_(no summary)_"
             if c["wikilinks"]:
                 md += "\n\n## Related\n" + "\n".join(f"- [[{w}]]" for w in c["wikilinks"])
             text = notetype.render("note", title=c["title"], status="draft", body=md, slug=c["slug"])
-            (dest_dir / f"{c['slug']}.md").write_text(_inject_provenance(text, source_link), encoding="utf-8")
+            vaultio.write_text((dest_dir / f"{c['slug']}.md"), _inject_provenance(text, source_link), encoding="utf-8")
         paths.append_journal(f"files distill {slug} -> {len(concepts)} draft note(s)"
                              + (" (agent)" if used_agent else " (outline)"))
 

@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from lib import embed, enrichlib, imagelib, paths
+from lib import embed, enrichlib, imagelib, paths, vaultio
 
 BIN = paths.BIN
 REQUIRED_DIRS = ["wiki", "tasks/inbox", "tasks/active", "tasks/waiting", "tasks/done",
@@ -477,7 +477,7 @@ def _ui_verify_and_install(asset_path, checksums_path, target) -> None:
         raise OSError(f"sha256 mismatch for {asset_path.name}: got {digest}, want {want}")
     checksums_path.unlink(missing_ok=True)
     if str(asset_path) != str(target):
-        asset_path.replace(target)
+        vaultio.replace(asset_path, target)
     target.chmod(0o755)
 
 
@@ -502,7 +502,7 @@ def _install_ui(res: dict, *, fake: bool) -> None:
             res["ran"].append(_run(dl, fake=fake))
             res["ran"].append(f"verify sha256 (checksums.txt) + install {target}")
             return
-        bindir.mkdir(parents=True, exist_ok=True)
+        vaultio.mkdir(bindir)
         res["ran"].append(_run(dl))
         _ui_verify_and_install(bindir / asset, bindir / "checksums.txt", target)
         res["ran"].append(f"verified sha256 + installed {target}")
@@ -510,7 +510,7 @@ def _install_ui(res: dict, *, fake: bool) -> None:
     if _ui_source_buildable():
         src = paths.PLAINKEEP_HOME / "cli"
         if not _fake(fake):
-            bindir.mkdir(parents=True, exist_ok=True)
+            vaultio.mkdir(bindir)
         res["ran"].append(_run(["bun", "install", "--cwd", str(src)], fake=fake))
         res["ran"].append(_run(["bun", "build", "--compile", str(src / "src" / "tui" / "index.ts"),
                                 "--outfile", str(target)], fake=fake))

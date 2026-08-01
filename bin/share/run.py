@@ -29,7 +29,7 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths, sharelib  # noqa: E402
+from lib import output, paths, sharelib, vaultio  # noqa: E402
 
 GREEN, YEL, DIM, RESET = "\033[32m", "\033[33m", "\033[2m", "\033[0m"
 
@@ -58,8 +58,8 @@ def _merge_config(**updates) -> dict:
     """Merge `updates` into `.share/config.json`, PRESERVING existing keys (endpoint, publish_token)."""
     cfg = _config()
     cfg.update({k: v for k, v in updates.items() if v is not None})
-    SHARE_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG.write_text(json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
+    vaultio.mkdir(SHARE_DIR)
+    vaultio.write_text(CONFIG, json.dumps(cfg, indent=2) + "\n", encoding="utf-8")
     return cfg
 
 
@@ -71,8 +71,8 @@ def _ledger() -> dict:
 
 
 def _write_ledger(led: dict) -> None:
-    SHARE_DIR.mkdir(parents=True, exist_ok=True)
-    LEDGER.write_text(json.dumps(led, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    vaultio.mkdir(SHARE_DIR)
+    vaultio.write_text(LEDGER, json.dumps(led, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
 def _notes() -> dict:
@@ -144,7 +144,7 @@ def _stamp_frontmatter(path: Path, url: str) -> None:
         return
     body = [ln for ln in lines[1:end] if not ln.startswith("share:")]
     body.append(f"share: {url}")
-    path.write_text("\n".join(["---", *body, "---", *lines[end + 1:]]) + "\n", encoding="utf-8")
+    vaultio.write_text(path, "\n".join(["---", *body, "---", *lines[end + 1:]]) + "\n", encoding="utf-8")
 
 
 # --------------------------------------------------------------------------- share / collection
@@ -343,7 +343,7 @@ def _ensure_wrangler_toml() -> None:
         output.fail(output.EXIT_UNEXPECTED, "missing wrangler.toml.example in worker dir",
                     hint=f"re-run script/update from upstream; expected {WRANGLER_EXAMPLE}", verb="share")
     import shutil
-    shutil.copy2(WRANGLER_EXAMPLE, WRANGLER_TOML)
+    vaultio.copy2(WRANGLER_EXAMPLE, WRANGLER_TOML)
 
 
 def _wrangler_kv_configured() -> bool:

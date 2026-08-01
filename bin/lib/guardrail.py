@@ -39,7 +39,16 @@ try:
 except Exception:
     _resolver = None
 
-HOME = os.environ.get("PLAINKEEP_TEST_HOME", os.environ.get("HOME", "/Users/tamas"))
+# The SIBLING-ROOTS anchor (~/work, ~/files, ~/dotfiles). Two variables were relocating the same
+# conceptual thing: paths.py:17 reads PLAINKEEP_ROOTS_HOME, this file read only PLAINKEEP_TEST_HOME.
+# While nothing called classify() on a write path that divergence was invisible; with the seam live
+# (lib/vaultio.py) it means a relocated ~/files is DENIED by a wall still pointed at the real $HOME.
+# Converged here, PLAINKEEP_TEST_HOME first so the validated spec model (test/lib/guardrail.py:24)
+# and its 51 parity cases keep resolving exactly as before.
+HOME = (os.environ.get("PLAINKEEP_TEST_HOME")
+        or os.environ.get("PLAINKEEP_ROOTS_HOME")
+        or os.environ.get("HOME")
+        or "/Users/tamas")
 PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))
 BIN = Path(__file__).resolve().parents[1]
 
@@ -47,6 +56,36 @@ VAULT = f"{HOME}/plainkeep"
 WORK = f"{HOME}/work"
 FILES = f"{HOME}/files"
 DOTFILES = f"{HOME}/dotfiles"
+
+
+def _with_real(*roots: str) -> list[str]:
+    """A root plus its resolved form. `classify()` re-runs `_write_verdict` on the realpath and takes
+    the STRICTER verdict — on macOS a root under `/tmp` or `/var/folders` resolves through a symlink
+    (`/private/…`), so without the resolved form every legitimate write there reads as an escape."""
+    out: list[str] = []
+    for r in roots:
+        for v in (os.path.abspath(os.path.normpath(r)), os.path.realpath(r)):
+            if v not in out:
+                out.append(v)
+    return out
+
+
+# Every path that counts as "inside the vault" for the write-wall.
+#
+# `VAULT` alone is the CONVENTIONAL location, built from `$HOME` — it does not move with
+# `PLAINKEEP_HOME`, so a vault anywhere else had every guarded write denied. That was invisible
+# while nothing called `classify()` on a write path (see lib/vaultio.py); the moment the seam is
+# live it would deny the vault's own verbs, so the wall follows the ACTIVE data root as well.
+#
+# KNOWN LIMIT, deliberately left to ADR-014 / Phase 2 Task 1: the wall cannot police a MISRESOLVED
+# root, because it is anchored to the same value it would have to doubt. Validating the root
+# (marker + registry, no silent fallback) is what closes that; this only makes the wall real for
+# the writes a correctly-resolved root performs.
+VAULT_ROOTS = _with_real(VAULT, str(PLAINKEEP_HOME))
+FILES_ROOTS = _with_real(FILES)
+WORK_ROOTS = _with_real(WORK)
+WORKTREE_ROOTS = _with_real(f"{WORK}/.worktrees")
+DOTFILES_ROOTS = _with_real(DOTFILES)
 
 WALLED_OFF_MARKERS = [
     f"{HOME}/Library/Mobile Documents", f"{HOME}/iCloud Drive",
@@ -112,8 +151,12 @@ def under_sync_dir(path: str) -> bool:
     return any(m.lower() in pl for m in SYNC_DIR_MARKERS)
 
 
+def _under_any(path, roots) -> bool:
+    return any(_under(path, r) for r in roots)
+
+
 def _in_originals(path):
-    return _under(path, FILES) and re.search(r"/in(/|$)", path, re.IGNORECASE) is not None
+    return _under_any(path, FILES_ROOTS) and re.search(r"/in(/|$)", path, re.IGNORECASE) is not None
 
 
 def _write_verdict(path, action):
@@ -121,19 +164,19 @@ def _write_verdict(path, action):
         return Decision(DENY, "iCloud/family path is walled off — propose, never write", "deny")
     if _in_originals(path):
         return Decision(DENY, "~/files/**/in/ originals are read-only evidence", "deny")
-    if _under(path, VAULT):
+    if _under_any(path, VAULT_ROOTS):
         return Decision(ALLOW, "write inside ~/plainkeep is a revertible git diff", "safe_write")
-    if _under(path, FILES):
+    if _under_any(path, FILES_ROOTS):
         return Decision(ALLOW, "write inside ~/files (out/work/research)", "safe_write")
-    if _under(path, f"{WORK}/.worktrees"):
+    if _under_any(path, WORKTREE_ROOTS):
         return Decision(ALLOW, "write inside ~/work/.worktrees (sanctioned agent worktree)", "safe_write")
-    if _under(path, WORK):
+    if _under_any(path, WORK_ROOTS):
         task_repo = _norm(action.get("task_repo"))
         repo = _norm(action.get("repo")) or path
         if task_repo and (repo == task_repo or _under(path, task_repo)):
             return Decision(ALLOW, "write inside the task's ~/work repo", "safe_write")
         return Decision(DENY, "write to a ~/work repo that is not the current task's repo", "deny")
-    if _under(path, DOTFILES):
+    if _under_any(path, DOTFILES_ROOTS):
         return Decision(CONFIRM, "~/dotfiles: inspect, don't change without being asked", "confirm")
     return Decision(DENY, f"path escapes the three roots: {path}", "deny")
 

@@ -9,7 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 FORMULA = paths.PLAINKEEP_HOME / "templates" / "tax-formula.md"
 
@@ -78,10 +78,10 @@ def main(argv):
             print(f"  -> {draft}  (dry run — nothing written)")
         return output.emit(data, "invoice", human=render_dry)
 
-    out.mkdir(parents=True, exist_ok=True)
+    vaultio.mkdir(out)
     inv = _next_inv_no(out, day)
     draft = out / f"invoice-{day}-{inv.rsplit('-', 1)[1]}.md"
-    draft.write_text(
+    vaultio.write_text(draft,
         f"# DRAFT invoice {inv}\n\n"
         f"> **DRAFT — not sent.** Review, export, and send by hand. `plainkeep` never transmits (§3).\n\n"
         f"- From: {seller}\n- To: {client_name}\n- Date: {paths.today()}   Due: {due} ({terms} days)\n\n"

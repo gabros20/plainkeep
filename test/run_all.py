@@ -47,6 +47,8 @@ SUITES = [
     ("core-tui: in-core terminal UI on a real pty (hybrid-core)", "run_tui_pty.py"),
     ("frozen SDK + plainkeep plugin: api.py + trust ceiling (2.2/2.3)", "run_plugin.py"),
     ("agent transport: plainkeep mcp stdio server (2.4)", "run_mcp.py"),
+    ("core-mcp: in-core MCP server ↔ bin/mcp/run.py protocol differential (hybrid-core)",
+     "run_mcp_protocol.py"),
     ("obsidian frontend zero + canvas/bases (3.1/3.2)", "run_obsidian.py"),
     ("terminal ergonomics + raycast: open/orient/search (3.3/3.4)", "run_terminal.py"),
     ("install funnel: script/get (5.4)", "run_get.py"),

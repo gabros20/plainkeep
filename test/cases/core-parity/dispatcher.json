@@ -164,6 +164,22 @@
       "invocations": [
         { "compare": "dispatch", "verb": "v_symhome", "args": ["arg"], "home_via_symlink": true, "expect_stdout_contains": "{\"canonical\": false, \"base\": \"vault\", \"argv\": [\"arg\"]}" }
       ]
+    },
+    {
+      "name": "large-output-across-the-pipe-buffer",
+      "rationale": "A verb whose output exceeds the pipe buffer. This catalog was 213/213 green while the core SILENTLY TRUNCATED any such verb and reported failure, because no case crossed the threshold \u2014 the 'green test of nothing' class (quality review r1, Q1). Mechanism: bun marks its own stdout/stderr O_NONBLOCK when they are PIPES, the flag lives on the open file description, and `stdio: \"inherit\"` hands that same description to the child; CPython then raises BlockingIOError on the first write it cannot satisfy in full. Measured before the fix: `plainkeep <verb> --json | cat` delivered 81,920 bytes and exited 1 where the floor delivered 500,062 and exited 0, byte-identically at face8b7 \u2014 i.e. pre-existing since Task 4. The harness captures with pipes, so these three invocations sit exactly on that condition. Each verb writes its BULK FIRST and a short TAIL MARKER LAST, so the assertion is the real outcome \u2014 the whole payload arrived \u2014 not merely that the two sides agree: a build truncating both sides identically would still fail the marker. v_bigerr's marker goes to STDOUT after the big STDERR write, which is what makes fd 2 checkable through a stdout expectation.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "v_bigout", "cmd": { "verb": "v_bigout", "risk": "read" }, "run": "import sys\nsys.stdout.write('o' * 500000)\nsys.stdout.write('\\nBIGOUT-TAIL\\n')\n" },
+          { "at": "engine", "verb": "v_bigerr", "cmd": { "verb": "v_bigerr", "risk": "read" }, "run": "import sys\nsys.stderr.write('e' * 500000)\nsys.stderr.write('\\n')\nsys.stdout.write('BIGERR-TAIL\\n')\n" },
+          { "at": "engine", "verb": "v_bigboth", "cmd": { "verb": "v_bigboth", "risk": "read" }, "run": "import sys\nsys.stdout.write('o' * 500000)\nsys.stderr.write('e' * 500000)\nsys.stdout.write('\\nBIGBOTH-TAIL\\n')\nsys.stderr.write('\\n')\n" }
+        ]
+      },
+      "invocations": [
+        { "compare": "dispatch", "verb": "v_bigout", "args": [], "expect_stdout_contains": "BIGOUT-TAIL" },
+        { "compare": "dispatch", "verb": "v_bigerr", "args": [], "expect_stdout_contains": "BIGERR-TAIL" },
+        { "compare": "dispatch", "verb": "v_bigboth", "args": [], "expect_stdout_contains": "BIGBOTH-TAIL" }
+      ]
     }
   ]
 }

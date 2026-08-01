@@ -32,13 +32,15 @@
 // every respect". Each is a case where fidelity would damage the protocol stream itself:
 //
 //   1. THE CHILD'S STDIN. `subprocess.run` inherits it, so under run.py a verb that read stdin would
-//      eat the peer's un-processed JSON-RPC frames. spawnSync here gives the child an empty pipe
-//      (immediate EOF). No verb in bin/ reads stdin today, so this is unobservable in practice and
-//      strictly safer if one ever does.
+//      eat the peer's un-processed JSON-RPC frames. The spawn here gives the child a pipe that is
+//      closed immediately (so it sees EOF). No verb in bin/ reads stdin today, so this is
+//      unobservable in practice and strictly safer if one ever does.
 //   2. SIGTERM/SIGINT. run.py takes the default disposition and dies instantly — mid-frame if it is
 //      writing. This installs a handler that stops accepting frames, finishes the in-flight one,
-//      drains, and returns on the frozen protocol. Costs and second-signal escape hatch: see
-//      SHUTDOWN_SIGNALS below.
+//      drains, and returns on the frozen protocol. When the in-flight one is a TOOL CALL, "finishes"
+//      means the child is sent the same signal and its result becomes the last frame — the tool call
+//      is awaited asynchronously precisely so the handler can run at all. Costs and second-signal
+//      escape hatch: see SHUTDOWN_SIGNALS below.
 //   3. EXIT CODES. Every way run.py dies exits 1 (an uncaught traceback), which is OFF the frozen
 //      protocol (0/2/3/4/5). runOwningStdio's clamp maps those to EXIT_ANOMALOUS (5). The floor's 1 is
 //      not reproducible without putting 1 back on the wire, which is the one thing the clamp exists to
@@ -71,7 +73,7 @@
 //     same divergence in `inputSchema.properties` until the r1 fix wave; it is now ELIMINATED rather
 //     than documented, because those keys are built here (pyJsonDumps' key-order note) instead of
 //     arriving through the parser.
-import { spawnSync } from "node:child_process";
+import { type ChildProcess, spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { CoreResult } from "./cli.js";
@@ -380,6 +382,130 @@ function returnCodeOf(status: number | null | undefined, signal: string | null |
   return fatal("the dispatcher could not be started for a tool call");
 }
 
+/**
+ * What a tool call needs from the session that owns it: somewhere to register the child while it
+ * runs, so a shutdown signal can reach it.
+ *
+ * It is threaded as a PARAMETER rather than kept in a module-level variable because a module-level
+ * "current child" is exactly the kind of hidden state that survives the session it belongs to — the
+ * same reason interception.ts restores `process.exit` in a `finally` instead of leaving a global
+ * guard installed.
+ */
+interface CallContext {
+  onChildStart: (child: ChildProcess) => void;
+  onChildEnd: () => void;
+}
+
+// How long the pipe must be QUIET, after the child itself has exited, before a tool call gives up on
+// whatever else is holding the write end. Idle-based rather than a fixed deadline so a large result
+// is never cut short: 250 ms of silence from a pipe whose writer has exited means the remaining
+// holder is an orphaned grandchild, not this call's output still arriving.
+const SETTLE_IDLE_MS = 250;
+
+interface ChildOutcome {
+  status: number | null;
+  signal: string | null;
+  stdout: Buffer;
+  stderr: Buffer;
+  error?: NodeJS.ErrnoException;
+}
+
+/**
+ * Run one verb as a child and collect its output — ASYNCHRONOUSLY, and that is the whole point.
+ *
+ * The first version used `spawnSync`, which is the faithful translation of Python's
+ * `subprocess.run` and was wrong for a reason the quality review measured: `spawnSync` blocks the
+ * event loop for the child's ENTIRE life, and bun runs signal handlers on the event loop. So while a
+ * tool call was in flight, neither the shutdown handler nor `writeFrame`'s second-signal poll could
+ * run at all. Measured against a pack verb doing `time.sleep(600)`: two SIGTERMs and a SIGINT left
+ * the core running and only SIGKILL stopped it, where the floor died on the first SIGTERM because
+ * CPython's default disposition interrupts `subprocess.run`. The graceful handler had made the server
+ * STRICTLY LESS stoppable than the thing it replaced — the Task 6 SIGKILL lesson, repeating in a
+ * worse place.
+ *
+ * Awaiting an async spawn keeps the loop free, so a signal is serviced the moment it arrives; the
+ * session then terminates the child through `ctx` (see serve()'s onSignal) rather than waiting for a
+ * child that may never exit.
+ *
+ * Output is collected into a chunk LIST with no cap. `spawnSync`'s `maxBuffer` silently truncates at
+ * its limit and reports success, which for a tool result is the same class of silent corruption Q1
+ * was about; there is no equivalent here because nothing is capping.
+ */
+function runChild(argv: string[], ctx: CallContext): Promise<ChildOutcome> {
+  return new Promise<ChildOutcome>((resolve) => {
+    // D8 — self-exec THIS binary's own path (see the caller's note).
+    const child = spawn(process.execPath, argv, {
+      // stdin is an empty pipe rather than our own: see divergence 1 in the header. `.end()` below
+      // closes it immediately, so a verb that reads stdin sees EOF instead of the peer's frames.
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const out: Buffer[] = [];
+    const err: Buffer[] = [];
+    let failure: NodeJS.ErrnoException | undefined;
+    let status: number | null = null;
+    let signal: string | null = null;
+    let settled = false;
+    let idle: ReturnType<typeof setInterval> | null = null;
+    let lastData = Date.now();
+
+    const settle = (): void => {
+      if (settled) return;
+      settled = true;
+      if (idle) clearInterval(idle);
+      child.stdout?.destroy();
+      child.stderr?.destroy();
+      ctx.onChildEnd();
+      resolve({
+        status,
+        signal,
+        stdout: Buffer.concat(out),
+        stderr: Buffer.concat(err),
+        error: failure,
+      });
+    };
+
+    const onChunk = (bucket: Buffer[]) => (c: Buffer) => {
+      bucket.push(c);
+      lastData = Date.now();
+    };
+    child.stdout?.on("data", onChunk(out));
+    child.stderr?.on("data", onChunk(err));
+    child.on("error", (e) => {
+      failure = e as NodeJS.ErrnoException;
+    });
+
+    // "close" is the clean end: it fires once the stdio streams are closed too, so nothing the child
+    // wrote can still be in flight. It is NOT sufficient on its own, and the reason cost an
+    // afternoon: the child here is another core binary, which spawns the verb with `stdio: "inherit"`
+    // — so the GRANDCHILD holds the same pipe write end. Kill the child during a tool call and the
+    // grandchild is orphaned still holding it, so "close" never arrives and the session hangs waiting
+    // for a process it no longer has. (Measured: a `time.sleep(600)` verb left the server needing
+    // SIGKILL even after the async spawn made the signal handler reachable — the fix for Q3 was
+    // incomplete in exactly this way until the orphan was accounted for.)
+    //
+    // So: "exit" starts an IDLE watch rather than a fixed grace. As long as bytes keep arriving the
+    // wait continues, which is what keeps a large buffered result intact; once the pipe has been
+    // quiet for SETTLE_IDLE_MS with the child already gone, whatever still holds the write end is not
+    // this call's business and the streams are dropped.
+    child.on("exit", (code, sig) => {
+      status = code;
+      signal = sig;
+      if (idle) clearInterval(idle);
+      idle = setInterval(() => {
+        if (Date.now() - lastData >= SETTLE_IDLE_MS) settle();
+      }, 50);
+      idle.unref();
+    });
+    child.on("close", (code, sig) => {
+      status = code ?? status;
+      signal = sig ?? signal;
+      settle();
+    });
+    child.stdin?.end();
+    ctx.onChildStart(child);
+  });
+}
+
 function textResult(text: string, isError = false): Record<string, unknown> {
   return { content: [{ type: "text", text }], isError };
 }
@@ -392,7 +518,11 @@ function errorFrame(mid: unknown, code: number, message: string): Record<string,
   return { jsonrpc: "2.0", id: mid, error: { code, message } };
 }
 
-function callTool(mid: unknown, params: Record<string, unknown>): Record<string, unknown> {
+async function callTool(
+  mid: unknown,
+  params: Record<string, unknown>,
+  ctx: CallContext,
+): Promise<Record<string, unknown>> {
   const rawName = Object.hasOwn(params, "name") ? params.name : undefined;
   const name = pythonTruthy(rawName) ? rawName : ""; // `params.get("name") or ""`
   const rawArguments = Object.hasOwn(params, "arguments") ? params.arguments : undefined;
@@ -426,26 +556,22 @@ function callTool(mid: unknown, params: Record<string, unknown>): Record<string,
   // `--json` is appended and `--yes` NEVER is. Auto-appending --yes would let an agent execute a
   // confirm-class verb it was never authorized for; the exit-3 branch below hands the confirmation
   // decision back to the caller instead.
-  const r = spawnSync(process.execPath, [name, ...argv, "--json"], {
-    // stdin is an empty pipe rather than our own: see divergence 1 in the header.
-    stdio: ["pipe", "pipe", "pipe"],
-    maxBuffer: Number.POSITIVE_INFINITY,
-  });
+  const r = await runChild([name, ...argv, "--json"], ctx);
   if (r.error && r.status === null && r.signal === null) {
-    fatal(`the dispatcher could not be started for a tool call (${(r.error as NodeJS.ErrnoException).code ?? "unknown error"})`);
+    fatal(`the dispatcher could not be started for a tool call (${r.error.code ?? "unknown error"})`);
   }
   const rc = returnCodeOf(r.status, r.signal);
   // text=True decodes strictly on the Python side, so an undecodable byte kills run.py; fatal:true
   // reproduces that rather than silently substituting U+FFFD into a tool result.
-  const decode = (b: Buffer | null): string => {
+  const decode = (b: Buffer): string => {
     try {
-      return new TextDecoder("utf-8", { fatal: true }).decode(b ?? new Uint8Array());
+      return new TextDecoder("utf-8", { fatal: true }).decode(b);
     } catch {
       return fatal("a verb wrote bytes that are not valid UTF-8 — Python raises UnicodeDecodeError");
     }
   };
-  const out = pyStrip(decode(r.stdout as Buffer | null));
-  const err = pyStrip(decode(r.stderr as Buffer | null));
+  const out = pyStrip(decode(r.stdout));
+  const err = pyStrip(decode(r.stderr));
 
   if (rc === EXIT_CONFIRM) {
     // The rerun string is spelled `plainkeep …`, LITERALLY — it is a line for a human or an agent to
@@ -485,7 +611,7 @@ function paramsOf(msg: Record<string, unknown>): Record<string, unknown> {
  * `notifications/*` (matched earlier) and unknown methods are answered with silence. Confirmed
  * against the floor byte for byte, and pinned as its own case in the protocol suite.
  */
-function handle(msg: unknown): Record<string, unknown> | null {
+async function handle(msg: unknown, ctx: CallContext): Promise<Record<string, unknown> | null> {
   if (!isPlainObject(msg)) {
     fatal("a JSON-RPC frame is not a JSON object — Python raises AttributeError on .get");
   }
@@ -510,7 +636,7 @@ function handle(msg: unknown): Record<string, unknown> | null {
   }
   if (method === "ping") return resultFrame(mid, {});
   if (method === "tools/list") return resultFrame(mid, { tools: loadCmds().map(toolOf) });
-  if (method === "tools/call") return callTool(mid, paramsOf(msg));
+  if (method === "tools/call") return await callTool(mid, paramsOf(msg), ctx);
   if (isNotification) return null;
   return errorFrame(mid, -32601, `method not found: ${pythonStr(method)}`);
 }
@@ -567,7 +693,6 @@ const SHUTDOWN_SIGNALS: NodeJS.Signals[] = ["SIGTERM", "SIGINT"];
 // run.py's `serve()`: read newline-delimited JSON-RPC from stdin, write one response line per
 // request, EOF = exit 0.
 async function serve(): Promise<number> {
-  const stdin = process.stdin;
   const stdout = process.stdout;
 
   let signals = 0;
@@ -575,7 +700,6 @@ async function serve(): Promise<number> {
   let stdinFailure: Error | null = null;
   let stdoutFailure: Error | null = null;
   let abandonedDrain = false;
-  const chunks: Buffer[] = [];
 
   // One wake-up channel for every asynchronous event the loop can be waiting on. Without it the loop
   // would sit inside `for await (const chunk of stdin)` and a signal arriving on an IDLE server would
@@ -589,26 +713,89 @@ async function serve(): Promise<number> {
   };
   const nextEvent = (): Promise<void> => new Promise<void>((resolve) => waiters.push(resolve));
 
-  const onData = (c: Buffer): void => {
-    chunks.push(c);
-    wake();
+  // STDIN IS READ FROM THE DESCRIPTOR, not through `process.stdin`, and that is the only shape that
+  // gives this server the flow control CPython gets for free.
+  //
+  // Measured on bun 1.3.14 / macOS arm64, a peer flooding a server parked writing a frame nobody is
+  // reading (.orchestrate/raw/task7-fix2-q2-stdin.log). The floor's writer blocks after 64 KB and its
+  // RSS never moves — a blocking read means the KERNEL PIPE does the flow control. Against the port:
+  //
+  //   * `stdin.on("data")` (flowing)            — 13.6 GB accepted, RSS 44 MB → 4.7 GB (the review's
+  //                                               original measurement).
+  //   * `stdin.on("data")` + `pause()` while parked — still 479 MB / 1.15 GB. Pausing stops DELIVERY,
+  //                                               not bun's reading.
+  //   * `stdin.on("readable")` + `read()`       — still 411 MB / 1.07 GB, with ZERO lines processed,
+  //                                               so the loop really was parked and bun was buffering
+  //                                               on its own behalf.
+  //   * `fs.read(0, …)` on the raw descriptor   — 0 MB accepted. Nothing is read until this asks.
+  //
+  // So the stream is never touched. One read is outstanding at a time, into its OWN buffer (a shared
+  // one would be corrupted by an abandoned read landing late), and bytes stay in the kernel pipe
+  // until the loop comes back for them.
+  const READ_CHUNK = 64 * 1024;
+
+  // A single outstanding read. `null` means "none in flight"; it is NOT reissued while one is pending,
+  // because two concurrent reads on the same descriptor would interleave.
+  let pendingRead: Promise<number> | null = null;
+  let readBuf = Buffer.allocUnsafe(READ_CHUNK);
+
+  const readStdinOnce = (): Promise<number> => {
+    const target = Buffer.allocUnsafe(READ_CHUNK);
+    readBuf = target;
+    return new Promise<number>((resolve) => {
+      fs.read(0, target, 0, READ_CHUNK, null, (e, bytes) => {
+        if (e) {
+          const code = (e as NodeJS.ErrnoException).code;
+          // EAGAIN is not an error here, it is "the descriptor is non-blocking and empty". bun marks
+          // its own std descriptors non-blocking when they are pipes (see dispatch.ts's note), and
+          // whether stdin has been marked depends on whether anything touched the stream, so this
+          // path has to be tolerated rather than assumed away.
+          if (code === "EAGAIN") return resolve(-1);
+          stdinFailure = e;
+          return resolve(0);
+        }
+        resolve(bytes);
+      });
+    });
   };
-  const onEnd = (): void => {
-    ended = true;
-    wake();
-  };
-  const onStdinError = (e: Error): void => {
-    stdinFailure = e;
-    ended = true;
-    wake();
-  };
+
   const stdinFailureNow = (): Error | null => stdinFailure;
   const onStdoutError = (e: Error): void => {
     stdoutFailure = e;
     wake();
   };
+  // The child of the tool call currently in flight, if any. Held so a shutdown signal can reach it:
+  // without this, "stop accepting frames and finish the in-flight one" is a promise the server cannot
+  // keep when the in-flight one is a verb that never returns.
+  let inFlight: ChildProcess | null = null;
+  const ctx: CallContext = {
+    onChildStart: (c) => {
+      inFlight = c;
+      // A signal that arrived between the decision to spawn and the spawn completing would otherwise
+      // be missed — the handler ran when there was no child to kill, and now there is one.
+      if (signals > 0) stopChild();
+    },
+    onChildEnd: () => {
+      inFlight = null;
+    },
+  };
+  const stopChild = (): void => {
+    const child = inFlight;
+    if (!child) return;
+    try {
+      // SIGTERM, not SIGKILL: the verb gets the same signal the operator sent us, so a verb that
+      // cleans up on termination still can. The child's death resolves the awaited spawn, the call
+      // returns an isError result naming the status, and the session writes that last frame before
+      // it stops — which is what "finishes the in-flight one" means when the in-flight one is a
+      // process rather than a write.
+      child.kill("SIGTERM");
+    } catch {
+      // a child that has already exited is not an error
+    }
+  };
   const onSignal = (): void => {
     signals += 1;
+    stopChild();
     wake();
   };
 
@@ -648,7 +835,10 @@ async function serve(): Promise<number> {
   // end-of-life drain, bounded at 2 s, and a tool result larger than the pipe buffer (64 KiB on macOS)
   // would be cut off by it. `write()` returning false means the kernel buffer is full and the rest is
   // queued in userspace; the only correct response is to wait for "drain" before writing the next
-  // frame, which is also what makes the peer's back-pressure propagate into our own read loop.
+  // frame. Pairing it with stdin is what actually makes the peer's back-pressure propagate into our
+  // own read loop — see pumpOneLine below, which pauses stdin for the whole of a line's processing;
+  // this function alone only slows the WRITER down, and an earlier version of this comment claimed
+  // otherwise while the read side ran unthrottled.
   //
   // UNBOUNDED on purpose: CPython's blocking write on a full pipe waits forever too, and giving up
   // early would truncate a frame — the exact failure this exists to prevent.
@@ -691,13 +881,23 @@ async function serve(): Promise<number> {
       await writeFrame(`${pyJsonDumps(errorFrame(null, -32700, "parse error"))}\n`);
       return;
     }
-    const resp = handle(msg);
+    const resp = await handle(msg, ctx);
     if (resp !== null) await writeFrame(`${pyJsonDumps(resp)}\n`);
   };
 
-  stdin.on("data", onData);
-  stdin.on("end", onEnd);
-  stdin.on("error", onStdinError);
+  // STDIN BACKPRESSURE, the half writeFrame's comment used to claim and not deliver.
+  //
+  // `stdin.on("data")` puts the stream in flowing mode, so chunks were being read into the `chunks`
+  // array as fast as the peer could produce them — including while the loop was parked awaiting
+  // "drain" on a stdout the peer had stopped reading. Measured by the quality review: a peer that
+  // kept sending while the server was blocked pushed 13.6 GB into the process and took RSS from
+  // 44 MB to 4.7 GB, where the floor's writer blocked after 44 KB and its RSS never moved. CPython
+  // gets this for free — a blocking write means the KERNEL PIPE does the flow control — and the port
+  // has to ask for it.
+  //
+  // Pausing around the whole of handleLine covers both places the loop can park: the "drain" wait and
+  // an in-flight tool call. While paused the kernel buffer fills and the peer's own write() blocks,
+  // which is exactly the floor's behaviour.
   stdout.on("error", onStdoutError);
   for (const s of SHUTDOWN_SIGNALS) process.on(s, onSignal);
 
@@ -707,14 +907,35 @@ async function serve(): Promise<number> {
     // batch runs anyway.
     const stopping = (): boolean => signals > 0 || abandonedDrain || stdoutFailure !== null;
     reading: for (;;) {
-      const chunk = chunks.shift();
-      if (chunk !== undefined) {
-        buf += decoder.decode(chunk, { stream: true });
-        for (const line of takeLines(false)) {
-          if (stopping()) break reading;
-          await handleLine(line);
+      if (stopping()) break;
+      if (!ended) {
+        // Race the read against the wake channel, so a signal on an IDLE session is serviced at once
+        // rather than whenever the peer next happens to send a byte. A read the wake beat is left
+        // pending on purpose — it owns its own buffer, and the session is on its way out.
+        if (pendingRead === null) pendingRead = readStdinOnce();
+        const settled = await Promise.race([
+          pendingRead.then((n) => ({ kind: "read" as const, n })),
+          nextEvent().then(() => ({ kind: "wake" as const, n: 0 })),
+        ]);
+        if (settled.kind === "wake") continue;
+        const n = settled.n;
+        const chunk = readBuf;
+        pendingRead = null;
+        if (n === -1) {
+          // Would block. Nothing to do but come back; unref'd so it can never hold the process open.
+          await new Promise<void>((resolve) => setTimeout(resolve, 10).unref());
+          continue;
         }
-        continue;
+        if (n === 0) {
+          ended = true; // EOF, or a read error recorded in stdinFailure
+        } else {
+          buf += decoder.decode(chunk.subarray(0, n), { stream: true });
+          for (const line of takeLines(false)) {
+            if (stopping()) break reading;
+            await handleLine(line);
+          }
+          continue;
+        }
       }
       if (stopping()) break;
       if (ended) {
@@ -736,7 +957,6 @@ async function serve(): Promise<number> {
         }
         break;
       }
-      await nextEvent();
     }
 
     if (abandonedDrain) {
@@ -772,10 +992,6 @@ async function serve(): Promise<number> {
     // The handlers must not outlive the session, for the reason interception.ts restores process.exit
     // in a finally: a listener left behind changes the disposition of a process that is no longer
     // running an MCP server.
-    stdin.off("data", onData);
-    stdin.off("end", onEnd);
-    stdin.off("error", onStdinError);
-    stdin.pause();
     stdout.off("error", onStdoutError);
     for (const s of SHUTDOWN_SIGNALS) process.off(s, onSignal);
   }

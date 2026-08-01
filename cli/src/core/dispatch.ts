@@ -265,7 +265,71 @@ export function classifySpawnOutcome(r: SpawnOutcome, py: string): CoreResult {
   };
 }
 
+// O_NONBLOCK REMOVAL — without this, a verb whose output exceeds the pipe buffer DIES, and the
+// dispatcher reports a failure the bash floor does not have.
+//
+// The mechanism, measured on bun 1.3.14 / macOS arm64 (.orchestrate/raw/task7-fix2-q1-mechanism.log):
+// bun marks its own stdout/stderr O_NONBLOCK when they are PIPES. That flag lives on the open file
+// description, not on the descriptor, so `stdio: "inherit"` hands the child the same flagged
+// description — and CPython, which has no idea it is holding a non-blocking fd, raises
+// `BlockingIOError: [Errno 35] write could not complete without blocking` the first time one write
+// cannot be satisfied in full. Measured end to end: `plainkeep <verb> --json | cat` loses everything
+// past 81,920 bytes and exits 1, where the floor writes all 500,062 and exits 0.
+//
+// WHEN IT APPLIES, enumerated rather than assumed, because the answer is what keeps the interactive
+// path untouched:
+//   * stdout/stderr on a PIPE or socket  → flagged. This is the whole defect.
+//   * stdout/stderr on a TTY             → NOT flagged (measured on a real pty), so `plainkeep ui`
+//                                          and every interactive verb are unaffected and this does
+//                                          nothing on that path.
+//   * stdout/stderr on a REGULAR FILE    → NOT flagged, and O_NONBLOCK is meaningless for one anyway.
+//
+// WHY A HELPER PROCESS, which is not a pleasant answer: bun exposes no way to clear the flag from JS.
+// `process.stdout._handle` (node's route to `setBlocking`) does not exist in bun; re-opening
+// `/dev/fd/1` on macOS dups the same description and inherits the flag; and `Bun.spawnSync` passes it
+// through identically. Avoiding it is not an option either — merely READING
+// `process.stdout.writableLength` materializes bun's stream and sets the flag, and that has already
+// happened by the time any dispatch reaches here (measured: entering `runCore` is enough, even for
+// `--version`). So the flag can only be cleared by something that CAN call fcntl, on the shared
+// description: one `python3` that sets both fds back to blocking, which then holds for the verb.
+//
+// THE COST, stated plainly because it dents this refactor's headline claim: the port's selling point
+// is ONE spawn per verb where the bash floor pays three. When stdout is a pipe this now pays TWO
+// (measured at ~15 ms for the helper). On a terminal it still pays one. That is a real regression
+// against the stated goal, and it buys back a verb's entire output — silently truncating a verb's
+// stdout is not a trade worth taking.
+const RESTORE_BLOCKING_PY =
+  "import os\nfor fd in (1, 2):\n    try:\n        os.set_blocking(fd, True)\n    except OSError:\n        pass\n";
+
+// Whether a descriptor is the kind bun flags. Anything unreadable (a closed fd) answers false: the
+// helper exists to fix a specific measured condition, not to run speculatively.
+function isPipeLike(fd: number): boolean {
+  try {
+    const s = fs.fstatSync(fd);
+    return s.isFIFO() || s.isSocket();
+  } catch {
+    return false;
+  }
+}
+
+export function stdioNeedsBlockingRestore(): boolean {
+  return isPipeLike(1) || isPipeLike(2);
+}
+
+// Best-effort by design: if the helper cannot run, the verb is spawned anyway and behaves exactly as
+// it did before this existed. Its own stdout/stderr are INHERITED — it has to hold the very
+// descriptors it is clearing — and it writes nothing.
+function restoreBlockingStdio(py: string): void {
+  if (!stdioNeedsBlockingRestore()) return;
+  try {
+    spawnSync(py, ["-c", RESTORE_BLOCKING_PY], { stdio: ["ignore", "inherit", "inherit"] });
+  } catch {
+    // a mitigation that fails must not become the failure it is preventing
+  }
+}
+
 function spawnVerb(py: string, script: string, args: string[], home: string): CoreResult {
+  restoreBlockingStdio(py);
   const r = spawnSync(py, [script, ...args], {
     stdio: "inherit",
     env: { ...process.env, PLAINKEEP_HOME: home },

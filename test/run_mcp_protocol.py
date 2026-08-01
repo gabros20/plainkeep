@@ -225,6 +225,8 @@ IGNORE = shutil.ignore_patterns(".git", ".index", ".logs", "__pycache__", "*.pyc
 # controls: `echoargs` prints the argv it received (so argument ORDER is observable end to end), and
 # `bigout` prints a payload far larger than a pipe buffer (so backpressure is observable at all).
 BIG_BYTES = 300_000
+# Past 1.25 MiB, the exact size at which the pre-fix core truncated a tool result (quality r1, Q1).
+HUGE_BYTES = 3_000_000
 
 # Non-ASCII, spread across every place a byte can reach a frame: a cmd.json summary and hints (→ the
 # tool DESCRIPTION), a tool ARGUMENT, a verb's own RESULT, and a note body reached through `search`.
@@ -258,6 +260,22 @@ PACK_VERBS = {
         {"verb": "parserorder", "summary": "", "usage": "x", "risk": "read",
          "hints": {"2": "b", "1": "a"}, "reads": [], "writes": []},
         "print('{}')\n",
+    ),
+    # Well past the pipe buffer AND past the 1.25 MiB at which the pre-fix core truncated. `bigout`
+    # (300 KB) sat comfortably under that, which is exactly why the whole suite was green while a
+    # tool result could be silently cut in half.
+    "hugeout": (
+        {"verb": "hugeout", "summary": "test verb: emit a result far past the truncation threshold",
+         "usage": "plainkeep hugeout", "risk": "read", "reads": [], "writes": []},
+        "import json\n"
+        f"print(json.dumps({{'ops_json': 1, 'ok': True, 'verb': 'hugeout', 'blob': 'h' * {HUGE_BYTES}}}))\n",
+    ),
+    # A verb that never returns, for the signal cases: a tool call in flight must not make the server
+    # unkillable.
+    "sleeper": (
+        {"verb": "sleeper", "summary": "test verb: never returns", "usage": "plainkeep sleeper",
+         "risk": "read", "reads": [], "writes": []},
+        "import time\ntime.sleep(600)\n",
     ),
     "uniecho": (
         {"verb": "uniecho", "summary": UNI_SUMMARY, "hints": UNI_HINTS,
@@ -676,6 +694,142 @@ def case_parser_key_order(m: Mode) -> list[str]:
         remove_pack(m.vault, "protopack")
 
 
+def case_huge_tool_result(m: Mode) -> bytes:
+    """A tool result far past the size at which the core used to truncate it.
+
+    THE DEFECT THIS PINS (quality review r1, Q1, pre-existing since Task 4): bun marks its own
+    stdout/stderr O_NONBLOCK when they are pipes. The flag lives on the open file description, so
+    `stdio: "inherit"` handed it to the verb, and CPython — which has no idea it is holding a
+    non-blocking descriptor — raised `BlockingIOError` on the first write it could not satisfy in
+    full. Through a tool call the failure was LAUNDERED: the child died, so `callTool` fell into its
+    error branch and the agent was handed ~1.25 MiB of truncated JSON flagged `isError: true`, reading
+    as "the verb failed" rather than "the transport cut it off". Measured before the fix at 2,000,000
+    requested bytes: core `isError=True len=1310720`, floor `isError=False len=2000059`.
+
+    `bigout` at 300 KB was under the threshold, which is why the suite was green throughout. This one
+    is 3 MB, and asserts the REAL outcome — not an error, and every byte present.
+    """
+    write_pack(m.vault, "protopack", ["hugeout"])
+    try:
+        s = m.session("huge-tool-result")
+        s.send(INIT)
+        s.frame()
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "hugeout", "arguments": {}}})
+        res = s.frame(timeout=120.0)["result"]
+        check(f"[{m.name}] a {HUGE_BYTES}-byte tool result is not reported as an error",
+              res["isError"] is False, str(res)[:140])
+        blob = json.loads(res["content"][0]["text"])["blob"]
+        check(f"[{m.name}] and arrives whole — no silent truncation",
+              len(blob) == HUGE_BYTES, f"got {len(blob)} of {HUGE_BYTES}")
+        rc = s.finish()
+        check(f"[{m.name}] the huge-result session exits 0", rc == 0, f"rc={rc}")
+        return s.raw
+    finally:
+        remove_pack(m.vault, "protopack")
+
+
+def case_hung_child_sigterm(m: Mode) -> None:
+    """A tool call whose child never returns must not make the server unkillable.
+
+    `spawnSync` blocked the event loop for the child's entire life, and bun runs signal handlers ON
+    the event loop — so during a tool call neither the shutdown handler nor the second-signal poll
+    could run at all. Measured before the fix against this same `time.sleep(600)` verb: two SIGTERMs
+    AND a SIGINT left the core running, and only SIGKILL stopped it, where the floor died on the first
+    SIGTERM. The graceful handler had made the server strictly LESS stoppable than the thing it
+    replaced.
+
+    Two modes, two different correct answers, both asserted: the floor dies by signal; the core kills
+    the child, turns its termination into the last frame, and exits on the protocol. What makes this
+    a real test rather than "it stopped" is the DEADLINE — 10 s against a child that would otherwise
+    sleep for 600.
+    """
+    write_pack(m.vault, "protopack", ["sleeper"])
+    try:
+        s = m.session("hung-child")
+        s.send(INIT)
+        s.frame()
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "sleeper", "arguments": {}}})
+        time.sleep(1.0)
+        check(f"[{m.name}] the server is alive with a tool call in flight", s.alive())
+        t0 = time.time()
+        s.proc.send_signal(signal.SIGTERM)
+        try:
+            rc = s.finish(timeout=10.0, close=False)
+        except Timeout:
+            check(f"[{m.name}] SIGTERM ends a session with a hung child (needed SIGKILL)", False,
+                  "still running after 10s")
+            return
+        elapsed = time.time() - t0
+        if m.name == "core":
+            check("[core] SIGTERM ends a session with a hung child, on the protocol (0)",
+                  rc == 0, f"rc={rc}")
+            check("[core] and promptly — the 600s child did not have to finish",
+                  elapsed < 5.0, f"{elapsed:.2f}s")
+        else:
+            check("[floor] SIGTERM with a hung child kills the server by signal",
+                  rc == -signal.SIGTERM, f"rc={rc}")
+        check(f"[{m.name}] stdout carries no partial frame after a hung-child SIGTERM",
+              s.raw == b"" or s.raw.endswith(b"\n"), repr(s.raw[-60:]))
+    finally:
+        remove_pack(m.vault, "protopack")
+        subprocess.run(["pkill", "-f", "sleeper/run.py"], capture_output=True)
+
+
+def case_stdin_backpressure(m: Mode) -> None:
+    """A peer that floods stdin while the server is parked must not grow the server without bound.
+
+    The floor gets this free: CPython's blocking read means the KERNEL PIPE does the flow control, so
+    a peer that keeps writing simply blocks. The port did not, and the gap was large — measured by the
+    quality review at 13.6 GB accepted and RSS from 44 MB to 4.7 GB while the server was parked
+    writing a frame nobody was reading. Two later attempts were still not enough (`pause()` while
+    parked: 479 MB; `readable` + `read()`: 411 MB with ZERO lines processed, so bun was buffering on
+    its own behalf) — which is why the server now reads fd 0 directly with `fs.read`.
+
+    The assertion is the peer's WRITER BLOCKING, plus a hard ceiling on what the server absorbed. Both
+    are properties of the fixed shape, not of agreement between the modes.
+    """
+    write_pack(m.vault, "protopack", ["bigout"])
+    try:
+        s = m.session("stdin-backpressure")
+        s.send(INIT)
+        s.frame()
+        # Park the server writing a frame this test will never read.
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "bigout", "arguments": {}}})
+        time.sleep(1.5)
+        os.set_blocking(s.proc.stdin.fileno(), False)
+        flood = b'{"jsonrpc":"2.0","id":3,"method":"ping"}\n' * 64
+        sent = 0
+        blocked = False
+        deadline = time.time() + 4.0
+        while time.time() < deadline:
+            try:
+                n = s.proc.stdin.raw.write(flood)
+                if n is None:
+                    blocked = True
+                    time.sleep(0.02)
+                    continue
+                sent += n
+            except BlockingIOError:
+                blocked = True
+                time.sleep(0.02)
+            except Exception:
+                break
+        check(f"[{m.name}] a flooding peer's writer BLOCKS while the server is parked", blocked)
+        # One pipe buffer (64 KiB on macOS) is what a correctly back-pressured reader absorbs. The
+        # ceiling is deliberately loose (4 MiB) so it pins the CLASS — bounded vs unbounded — rather
+        # than a platform's exact buffer size; the pre-fix numbers were 400–13,000x above it.
+        check(f"[{m.name}] and the server absorbed a BOUNDED amount ({sent} bytes)",
+              sent <= 4 * 1024 * 1024, f"{sent} bytes accepted")
+        s.proc.kill()
+        s.proc.wait()
+    finally:
+        remove_pack(m.vault, "protopack")
+        subprocess.run(["pkill", "-f", "bigout/run.py"], capture_output=True)
+
+
 def case_broken_pipe(m: Mode) -> bytes:
     """The peer closes the read end and then asks for another frame.
 
@@ -882,11 +1036,14 @@ DIFFERENTIAL = [
     ("a closed read end (EPIPE) ends the session on both sides", case_broken_pipe),
     ("a frame larger than the pipe buffer arrives intact", case_large_frame),
     ("a large frame survives EOF + a late reader (backpressure)", case_large_frame_then_eof),
+    ("a tool result past the O_NONBLOCK truncation threshold", case_huge_tool_result),
 ]
 
 MEASURED = [
     ("SIGTERM on an idle session", case_sigterm_idle),
     ("SIGTERM while a tool call is in flight", case_sigterm_mid_call),
+    ("SIGTERM while a HUNG tool call is in flight", case_hung_child_sigterm),
+    ("a flooding peer cannot grow a parked server", case_stdin_backpressure),
 ]
 
 

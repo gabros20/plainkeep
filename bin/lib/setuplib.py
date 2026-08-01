@@ -339,7 +339,7 @@ def _status_automation(layer: Layer) -> dict:
 
 
 # --- the `ui` layer (ADR-011): the plainkeep-ui terminal binary for humans. The TS source lives in the
-# template's ui/ (NOT in engine.txt, so it never propagates to vaults); what a vault installs is a
+# template's cli/ (NOT in engine.txt, so it never propagates to vaults); what a vault installs is a
 # self-contained compiled binary from the template repo's GitHub release, placed where the
 # `bin/ui/run.py` shim looks first ($PLAINKEEP_HOME/.local/bin/plainkeep-ui). The template may be PRIVATE, so
 # the download uses the authenticated GitHub CLI, never anonymous curl.
@@ -399,8 +399,8 @@ def _ui_repo() -> str | None:
 
 
 def _ui_source_buildable() -> bool:
-    """Contributor fallback: a full template checkout carries ui/ source, compilable with bun."""
-    return (paths.PLAINKEEP_HOME / "ui" / "package.json").is_file() and shutil.which("bun") is not None
+    """Contributor fallback: a full template checkout carries cli/ source, compilable with bun."""
+    return (paths.PLAINKEEP_HOME / "cli" / "package.json").is_file() and shutil.which("bun") is not None
 
 
 def _ui_expected_version() -> str | None:
@@ -452,7 +452,7 @@ def _status_ui(layer: Layer) -> dict:
     if asset is None:
         return _row(layer, "not_applicable",
                     f"no prebuilt plainkeep-ui for this platform ({_platform_system()}/{_platform_machine()}), "
-                    "and no ui/ source + bun to build from", items, "")
+                    "and no cli/ source + bun to build from", items, "")
     return _row(layer, "blocked",
                 "the GitHub CLI is required to download the plainkeep-ui release binary", items,
                 "install the GitHub CLI: brew install gh (then `plainkeep setup ui --yes`)")
@@ -485,7 +485,7 @@ def _install_ui(res: dict, *, fake: bool) -> None:
     """Provision the plainkeep-ui binary into $PLAINKEEP_HOME/.local/bin (where the bin/ui shim looks first).
     Primary: `gh release download` the prebuilt asset + checksums.txt from the template repo (gh is
     already authenticated for anyone who cloned a private template) and verify the sha256. Fallback
-    (contributor checkout): compile ui/ from source with bun. Steps are recorded in res['ran'];
+    (contributor checkout): compile cli/ from source with bun. Steps are recorded in res['ran'];
     fake/dry mode records the plan and runs nothing."""
     target = _ui_target()
     bindir = target.parent
@@ -508,16 +508,16 @@ def _install_ui(res: dict, *, fake: bool) -> None:
         res["ran"].append(f"verified sha256 + installed {target}")
         return
     if _ui_source_buildable():
-        src = paths.PLAINKEEP_HOME / "ui"
+        src = paths.PLAINKEEP_HOME / "cli"
         if not _fake(fake):
             bindir.mkdir(parents=True, exist_ok=True)
         res["ran"].append(_run(["bun", "install", "--cwd", str(src)], fake=fake))
-        res["ran"].append(_run(["bun", "build", "--compile", str(src / "src" / "index.ts"),
+        res["ran"].append(_run(["bun", "build", "--compile", str(src / "src" / "tui" / "index.ts"),
                                 "--outfile", str(target)], fake=fake))
         return
     raise FileNotFoundError(
         "no way to install plainkeep-ui: need the GitHub CLI (gh) for the release download, "
-        "or ui/ source + bun to build from")
+        "or cli/ source + bun to build from")
 
 
 def status(layer_id=None) -> list[dict]:
@@ -612,7 +612,7 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             res["ran"].append(_run_verb("job", "apply", fake=fake))
         elif layer.id == "ui":
             # ADR-011: download the compiled plainkeep-ui release binary (sha256-verified) into
-            # $PLAINKEEP_HOME/.local/bin — or compile from ui/ source in a contributor checkout.
+            # $PLAINKEEP_HOME/.local/bin — or compile from cli/ source in a contributor checkout.
             _install_ui(res, fake=fake)
     except BaseException as exc:
         exc.ops_partial_ran = list(res["ran"])

@@ -1,8 +1,22 @@
 # The terminal UI (`plainkeep ui`)
 
 How to install, use, and update the guided terminal UI. For the design rationale, see
-[ADR-011 in `DECISIONS.md`](DECISIONS.md); for the source and contributor workflow, see
-[`../ui/README.md`](../ui/README.md).
+[ADR-011 and ADR-013 in `DECISIONS.md`](DECISIONS.md); for the source and contributor workflow, see
+[`../cli/README.md`](../cli/README.md).
+
+**How it launches now (ADR-013, Phase 1).** The TUI is part of the compiled `plainkeep` core binary:
+`plainkeep ui` is answered **in-process**, and typing a bare `plainkeep` in a terminal opens it too
+(bare `plainkeep` with piped or redirected stdio still prints help, so scripts and agents are
+unaffected). Nothing to install for that path — if the core binary is what runs your `plainkeep`, the
+UI is already there, and `plainkeep ui --version` reports the version of the code that will actually
+run. The **install section below applies to the bash floor** (`PLAINKEEP_CORE=off`, and any vault
+without the core binary), where `bin/ui/` still execs a separately downloaded `plainkeep-ui`. Both
+artifacts compile from the same `cli/src/tui/` source, so the UI itself is identical either way.
+
+One known limitation, on both paths: once you have run an action, `plainkeep ui` cannot be
+interrupted with Ctrl-C — `@clack/prompts` 0.7.0 leaves SIGINT/SIGTERM listeners behind after every
+spinner. Quit from the menu; if it is already mid-action, `kill -9` is the only way out. Pinned by
+`test/run_tui_pty.py`, fix deferred (it changes TUI behaviour).
 
 `plainkeep ui` is the human face of the system. It reads the machine contract (`plainkeep help
 --json`) and generates itself: a verb palette grouped like `plainkeep help`, a form per action built
@@ -18,7 +32,8 @@ plainkeep setup ui --yes
 
 This downloads a self-contained compiled binary (no Node required) for your platform from the
 template repo's GitHub release, verifies its sha256 against the release's `checksums.txt`, and
-installs it to `$PLAINKEEP_HOME/.local/bin/plainkeep-ui` — where the `plainkeep ui` shim looks first.
+installs it to `$PLAINKEEP_HOME/.local/bin/plainkeep-ui` — where the floor's stdlib `bin/ui/` shim
+looks first.
 
 Requirements:
 
@@ -51,7 +66,9 @@ The UI is interactive-only. Piped or scripted invocation exits `2` and points at
 
 ## Update
 
-Updates ride the normal engine update — there is no separate update command:
+Under the core binary there is nothing to update separately: the TUI is compiled into the same
+artifact, so it changes when the binary does. The flow below is the **floor's**, for the separately
+installed `plainkeep-ui`. Updates ride the normal engine update — there is no separate update command:
 
 ```sh
 ./script/update      # engine update brings the new expected UI version
@@ -77,9 +94,12 @@ tag, so a vault always gets the binary its engine was tested with.
 **Resolution order** for the binary: `$PLAINKEEP_UI_BIN` (explicit override) →
 `$PLAINKEEP_HOME/.local/bin/plainkeep-ui` (what setup installs) → `plainkeep-ui` on PATH.
 
-**Build from source** (contributor checkout with `ui/` present, needs [Bun](https://bun.sh)):
+**Build from source** (contributor checkout with `cli/` present, needs [Bun](https://bun.sh) **>=
+1.2.21** — older bun drops empty-string arguments when spawning a child, so the build refuses):
 `plainkeep setup ui --yes` compiles automatically when no release is reachable, or manually:
 
 ```sh
-cd ui && bun install && bun run build:binary
+cd cli && bun install
+bun run build:ui     # the standalone plainkeep-ui the floor execs
+bun run build        # the core binary, which contains the same TUI
 ```

@@ -1,0 +1,258 @@
+{
+  "description": "Language-neutral parity catalog for the dispatcher-facing guardrail (bin/lib/guardrail.py main_cli/gate/_log <-> cli/src/core/guardrail.ts). test/run_core_parity.py builds a fixture vault, then for each 'gate' invocation runs the binary's --core-gate <verb> <args...> and python3 <vault>/bin/lib/guardrail.py <verb> <args...> against SEPARATE copies of the vault (isolated .logs), comparing exit code + stdout + stderr byte-exact AND the appended audit-log line (timestamp shape asserted, remainder after the first tab byte-compared). Fixture grammar additions over resolver.json (additive): verbs[].cmd sets a verb's cmd.json CONTENT and top-level plugins_lock writes plugins/plugins.lock.json, both through _content() — an object is json.dumps'd, a string is written RAW (malformed-JSON fixtures), and a LIST is concatenated raw text whose segments are strings or {repeat:'<s>', times:N} (used for pathologically deep documents, which cannot be written literally: the catalog itself would then be too deep for json.loads to read). Invocation shape: {compare:'gate', verb, args?:[...]}.",
+  "cases": [
+    {
+      "name": "engine-verb-risks",
+      "rationale": "Every gate() risk branch on engine verbs: declared read/safe_write allow; confirm blocked without --yes and cleared by --yes AND -y separately; deny refused (and deny beats --dry-run); undeclared risk defaults to confirm two ways (cmd.json without a risk key, and run.py-only with no cmd.json); malformed cmd.json swallowed to null -> default confirm; the --dry-run downgrade fires only when cmd.json declares dry_run:true AND risk is confirm/safe_write, and is a no-op on a plain read and on an undeclared-dry-run confirm verb.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "v_read", "cmd": { "verb": "v_read", "risk": "read" } },
+          { "at": "engine", "verb": "v_safe", "cmd": { "verb": "v_safe", "risk": "safe_write" } },
+          { "at": "engine", "verb": "v_confirm", "cmd": { "verb": "v_confirm", "risk": "confirm" } },
+          { "at": "engine", "verb": "v_deny", "cmd": { "verb": "v_deny", "risk": "deny" } },
+          { "at": "engine", "verb": "v_undeclared", "cmd": { "verb": "v_undeclared", "summary": "no risk key" } },
+          { "at": "engine", "verb": "v_runonly", "files": ["run.py"] },
+          { "at": "engine", "verb": "v_dryconfirm", "cmd": { "verb": "v_dryconfirm", "risk": "confirm", "dry_run": true } },
+          { "at": "engine", "verb": "v_drysafe", "cmd": { "verb": "v_drysafe", "risk": "safe_write", "dry_run": true } },
+          { "at": "engine", "verb": "v_malformed", "files": ["cmd.json"], "cmd": "{not valid json" }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "v_read", "args": [] },
+        { "compare": "gate", "verb": "v_safe", "args": [] },
+        { "compare": "gate", "verb": "v_confirm", "args": [] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["--yes"] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["-y"] },
+        { "compare": "gate", "verb": "v_deny", "args": [] },
+        { "compare": "gate", "verb": "v_deny", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "v_undeclared", "args": [] },
+        { "compare": "gate", "verb": "v_runonly", "args": [] },
+        { "compare": "gate", "verb": "v_dryconfirm", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "v_dryconfirm", "args": [] },
+        { "compare": "gate", "verb": "v_drysafe", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "v_read", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "v_malformed", "args": [] }
+      ]
+    },
+    {
+      "name": "plugin-trust-ceiling",
+      "rationale": "Trust ceiling (Part 2.2) via resolver source_of + plugins.lock.json: an untrusted pack (lock entry without trusted) caps read/safe_write up to confirm and blocks the --dry-run downgrade; an explicitly trusted pack (trusted:true) keeps its declared risk and allows the downgrade; a pack with NO lock entry (user-placed) gets no ceiling. Proves the cap is driven by the lock, not the pack's self-declared cmd.json risk.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:untrusted", "verb": "pu_read", "cmd": { "verb": "pu_read", "risk": "read" } },
+          { "at": "plugin:untrusted", "verb": "pu_safe", "cmd": { "verb": "pu_safe", "risk": "safe_write" } },
+          { "at": "plugin:untrusted", "verb": "pu_confirm", "cmd": { "verb": "pu_confirm", "risk": "confirm" } },
+          { "at": "plugin:untrusted", "verb": "pu_drysafe", "cmd": { "verb": "pu_drysafe", "risk": "safe_write", "dry_run": true } },
+          { "at": "plugin:trusted", "verb": "pt_read", "cmd": { "verb": "pt_read", "risk": "read" } },
+          { "at": "plugin:trusted", "verb": "pt_drysafe", "cmd": { "verb": "pt_drysafe", "risk": "safe_write", "dry_run": true } },
+          { "at": "plugin:nolock", "verb": "pn_read", "cmd": { "verb": "pn_read", "risk": "read" } }
+        ],
+        "plugins_lock": { "plugins": { "untrusted": {}, "trusted": { "trusted": true } } }
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "pu_read", "args": [] },
+        { "compare": "gate", "verb": "pu_safe", "args": [] },
+        { "compare": "gate", "verb": "pu_confirm", "args": [] },
+        { "compare": "gate", "verb": "pu_drysafe", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "pt_read", "args": [] },
+        { "compare": "gate", "verb": "pt_drysafe", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "pn_read", "args": [] }
+      ]
+    },
+    {
+      "name": "malformed-plugins-lock",
+      "rationale": "A malformed plugins.lock.json is swallowed to an empty map on BOTH sides (Python bare except, TS JSON.parse catch), so no verb is capped and the pack verb runs at its declared risk -> allow. Proves the log/ceiling read never crashes the gate on a corrupt lock.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:somepack", "verb": "sp_read", "cmd": { "verb": "sp_read", "risk": "read" } }
+        ],
+        "plugins_lock": "{not valid json at all"
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "sp_read", "args": [] }
+      ]
+    },
+    {
+      "name": "did-you-mean",
+      "rationale": "main_cli unknown-verb path: difflib.get_close_matches(verb, sorted(known), n=3, cutoff=0.6) with exit 4. Near-miss with two candidates pins ordering (captur -> capture, cap; stas -> stash, status), near-miss with one candidate (serch -> search), and a far-miss (xyzzy) falls back to the ' (run: plainkeep help)' hint. Unknown path returns before _log, so no audit line is written (both logs empty).",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "capture" },
+          { "at": "engine", "verb": "cap" },
+          { "at": "engine", "verb": "search" },
+          { "at": "engine", "verb": "status" },
+          { "at": "engine", "verb": "stash" },
+          { "at": "engine", "verb": "sweep" }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "captur", "args": [] },
+        { "compare": "gate", "verb": "stas", "args": [] },
+        { "compare": "gate", "verb": "serch", "args": [] },
+        { "compare": "gate", "verb": "xyzzy", "args": [] }
+      ]
+    },
+    {
+      "name": "arg-edge-cases",
+      "rationale": "Byte-exact stdout/stderr/log across the run.md D5 arg shapes — empty string, spaces, Unicode, embedded tab, embedded newline — on a confirm verb (args echoed in the re-run remediation AND the audit line) and a read verb (args echoed only in the audit line, no stderr). Exercises the field-guide rule: args compared positionally/byte-exact, never through a sorted set, and the log comparison's split('\\t', 1) survives a tab/newline inside an arg.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "v_confirm", "cmd": { "verb": "v_confirm", "risk": "confirm" } },
+          { "at": "engine", "verb": "v_read", "cmd": { "verb": "v_read", "risk": "read" } }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "v_confirm", "args": [""] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["hello world"] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["café", "日本語"] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["a\tb"] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["a\nb"] },
+        { "compare": "gate", "verb": "v_confirm", "args": ["spaced arg", "--yes"] },
+        { "compare": "gate", "verb": "v_read", "args": ["café", "a\tb", "a\nb", ""] },
+        { "compare": "gate", "verb": "v_read", "args": ["--dry-run", "spaced arg"] }
+      ]
+    },
+    {
+      "name": "wrong-type-field-values",
+      "rationale": "cmd.json fields that are VALID JSON but wrong-typed must flow through the TS port with PYTHON semantics, not JS. dry_run truthiness is bool()/pythonTruthy: [] {} 0 \"\" are falsy (no downgrade -> confirm) while \"false\" and 1 are truthy (downgrade -> allow) — JS Boolean([]) / Boolean({}) would UNSAFELY downgrade. risk is passed through raw (no type clamp): 5 and true stay truthy and render in the ALLOW reason/log as Python str() prints them (\"5\", \"True\"), while \"\" and null are falsy and default to confirm. Guards the fix-wave-r1 root cause; these cases FAIL against the pre-fix binary.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "vd_list", "cmd": { "verb": "vd_list", "risk": "confirm", "dry_run": [] } },
+          { "at": "engine", "verb": "vd_obj", "cmd": { "verb": "vd_obj", "risk": "confirm", "dry_run": {} } },
+          { "at": "engine", "verb": "vd_zero", "cmd": { "verb": "vd_zero", "risk": "confirm", "dry_run": 0 } },
+          { "at": "engine", "verb": "vd_emptystr", "cmd": { "verb": "vd_emptystr", "risk": "confirm", "dry_run": "" } },
+          { "at": "engine", "verb": "vd_strfalse", "cmd": { "verb": "vd_strfalse", "risk": "confirm", "dry_run": "false" } },
+          { "at": "engine", "verb": "vd_one", "cmd": { "verb": "vd_one", "risk": "confirm", "dry_run": 1 } },
+          { "at": "engine", "verb": "vr_five", "cmd": { "verb": "vr_five", "risk": 5 } },
+          { "at": "engine", "verb": "vr_emptystr", "cmd": { "verb": "vr_emptystr", "risk": "" } },
+          { "at": "engine", "verb": "vr_null", "cmd": { "verb": "vr_null", "risk": null } },
+          { "at": "engine", "verb": "vr_true", "cmd": { "verb": "vr_true", "risk": true } }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "vd_list", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_obj", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_zero", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_emptystr", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_strfalse", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vd_one", "args": ["--dry-run"] },
+        { "compare": "gate", "verb": "vr_five", "args": [] },
+        { "compare": "gate", "verb": "vr_emptystr", "args": [] },
+        { "compare": "gate", "verb": "vr_null", "args": [] },
+        { "compare": "gate", "verb": "vr_true", "args": [] }
+      ]
+    },
+    {
+      "name": "wrong-type-trusted-flag",
+      "rationale": "The plugins.lock.json `trusted` flag is read with Python bool() (entry.get('trusted') in _plugin_ceiling), so an empty container is UNTRUSTED: [] {} 0 keep the ceiling (declared read capped to confirm, exit 3) while 1 and 'x' clear it (declared read stands, exit 0). JS Boolean([]) / Boolean({}) are true, so reading the lock the JS way let an untrusted pack escape the trust ceiling entirely — allow (0) where the frozen protocol demands confirm (3), the permissive direction. Same bug class as wrong-type-field-values, at the third and last site; the [] and {} invocations FAIL against the pre-fix binary.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:t_list", "verb": "pv_list", "cmd": { "verb": "pv_list", "risk": "read" } },
+          { "at": "plugin:t_obj", "verb": "pv_obj", "cmd": { "verb": "pv_obj", "risk": "read" } },
+          { "at": "plugin:t_zero", "verb": "pv_zero", "cmd": { "verb": "pv_zero", "risk": "read" } },
+          { "at": "plugin:t_one", "verb": "pv_one", "cmd": { "verb": "pv_one", "risk": "read" } },
+          { "at": "plugin:t_str", "verb": "pv_str", "cmd": { "verb": "pv_str", "risk": "read" } }
+        ],
+        "plugins_lock": {
+          "plugins": {
+            "t_list": { "trusted": [] },
+            "t_obj": { "trusted": {} },
+            "t_zero": { "trusted": 0 },
+            "t_one": { "trusted": 1 },
+            "t_str": { "trusted": "x" }
+          }
+        }
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "pv_list", "args": [] },
+        { "compare": "gate", "verb": "pv_obj", "args": [] },
+        { "compare": "gate", "verb": "pv_zero", "args": [] },
+        { "compare": "gate", "verb": "pv_one", "args": [] },
+        { "compare": "gate", "verb": "pv_str", "args": [] }
+      ]
+    },
+    {
+      "name": "deep-nested-cmd-json",
+      "rationale": "A cmd.json is pack-supplied input, so the nesting depth of the RISK VALUE ITSELF is adversarial. At ORDINARY depths (5, 50) both sides decode the nested risk value and render it identically into the ALLOW reason and the audit line — pinning that the TS repr is iterative rather than one call frame per level. At PATHOLOGICAL depths (3000, 20000) Python's json.loads raises RecursionError (measured threshold: depth 1498 at the default recursionlimit of 1000), which _cmd_field's bare except swallows to None -> default confirm (exit 3); the TS port reaches the same confirm because the value exceeds its MAX_JSON_DEPTH=100 cap. Both deep invocations FAIL against the r1 binary, which ALLOWED (exit 0) at depth 3000 and at depth 20000 blew the JS call stack inside gate() — exiting 1, off the frozen protocol, with NO audit line written. VALUE depths between the cap and CPython's threshold are deliberately NOT authored: there the two sides diverge in the SAFE direction (TS confirms where Python renders the deep value into an allow), which is a documented residual, not parity.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "vn_d5", "cmd": ["{\"verb\": \"vn_d5\", \"risk\": ", { "repeat": "[", "times": 5 }, "1", { "repeat": "]", "times": 5 }, "}"] },
+          { "at": "engine", "verb": "vn_d50", "cmd": ["{\"verb\": \"vn_d50\", \"risk\": ", { "repeat": "[", "times": 50 }, "1", { "repeat": "]", "times": 50 }, "}"] },
+          { "at": "engine", "verb": "vn_d3000", "cmd": ["{\"verb\": \"vn_d3000\", \"risk\": ", { "repeat": "[", "times": 3000 }, "1", { "repeat": "]", "times": 3000 }, "}"] },
+          { "at": "engine", "verb": "vn_d20000", "cmd": ["{\"verb\": \"vn_d20000\", \"risk\": ", { "repeat": "[", "times": 20000 }, "1", { "repeat": "]", "times": 20000 }, "}"] }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "vn_d5", "args": [] },
+        { "compare": "gate", "verb": "vn_d50", "args": [] },
+        { "compare": "gate", "verb": "vn_d3000", "args": [] },
+        { "compare": "gate", "verb": "vn_d20000", "args": [] }
+      ]
+    },
+    {
+      "name": "deep-sibling-key",
+      "rationale": "Deep nesting in a SIBLING key must not erase the key the gate is reading. The depth probe runs on the EXTRACTED VALUE, so a cmd.json that declares a plain risk and carries 500 levels of nesting elsewhere gates on the declaration: deny stays deny (exit 5, and --yes does NOT clear it) and read stays read (exit 0), matching Python, which parses 500 levels without complaint. These three invocations FAIL against the r2 binary, whose cap was evaluated over the WHOLE document: it resolved risk to null and fell back to the DEFAULT CONFIRM, turning a deny-class verb — the class whose entire contract is 'never run' — into a --yes-clearable confirm, in the permissive direction, in the module whose job is to refuse. Sibling depths past CPython's parse threshold are deliberately NOT authored: there Python's json.loads raises and defaults to confirm while this side still reads the declaration, which is stricter for deny and looser for read — the one documented non-safe-direction cell, pinned by a bun test instead.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "vs_denypad", "cmd": ["{\"verb\": \"vs_denypad\", \"risk\": \"deny\", \"pad\": ", { "repeat": "[", "times": 500 }, "1", { "repeat": "]", "times": 500 }, "}"] },
+          { "at": "engine", "verb": "vs_readpad", "cmd": ["{\"verb\": \"vs_readpad\", \"risk\": \"read\", \"pad\": ", { "repeat": "[", "times": 500 }, "1", { "repeat": "]", "times": 500 }, "}"] }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "vs_denypad", "args": [] },
+        { "compare": "gate", "verb": "vs_denypad", "args": ["--yes"] },
+        { "compare": "gate", "verb": "vs_readpad", "args": [] }
+      ]
+    },
+    {
+      "name": "prototype-named-packs",
+      "rationale": "Task 3's MIN-4, closed. A PACK name is a directory name too, and the trust ceiling read it with `pluginLock()[pack]` — an object literal from JSON.parse, so a pack named after any Object.prototype member resolved to an inherited member instead of 'absent' and got the confirm ceiling applied, where Python's `lock.get(pack)` returns None and applies NO ceiling. It was left batched in Task 3 because the divergence is in the REFUSAL direction (TS stricter); it is fixed now because the same defect class turned out to be live in the dispatcher's interception table, where it silently swallowed whole verbs. Each pack below is UNLISTED in plugins.lock.json, exactly like a user-placed pack under plugins/local or $PLAINKEEP_PATH, so both sides must allow a read-class verb (exit 0). `unlisted-normal` is the control that this is about the NAME and not about being unlisted; `locked-untrusted` is the control that the ceiling still applies where it should, so the fix cannot be 'stop ceiling-ing everything'.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:toString", "verb": "v_in_0", "cmd": { "verb": "v_in_0", "risk": "read" } },
+          { "at": "plugin:constructor", "verb": "v_in_1", "cmd": { "verb": "v_in_1", "risk": "read" } },
+          { "at": "plugin:valueOf", "verb": "v_in_2", "cmd": { "verb": "v_in_2", "risk": "read" } },
+          { "at": "plugin:hasOwnProperty", "verb": "v_in_3", "cmd": { "verb": "v_in_3", "risk": "read" } },
+          { "at": "plugin:isPrototypeOf", "verb": "v_in_4", "cmd": { "verb": "v_in_4", "risk": "read" } },
+          { "at": "plugin:propertyIsEnumerable", "verb": "v_in_5", "cmd": { "verb": "v_in_5", "risk": "read" } },
+          { "at": "plugin:toLocaleString", "verb": "v_in_6", "cmd": { "verb": "v_in_6", "risk": "read" } },
+          { "at": "plugin:__proto__", "verb": "v_in_7", "cmd": { "verb": "v_in_7", "risk": "read" } },
+          { "at": "plugin:unlisted-normal", "verb": "v_control_unlisted", "cmd": { "verb": "v_control_unlisted", "risk": "read" } },
+          { "at": "plugin:locked-untrusted", "verb": "v_control_locked", "cmd": { "verb": "v_control_locked", "risk": "read" } }
+        ],
+        "plugins_lock": { "plugins": { "locked-untrusted": { "trusted": false } } }
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "v_in_0", "args": [] },
+        { "compare": "gate", "verb": "v_in_1", "args": [] },
+        { "compare": "gate", "verb": "v_in_2", "args": [] },
+        { "compare": "gate", "verb": "v_in_3", "args": [] },
+        { "compare": "gate", "verb": "v_in_4", "args": [] },
+        { "compare": "gate", "verb": "v_in_5", "args": [] },
+        { "compare": "gate", "verb": "v_in_6", "args": [] },
+        { "compare": "gate", "verb": "v_in_7", "args": [] },
+        { "compare": "gate", "verb": "v_control_unlisted", "args": [] },
+        { "compare": "gate", "verb": "v_control_locked", "args": [] }
+      ]
+    },
+    {
+      "name": "did-you-mean-score-ties",
+      "rationale": "Pins the did-you-mean tie-break, the single most surprising line in the difflib port and the one no other case reaches: when candidates score EQUAL, difflib's heapq.nlargest orders the (ratio, name) tuples descending, so equal scores break by name lexicographically LARGER-first. 'abc' scores abd/abe/abf at exactly 0.667 each -> 'abf, abe, abd'; 'capture' scores captura/capturb/capturz at 0.857 each -> 'capturz, capturb, captura'. An 'obvious cleanup' to ascending name order passes every other check in this catalog and every bun test but flips both of these.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "abd" },
+          { "at": "engine", "verb": "abe" },
+          { "at": "engine", "verb": "abf" },
+          { "at": "engine", "verb": "captura" },
+          { "at": "engine", "verb": "capturb" },
+          { "at": "engine", "verb": "capturz" }
+        ]
+      },
+      "invocations": [
+        { "compare": "gate", "verb": "abc", "args": [] },
+        { "compare": "gate", "verb": "capture", "args": [] }
+      ]
+    }
+  ]
+}

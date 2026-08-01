@@ -1,12 +1,14 @@
 name: release-ui
 
-# Ships the plainkeep-ui terminal binary (ADR-011). Push a `ui-v*` tag and this cross-compiles ui/
-# into self-contained binaries (no Node/Bun needed on the user's machine) + a checksums.txt, attached
-# to a GitHub release. Vaults install the matching asset via `plainkeep setup ui --yes`, which
-# downloads with the authenticated gh CLI (the template repo may be private) and verifies the sha256.
+# Ships the plainkeep-ui terminal binary (ADR-011). Push a `ui-v*` tag and this cross-compiles the
+# TUI — `cli/src/tui`, where it landed when the standalone `ui/` workspace was absorbed into `cli/`
+# (ADR-013, hybrid-core Phase 1 Task 1) — into self-contained binaries (no Node/Bun needed on the
+# user's machine) + a checksums.txt, attached to a GitHub release. Vaults install the matching asset
+# via `plainkeep setup ui --yes`, which downloads with the authenticated gh CLI (the template repo
+# may be private) and verifies the sha256.
 #
 # Release ritual (from a clean, green main):
-#   git tag ui-v0.1.0 && git push origin ui-v0.1.0
+#   git tag ui-v0.2.0 && git push origin ui-v0.2.0
 
 on:
   push:
@@ -20,32 +22,45 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: version consistency (tag == package.json == bin/ui/version.txt == src/version.ts)
+      - name: version consistency (tag == bin/ui/version.txt == cli/src/tui/version.ts)
+        # Two files, not three: `cli/package.json` "version" is the core workspace's own version
+        # (0.0.0, the Phase-1 core skeleton) and NOT the TUI's — the TUI's version travelled with
+        # its source into cli/src/tui/version.ts, which is what gets compiled into the binary and
+        # served by `plainkeep-ui --version`. Re-adding package.json here would fail every release.
+        # bin/ui/version.txt is the engine-owned pin: setuplib downloads `ui-v<that>` and compares
+        # it against the installed binary, so a tag that disagrees would point vaults at a release
+        # that doesn't exist.
         run: |
           tag="${GITHUB_REF_NAME#ui-v}"
-          pkg="$(python3 -c "import json; print(json.load(open('ui/package.json'))['version'])")"
           eng="$(tr -d ' \n' < bin/ui/version.txt)"
-          src="$(grep -o '"[0-9][0-9.]*"' ui/src/version.ts | tr -d '"')"
-          if [ "$tag" != "$pkg" ] || [ "$tag" != "$eng" ] || [ "$tag" != "$src" ]; then
-            echo "version drift: tag=$tag package.json=$pkg bin/ui/version.txt=$eng src/version.ts=$src"
-            echo "all four must match — vaults pin their download to bin/ui/version.txt"
+          src="$(sed -n 's/^export const VERSION = "\([0-9][0-9.]*\)".*/\1/p' cli/src/tui/version.ts)"
+          if [ "$tag" != "$eng" ] || [ "$tag" != "$src" ]; then
+            echo "version drift: tag=$tag bin/ui/version.txt=$eng cli/src/tui/version.ts=$src"
+            echo "all three must match — vaults pin their download to bin/ui/version.txt"
             exit 1
           fi
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
-      - name: install ui deps
+          # Pinned to .bun-version, the same way ci.yml pins it, and never `latest`: this workflow
+          # builds the artifact a floor user actually installs, so it must come off the toolchain
+          # the source was tested against in CI rather than whatever shipped that week.
+          bun-version-file: .bun-version
+      - name: install cli deps
         run: bun install --frozen-lockfile || bun install
-        working-directory: ui
+        working-directory: cli
       - name: typecheck
-        run: bunx tsc --noEmit
-        working-directory: ui
+        run: bun run typecheck
+        working-directory: cli
       - name: cross-compile binaries
-        working-directory: ui
+        # cli/'s `build:ui` script is the contributor one-liner — host target only, fixed outfile
+        # (../.local/bin/plainkeep-ui). A release needs four targets under per-platform asset names
+        # (setuplib maps uname → `plainkeep-ui-<target>`), so the matrix stays here; the entry point
+        # and compile flags are otherwise the same binary CI smoke-tests.
+        working-directory: cli
         run: |
           mkdir -p ../dist-bin
           for target in darwin-arm64 darwin-x64 linux-x64 linux-arm64; do
-            bun build --compile --minify --target="bun-${target}" src/index.ts \
+            bun build --compile --minify --target="bun-${target}" src/tui/index.ts \
               --outfile "../dist-bin/plainkeep-ui-${target}"
           done
       - name: checksums

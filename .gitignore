@@ -44,8 +44,8 @@ skills/**/.system/
 # Per-vault Cloudflare Worker deploy config (KV namespace id). Synced template ships wrangler.toml.example only.
 bin/share/worker/wrangler.toml
 
-# plainkeep-ui (ui/): TS source is template-only (NOT in engine.txt — vaults get a compiled binary via
-# `plainkeep setup ui` instead). Build outputs + deps are regenerable; the installed binary is a cache.
-ui/node_modules/
-ui/dist/
+# plainkeep-cli (cli/): TS source for the core binary + absorbed TUI is template-only (NOT in
+# engine.txt — vaults get compiled binaries via `plainkeep setup`/`init` instead). Deps are
+# regenerable; the installed binaries under .local/bin are caches.
+cli/node_modules/
 /.local/

@@ -1,0 +1,129 @@
+{
+  "description": "Language-neutral parity catalog for the resolver (bin/lib/resolver.py <-> cli/src/core/resolver.ts). Each case declares a fixture vault (verb dirs across engine bin/, plugins/<pack>/, and PLAINKEEP_PATH roots) plus invocations; test/run_core_parity.py builds the vault and runs BOTH the compiled binary's --core-resolve/--core-api and the untouched Python resolver, comparing exit code + exact stdout. Fixture grammar: verbs[].at is 'engine' | 'plugin:<pack>' | 'path:<ref>'; verbs[].files subset of ['run.py','cmd.json'] (default both); path_roots[] give the ordered PLAINKEEP_PATH roots ({ref, under:'vault'|'home', tilde:bool}); an invocation may override the PLAINKEEP_PATH order via path_order (a list of refs) to exercise per-call env re-reads.",
+  "cases": [
+    {
+      "name": "precedence-collision-and-shadow",
+      "rationale": "Two plugins/ packs, plugin-plugin collision (earlier pack wins), a plugin shadowing an engine name (ignored + listed by shadowed()), and a PLAINKEEP_PATH root that always loses. Exercises resolve/source_of/known_verbs/plugin_names/shadowed/iter_cmds ordering and the unknown-verb exit-4 contract in one vault. Mirrors run_resolver.py's _resolver_precedence matrix.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "search" },
+          { "at": "plugin:packA", "verb": "search", "files": ["cmd.json"] },
+          { "at": "plugin:packA", "verb": "pfoo" },
+          { "at": "plugin:packB", "verb": "pfoo", "files": ["cmd.json"] },
+          { "at": "plugin:packB", "verb": "pbaz" },
+          { "at": "path:extern", "verb": "pfoo", "files": ["cmd.json"] },
+          { "at": "path:extern", "verb": "pbar" }
+        ],
+        "path_roots": [{ "ref": "extern", "under": "vault" }]
+      },
+      "invocations": [
+        { "compare": "cli", "verb": "search" },
+        { "compare": "cli", "verb": "pfoo" },
+        { "compare": "cli", "verb": "pbaz" },
+        { "compare": "cli", "verb": "pbar" },
+        { "compare": "cli", "verb": "nope-verb" },
+        { "compare": "api", "api": "source_of:search" },
+        { "compare": "api", "api": "source_of:pfoo" },
+        { "compare": "api", "api": "source_of:pbaz" },
+        { "compare": "api", "api": "source_of:pbar" },
+        { "compare": "api", "api": "source_of:nope-verb" },
+        { "compare": "api", "api": "resolve:pfoo" },
+        { "compare": "api", "api": "resolve:nope-verb" },
+        { "compare": "api", "api": "known_verbs" },
+        { "compare": "api", "api": "plugin_names" },
+        { "compare": "api", "api": "shadowed" },
+        { "compare": "api", "api": "iter_cmds" }
+      ]
+    },
+    {
+      "name": "ordered-path-roots-per-call-reread",
+      "rationale": "Multiple ordered PLAINKEEP_PATH roots defining the same verb: default order resolves to the earlier root, and an invocation that overrides path_order flips the result in a FRESH process, proving neither side caches env across calls (per-call re-read of PLAINKEEP_PATH).",
+      "fixture": {
+        "verbs": [
+          { "at": "path:rootX", "verb": "shared" },
+          { "at": "path:rootY", "verb": "shared" },
+          { "at": "path:rootY", "verb": "yonly" }
+        ],
+        "path_roots": [
+          { "ref": "rootX", "under": "vault" },
+          { "ref": "rootY", "under": "vault" }
+        ]
+      },
+      "invocations": [
+        { "compare": "api", "api": "source_of:shared" },
+        { "compare": "api", "api": "source_of:shared", "path_order": ["rootY", "rootX"] },
+        { "compare": "cli", "verb": "shared" },
+        { "compare": "cli", "verb": "shared", "path_order": ["rootY", "rootX"] },
+        { "compare": "api", "api": "source_of:shared", "path_order": [] },
+        { "compare": "api", "api": "plugin_names" },
+        { "compare": "api", "api": "known_verbs" }
+      ]
+    },
+    {
+      "name": "duplicate-pack-name-dedupe",
+      "rationale": "A plugins/ pack and a PLAINKEEP_PATH root share the same basename ('dup'); both contribute verbs but plugin_names() must list the name once (dedupe), while each root's own verb still resolves to source plugin:dup.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:dup", "verb": "dverb" },
+          { "at": "path:dup", "verb": "pverb" }
+        ],
+        "path_roots": [{ "ref": "dup", "under": "vault" }]
+      },
+      "invocations": [
+        { "compare": "api", "api": "plugin_names" },
+        { "compare": "api", "api": "source_of:dverb" },
+        { "compare": "api", "api": "source_of:pverb" },
+        { "compare": "cli", "verb": "pverb" },
+        { "compare": "cli", "verb": "dverb" }
+      ]
+    },
+    {
+      "name": "verb-dir-shapes",
+      "rationale": "cmd.json-only and run.py-only verb dirs: both are resolvable (_is_verb_dir = run.py OR cmd.json), but --core-resolve (run_py) exits 4 for the cmd.json-only dir and 0 for the run.py-only dir, and iter_cmds lists only the cmd.json-bearing dir.",
+      "fixture": {
+        "verbs": [
+          { "at": "plugin:shapes", "verb": "cjonly", "files": ["cmd.json"] },
+          { "at": "plugin:shapes", "verb": "runonly", "files": ["run.py"] }
+        ]
+      },
+      "invocations": [
+        { "compare": "cli", "verb": "cjonly" },
+        { "compare": "cli", "verb": "runonly" },
+        { "compare": "api", "api": "resolve:cjonly" },
+        { "compare": "api", "api": "source_of:cjonly" },
+        { "compare": "api", "api": "known_verbs" },
+        { "compare": "api", "api": "iter_cmds" }
+      ]
+    },
+    {
+      "name": "tilde-in-plainkeep-path",
+      "rationale": "A PLAINKEEP_PATH entry written as '~/homeroot' must be expanded via $HOME identically on both sides (Python os.path.expanduser, TS process.env.HOME), resolving its verb to an absolute path under the fixture home.",
+      "fixture": {
+        "verbs": [{ "at": "path:homeroot", "verb": "tverb" }],
+        "path_roots": [{ "ref": "homeroot", "under": "home", "tilde": true }]
+      },
+      "invocations": [
+        { "compare": "cli", "verb": "tverb" },
+        { "compare": "api", "api": "source_of:tverb" },
+        { "compare": "api", "api": "plugin_names" }
+      ]
+    },
+    {
+      "name": "engine-runpy-only-iter-cmds-quirk",
+      "rationale": "Faithful-to-Python edge: iter_cmds seeds its 'seen' set only from engine *cmd.json* dirs, so a run.py-only engine verb does NOT suppress a same-named plugin cmd.json in iter_cmds, even though source_of still resolves it to 'engine' and shadowed() still reports the collision. Locks the port to the original's exact quirk.",
+      "fixture": {
+        "verbs": [
+          { "at": "engine", "verb": "eronly", "files": ["run.py"] },
+          { "at": "plugin:pk", "verb": "eronly", "files": ["cmd.json"] }
+        ]
+      },
+      "invocations": [
+        { "compare": "cli", "verb": "eronly" },
+        { "compare": "api", "api": "source_of:eronly" },
+        { "compare": "api", "api": "shadowed" },
+        { "compare": "api", "api": "iter_cmds" },
+        { "compare": "api", "api": "known_verbs" }
+      ]
+    }
+  ]
+}

@@ -355,7 +355,7 @@ def main() -> int:
         finally:
             restore(mod, old)
 
-        # Source-build fallback (contributor checkout): no gh, but ui/ + bun → still attemptable,
+        # Source-build fallback (contributor checkout): no gh, but cli/ + bun → still attemptable,
         # and the fake advance previews the bun compile into .local/bin.
         old = patch_probe(mod, _ui_installed=lambda: None, _ui_asset=lambda: "plainkeep-ui-test-arm64",
                           _ui_repo=lambda: None, _ui_source_buildable=lambda: True,

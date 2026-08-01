@@ -7,6 +7,37 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 ## [Unreleased]
 
 ### Added
+- **A compiled `plainkeep` core binary now does the dispatching** ([`docs/DECISIONS.md`](docs/DECISIONS.md)
+  ADR-013, Phase 1 — accepted 2026-08-01). `plainkeep <verb>` used to be a bash script that started three
+  Python interpreters (guardrail, resolver, verb); the gate and the resolver are now compiled into one
+  binary that does all three jobs in one process. **Nothing about the surface changed** — same verbs,
+  same flags, same `--json` envelope, same exit codes, same `.logs/` lines — and the old bash
+  dispatcher is kept verbatim as the zero-install floor, reachable any time with
+  `PLAINKEEP_CORE=off plainkeep …`. What you feel (medians of 25 runs through the shim, macOS arm64):
+  **TAB completion is about half again as fast** — 55 ms against the floor's 87 ms, a ratio of
+  1.54–1.62x across four runs. A verb whose output goes to **a file** is ~7% faster (88 vs 96 ms), and
+  on a **terminal** the helper described below never runs at all, so it is faster there too.
+  **Bare `plainkeep` in a terminal now opens the TUI**
+  (piped or redirected it still prints help, so scripts and agents are unaffected), and `plainkeep ui`
+  and `plainkeep mcp` are answered inside the binary — no separate `plainkeep-ui` download needed on
+  that path. Every claim here is gated by a permanent differential test suite
+  (`test/run_core_parity.py`, 217 checks) that runs each invocation through both the binary and the
+  bash floor and compares exit status, stdout, stderr and the audit line.
+  **Three things to know before you rely on it.** (1) **Piping a verb's output is ~7 ms (~8%) slower
+  than the bash floor** — 103 vs 96 ms. Clearing a bun quirk that would otherwise truncate output past
+  the pipe buffer needs one extra helper process, and that helper costs ~14 ms on the piped path — the
+  core's ~6 ms head start absorbs half of it, which is how a 14 ms helper nets out to ~7 ms against the
+  floor. A terminal, a file and MCP tool calls are all still faster. A durable fix belongs to Phase 2.
+  (2) **A verb killed by a fault signal reports the wrong one**: SIGILL/SIGFPE/SIGBUS/SIGSEGV surface
+  as SIGTRAP and print a bun crash report to stderr, and SIGPIPE/SIGXFSZ exit `128+N`. Fifteen of the
+  twenty-one terminating signals pass through exactly (measured on bun 1.3.14 / macOS arm64; Linux not
+  yet measured). (3) `plainkeep ui` still cannot be Ctrl-C'd once an action has run — a pre-existing
+  `@clack/prompts` limitation, unchanged by this work and shared with the standalone UI.
+- **Building from source now needs [Bun](https://bun.sh) >= 1.2.21** (CI and the released binaries use
+  1.3.14, pinned in `.bun-version`). Older bun silently drops empty-string arguments when spawning a
+  child — which would make the dispatcher eat an empty verb argument — so `cd cli && bun run build`
+  refuses to run below that version rather than producing a subtly wrong binary. This affects
+  contributors only: a vault installs a binary, never a toolchain.
 - **`ui/` — the ops terminal UI lives in this repo now, and `ops setup ui` installs it**
   ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-011). The TypeScript TUI (formerly the standalone
   `ops-ui` repo; history preserved via subtree) is template-only source under `ui/` — NOT in
@@ -24,6 +55,12 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   — and the ordinary `ops setup ui --yes` re-downloads, pinned to the expected release tag
   (`ui-v<version>`). The release workflow fails on any drift between the tag, `ui/package.json`,
   `bin/ui/version.txt`, and `ui/src/version.ts`.
+  **Superseded — read this before pushing a `ui-v*` tag:** the hybrid-core work (ADR-013) moved the
+  TUI's source into `cli/` and deleted `ui/`, and that release workflow was left pointing at the old
+  paths. It no longer fails "on drift" — it fails on its first step, every time. The floor's
+  `plainkeep-ui` therefore cannot be re-released until Phase 2/3 repoints or deletes the pipeline;
+  installing the last published asset and building from source both still work. The workflow file
+  says the same at the top.
 
 ### Changed
 - **Renamed: `opskit` → `plainkeep`, full consistency** (ADR-012). `opskit` collided with 40+

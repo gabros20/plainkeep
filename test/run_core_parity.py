@@ -75,6 +75,18 @@ def skip(name: str, why: str) -> None:
     skipped.append((name, why))
 
 
+# The one line run_all.py parses out of a suite's stdout. It exists because run_all reduces a suite to
+# PASS/FAIL on its EXIT STATUS alone, so anything a run declines to cover — a filtered run, a gated
+# cell — reached the summary as an unqualified PASS however loudly the suite's own output said
+# otherwise. A note is not a failure and never changes an exit code; it makes the qualification travel
+# WITH the verdict instead of scrolling past above it.
+SUITE_NOTE_PREFIX = "SUITE-NOTE:"
+
+
+def suite_note(text: str) -> None:
+    print(f"{SUITE_NOTE_PREFIX} {text}")
+
+
 def _crash_noise_opted_in() -> bool:
     return any(os.environ.get(v) == "1" for v in CRASH_NOISE_OPT_INS)
 
@@ -952,6 +964,11 @@ def main() -> int:
     if only:
         print(f"{YELLOW}{BOLD}FILTERED RUN — PLAINKEEP_PARITY_ONLY={only!r}. "
               f"This is a development aid, NOT a gate.{RESET}\n")
+        # STRUCTURAL, not typographic. run_all.py reduces a suite to PASS/FAIL on its exit status, so
+        # a filtered run used to reach its summary as an unqualified PASS no matter how loudly this
+        # said otherwise (quality review r2, N2). SUITE_NOTE lines are parsed by run_all.py and
+        # reprinted under that suite's summary line, so the qualification travels with the verdict.
+        suite_note(f"FILTERED RUN (PLAINKEEP_PARITY_ONLY={only!r}) — NOT A GATE")
 
     catalogs = _load_catalogs()
     ncases = 0
@@ -986,6 +1003,8 @@ def main() -> int:
         print(f"{YELLOW}{BOLD}{nskip} fault-signal cell(s) NOT RUN on this machine — this run does "
               f"not gate them. Re-run with PLAINKEEP_PARITY_FAULT_SIGNALS=1 before a release, or let "
               f"CI (PLAINKEEP_REQUIRE_CORE=1) do it.{RESET}")
+        suite_note(f"{nskip} fault-signal cell(s) NOT RUN (macOS crash-report noise) — "
+                   f"re-run with PLAINKEEP_PARITY_FAULT_SIGNALS=1 to gate them")
     return 1 if failed else 0
 
 

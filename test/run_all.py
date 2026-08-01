@@ -67,6 +67,19 @@ SUITES = [
 ]
 
 
+# A suite may print `SUITE-NOTE: <text>` lines to say what it did NOT cover — a filtered run, a
+# deliberately gated case. Without this, such a run reaches the summary below as an unqualified PASS,
+# because a suite is reduced to its EXIT STATUS here and nothing else: the qualification scrolls past
+# hundreds of lines earlier and the line a reader actually reads says PASS (core-parity quality review
+# r2, N2). A note NEVER changes a verdict — it travels with it.
+SUITE_NOTE_PREFIX = "SUITE-NOTE:"
+
+
+def _suite_notes(out: str) -> list[str]:
+    return [line.split(SUITE_NOTE_PREFIX, 1)[1].strip()
+            for line in out.splitlines() if line.startswith(SUITE_NOTE_PREFIX)]
+
+
 def main() -> int:
     print(f"\033[1m{'='*60}\nOffline design-validation suites\n{'='*60}\033[0m\n")
     statuses = []
@@ -76,15 +89,17 @@ def main() -> int:
         if proc.stderr:
             sys.stdout.write(proc.stderr)
         ok = proc.returncode == 0
-        statuses.append((label, ok))
+        statuses.append((label, ok, _suite_notes(proc.stdout)))
         print(f"\033[2m{'-'*60}\033[0m\n")
 
     print("\033[1mSUMMARY\033[0m")
     allok = True
-    for label, ok in statuses:
+    for label, ok, notes in statuses:
         allok = allok and ok
         mark = f"{GREEN}PASS\033[0m" if ok else f"{RED}FAIL\033[0m"
         print(f"  {mark}  {label}")
+        for note in notes:
+            print(f"        \033[33m! {note}\033[0m")
     print()
     return 0 if allok else 1
 

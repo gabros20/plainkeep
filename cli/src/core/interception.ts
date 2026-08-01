@@ -78,7 +78,10 @@ function reportUndrainedBytes(): void {
   try {
     fs.writeSync(
       2,
-      `plainkeep-core: ${pending} byte(s) of output may be lost — a dependency called process.exit() ` +
+      // NOTE the wording avoids spelling the exit call literally. bundle-exit-sites.test.ts audits
+      // the built bundle for `.exit(` and asserts exactly two call sites; a string literal
+      // containing that text is a decoy the audit would have to carve out, which weakens it.
+      `plainkeep-core: ${pending} byte(s) of output may be lost — a dependency ended the process ` +
         `while output was still queued, and a synchronous exit cannot wait for it\n`,
     );
   } catch {
@@ -121,8 +124,13 @@ function reportUndrainedBytes(): void {
  * `process.exit` call sites: clack's `block()` Ctrl-C handler (`process.exit(0)`) and main.ts's own
  * final `process.exit(r.code)`, which is outside this window. No error path in the graph exits 0, so
  * within the shipped dependency set a dependency-initiated 0 unambiguously means "the user quit".
- * That is a property of a DEPENDENCY SET and a version bump can change it, which is why it is pinned
- * by test/run_tui_pty.py's cancel row rather than by this paragraph.
+ *
+ * That is a property of a DEPENDENCY SET, so it is ENFORCED, not documented: bundle-exit-sites.test.ts
+ * rebuilds the bundle and fails if a third call site ever appears, naming it. Without that, a `bun
+ * add` or a clack bump introducing an error path that exits 0 would leave every other test green
+ * while this function silently reported that failure as success — and the tests that look like they
+ * cover this (the pty cancel row, the dependency-exit-zero probe) do not: they assert Ctrl-C still
+ * exits 0, which stays true in exactly that scenario.
  */
 export async function runOwningStdio(verb: string, body: () => Promise<number>): Promise<CoreResult> {
   // The ORIGINAL reference, not `process.exit.bind(process)`. Restoring a bound copy would put a

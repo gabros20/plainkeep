@@ -226,7 +226,47 @@ IGNORE = shutil.ignore_patterns(".git", ".index", ".logs", "__pycache__", "*.pyc
 # `bigout` prints a payload far larger than a pipe buffer (so backpressure is observable at all).
 BIG_BYTES = 300_000
 
+# Non-ASCII, spread across every place a byte can reach a frame: a cmd.json summary and hints (→ the
+# tool DESCRIPTION), a tool ARGUMENT, a verb's own RESULT, and a note body reached through `search`.
+# The suite was previously pure ASCII end to end (the r1 spec review, F2), which meant the property
+# the whole byte-oracle rests on — that both sides emit raw UTF-8, never \uXXXX — was never exercised
+# and could have regressed silently. U+00A0 is in there deliberately: it is in Python's str.strip()
+# set and not in JS's, so it also exercises pyStrip on the captured child streams.
+UNI_SUMMARY = "tesztige\u0301 — ✅ 日本語 «guillemets» \u00a0nbsp"
+UNI_HINTS = "hint: naïve café 😀"
+UNI_ARG = "Árvíztűrő tükörfúrógép ✅ 日本語 😀"
+UNI_BLOB = "blob: Árvíztűrő ✅ 日本語 😀 «x» \u00a0y"
+UNI_NOTE_TITLE = "Kávé jegyzet — árvíztűrő ✅ 日本語 😀"
+
+# The r1 spec review's EXACT shape for the key-order divergence, plus a JSON-NUMBER name for the
+# sibling path through dictKey(). ECMAScript hoists integer-index keys to the front of a plain
+# object; CPython preserves insertion order. The declared order below is the answer both modes must
+# give.
+KEYORDER_NAMES = ["alpha", "0", "zeta", "2", 5]
+KEYORDER_EXPECTED = ["alpha", "0", "zeta", "2", "5", "args"]
+
 PACK_VERBS = {
+    "keyorder": (
+        {"verb": "keyorder", "summary": "test verb: integer-like arg names", "usage": "x",
+         "risk": "read", "args": [{"name": n} for n in KEYORDER_NAMES], "reads": [], "writes": []},
+        "print('{}')\n",
+    ),
+    # A cmd.json whose `hints` is an OBJECT with integer-like keys. This one is expected to DIVERGE:
+    # JSON.parse has already reordered it before mcp.ts sees it, so no serializer can recover the
+    # order. Pinned so the divergence has a named cause instead of surfacing as a mystery byte.
+    "parserorder": (
+        {"verb": "parserorder", "summary": "", "usage": "x", "risk": "read",
+         "hints": {"2": "b", "1": "a"}, "reads": [], "writes": []},
+        "print('{}')\n",
+    ),
+    "uniecho": (
+        {"verb": "uniecho", "summary": UNI_SUMMARY, "hints": UNI_HINTS,
+         "usage": "plainkeep uniecho <text>", "risk": "read",
+         "args": [{"name": "text", "required": True}], "reads": [], "writes": []},
+        "import json, sys\n"
+        "print(json.dumps({'ops_json': 1, 'ok': True, 'verb': 'uniecho', 'argv': sys.argv[1:],\n"
+        f"                  'blob': {UNI_BLOB!r}}}, ensure_ascii=False))\n",
+    ),
     "echoargs": (
         {"verb": "echoargs", "summary": "test verb: echo the argv the dispatcher passed",
          "usage": "plainkeep echoargs <alpha> [beta]", "risk": "read",
@@ -295,7 +335,20 @@ def case_handshake(m: Mode) -> bytes:
     """initialize · a notification · ping · an id-less ping · tools/list."""
     s = m.session("handshake")
     s.send(INIT)
-    init = s.frame()
+    # THE SPACING PROPERTY, named. Everything else in this suite compares the two modes to each
+    # other, which cannot say WHY they agree; this pins the exact bytes one frame must have. CPython's
+    # json.dumps defaults to the separators ", " and ": " — WITH the spaces — and reproducing them is
+    # the whole reason whole sessions can be byte-compared at all. Without this check, a serializer
+    # that dropped the spaces would redden nine differential cases with no named cause.
+    raw_init = s.readline()
+    expected_init = (
+        b'{"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05", '
+        b'"capabilities": {"tools": {"listChanged": false}}, "serverInfo": {"name": "plainkeep", '
+        b'"version": "' + (REPO / "VERSION").read_text().strip().encode() + b'"}}}'
+    )
+    check(f"[{m.name}] the initialize frame is EXACTLY CPython's json.dumps spacing, byte for byte",
+          raw_init == expected_init, f"{raw_init[:200]!r}")
+    init = json.loads(raw_init)
     check(f"[{m.name}] initialize returns serverInfo name+version",
           init["result"]["serverInfo"]["name"] == "plainkeep"
           and init["result"]["serverInfo"]["version"] == (REPO / "VERSION").read_text().strip(),
@@ -511,6 +564,118 @@ def case_non_object_frame(m: Mode) -> bytes:
     return s.raw
 
 
+def case_key_order(m: Mode) -> bytes:
+    """Integer-like arg names keep the sidecar's declared order in `inputSchema.properties`.
+
+    The r1 spec review measured this diverging: ECMAScript hoists integer-index property keys to the
+    front of a plain object in ascending numeric order, CPython preserves insertion order, so
+    `alpha, 0, zeta, 2` rendered as `0, 2, alpha, zeta` under the core — same frame length, one
+    differing byte at offset 25947 of a 26744-byte tools/list frame. mcp.ts now builds `properties`
+    as a Map, which iterates in insertion order for every key shape, so the divergence class is
+    ELIMINATED rather than documented. `{"name": 5}` covers the sibling path through dictKey().
+
+    The order is asserted against the DECLARED order, not merely across the two modes: two sides that
+    hoisted identically would agree with each other and still be wrong.
+    """
+    write_pack(m.vault, "protopack", ["keyorder"])
+    try:
+        s = m.session("key-order")
+        s.send(INIT)
+        s.frame()
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        tools = {t["name"]: t for t in s.frame()["result"]["tools"]}
+        order = list(tools["keyorder"]["inputSchema"]["properties"])
+        check(f"[{m.name}] integer-like arg names keep the sidecar's declared order",
+              order == KEYORDER_EXPECTED, f"{order} != {KEYORDER_EXPECTED}")
+        rc = s.finish()
+        check(f"[{m.name}] the key-order session exits 0", rc == 0, f"rc={rc}")
+        return s.raw
+    finally:
+        remove_pack(m.vault, "protopack")
+
+
+def case_unicode(m: Mode) -> bytes:
+    """Non-ASCII through every path a byte can take into a frame.
+
+    This exists because the byte oracle's ENABLING property — that both sides emit raw UTF-8, exactly
+    as `json.dumps(…, ensure_ascii=False)` does, where a naive port would emit \\uXXXX — was asserted
+    nowhere: every payload in the suite was ASCII (r1 spec review, F2), so `scalarJson` could have
+    been changed to escape non-ASCII and nothing would have gone red. The byte comparison would have
+    quietly degraded into a shape check.
+
+    So the assertion is on the RAW BYTES, not just on the parsed values: the UTF-8 encoding must be
+    present and the escaped spelling of each of these characters must be absent.
+    """
+    write_pack(m.vault, "protopack", ["uniecho"])
+    try:
+        s = m.session("unicode")
+        s.send(INIT)
+        s.frame()
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        tools = {t["name"]: t for t in s.frame()["result"]["tools"]}
+        check(f"[{m.name}] a non-ASCII summary + hints become the tool description verbatim",
+              tools["uniecho"]["description"] == f"{UNI_SUMMARY}\n\n{UNI_HINTS}",
+              repr(tools["uniecho"]["description"])[:120])
+
+        s.send({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {"name": "uniecho", "arguments": {"text": UNI_ARG}}})
+        payload = json.loads(s.frame()["result"]["content"][0]["text"])
+        check(f"[{m.name}] a non-ASCII tool ARGUMENT survives the round trip through the dispatcher",
+              payload["argv"][:1] == [UNI_ARG], repr(payload["argv"])[:120])
+        check(f"[{m.name}] a non-ASCII verb RESULT survives the round trip",
+              payload["blob"] == UNI_BLOB, repr(payload.get("blob"))[:120])
+
+        s.send({"jsonrpc": "2.0", "id": 4, "method": "tools/call",
+                "params": {"name": "search", "arguments": {"query": "unicodeprobe"}}})
+        body = s.frame()["result"]["content"][0]["text"]
+        check(f"[{m.name}] a non-ASCII note title comes back through search",
+              UNI_NOTE_TITLE in body, body[:160])
+        rc = s.finish()
+        check(f"[{m.name}] the unicode session exits 0", rc == 0, f"rc={rc}")
+
+        # THE POINT OF THE CASE: raw bytes, not parsed values.
+        check(f"[{m.name}] every non-ASCII character is on the wire as raw UTF-8",
+              all(t.encode("utf-8") in s.raw for t in (UNI_SUMMARY, UNI_HINTS, UNI_ARG, UNI_BLOB,
+                                                       UNI_NOTE_TITLE)))
+        escaped = [e for e in (rb"\u00e1", rb"\u2705", rb"\ud83d", rb"\u00a0", rb"\u65e5")
+                   if e in s.raw]
+        check(f"[{m.name}] and NEVER as a \\uXXXX escape (the ensure_ascii=False property)",
+              not escaped, f"found {escaped}")
+        return s.raw
+    finally:
+        remove_pack(m.vault, "protopack")
+
+
+def case_parser_key_order(m: Mode) -> list[str]:
+    """The RESIDUAL half of the key-order class, pinned as an EXPECTED divergence.
+
+    An object arriving through `JSON.parse` — a non-string `hints` such as `{"2":"b","1":"a"}`, which
+    rides into the tool description verbatim — has already been reordered before mcp.ts sees it,
+    because JSON.parse builds an ordinary object and ECMAScript hoists integer-index keys. No
+    serializer can recover an order the parser discarded; only a hand-written JSON parser could, and
+    the shape is not worth one. (The same class is already XFAILed by the fuzz suite for pythonStr.)
+
+    Asserted in BOTH directions so it cannot rot silently: the core must give ['1','2'] and the floor
+    ['2','1']. If either side ever changes — a bun that preserves order, a CPython that stops — this
+    reddens with a named cause instead of surfacing as an unexplained byte difference elsewhere.
+    """
+    write_pack(m.vault, "protopack", ["parserorder"])
+    try:
+        s = m.session("parser-key-order")
+        s.send(INIT)
+        s.frame()
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        tools = {t["name"]: t for t in s.frame()["result"]["tools"]}
+        order = list(tools["parserorder"]["description"])
+        expected = ["1", "2"] if m.name == "core" else ["2", "1"]
+        check(f"[{m.name}] an integer-keyed object from a cmd.json orders {expected} "
+              f"(DOCUMENTED divergence, JSON.parse's doing)", order == expected, str(order))
+        s.finish()
+        return order
+    finally:
+        remove_pack(m.vault, "protopack")
+
+
 def case_broken_pipe(m: Mode) -> bytes:
     """The peer closes the read end and then asks for another frame.
 
@@ -711,6 +876,8 @@ DIFFERENTIAL = [
     ("argument ordering follows the sidecar, not the client", case_argument_ordering),
     ("confirm-class call → ops_confirm_needed, never --yes", case_confirm_class),
     ("a pack installed mid-session becomes visible", case_plugin_mid_session),
+    ("integer-like arg names keep the sidecar's order", case_key_order),
+    ("non-ASCII rides the wire as raw UTF-8, never \\uXXXX", case_unicode),
     ("a non-object frame ends the session on both sides", case_non_object_frame),
     ("a closed read end (EPIPE) ends the session on both sides", case_broken_pipe),
     ("a frame larger than the pipe buffer arrives intact", case_large_frame),
@@ -768,6 +935,12 @@ def main() -> int:
         (vault / "wiki" / "notes" / "widget.md").write_text(
             "---\ntype: note\ntitle: Widget design\nstatus: active\ntags: [demo]\n---\n"
             "# Widget design\n\nThe widget subsystem is the heart of the demo.\n", encoding="utf-8")
+        # A SECOND note, deliberately separate from the widget one so the existing tool-call case is
+        # not perturbed: its keyword is ASCII (searchable without depending on how the index folds
+        # non-ASCII) while its title is not, so a `search` result frame carries non-ASCII bytes.
+        (vault / "wiki" / "notes" / "unicode-probe.md").write_text(
+            f"---\ntype: note\ntitle: {UNI_NOTE_TITLE}\nstatus: active\ntags: [demo]\n---\n"
+            f"# {UNI_NOTE_TITLE}\n\nunicodeprobe — {UNI_BLOB}\n", encoding="utf-8")
         base = {**os.environ, "PLAINKEEP_HOME": str(vault)}
         base.pop("PLAINKEEP_PATH", None)
         core = Mode("core", vault, tmp, {**base, "PLAINKEEP_CORE": "require",
@@ -795,6 +968,16 @@ def main() -> int:
             case_second_signal_escape(core)
         except Exception as e:                     # noqa: BLE001
             check("[core] second-signal escape hatch", False, f"{type(e).__name__}: {e}")
+        # The one case that asserts the two modes DIFFER. It is deliberately outside DIFFERENTIAL,
+        # which byte-compares: this divergence is JSON.parse's and is documented rather than fixed.
+        try:
+            a, b = case_parser_key_order(core), case_parser_key_order(floor)
+            check("EXPECTED DIVERGENCE: a JSON.parse-ordered object differs across modes, "
+                  "and differs in the documented direction", a == ["1", "2"] and b == ["2", "1"],
+                  f"core={a} floor={b}")
+        except Exception as e:                     # noqa: BLE001
+            check("EXPECTED DIVERGENCE: integer-keyed object from a cmd.json", False,
+                  f"{type(e).__name__}: {e}")
 
     # STDOUT HYGIENE — every byte this suite ever read off an mcp server, in either mode, must be part
     # of a newline-terminated JSON-RPC frame. This is the analogue of run_tui_pty.py's render

@@ -58,6 +58,19 @@
 //     pythonStr() already discloses, and it is inherited from there rather than re-created.
 //   * A lone UTF-16 surrogate in a description. `json.dumps(ensure_ascii=False)` emits it raw and then
 //     dies encoding stdout; JSON.stringify escapes it to \udXXX and this keeps serving.
+//   * INTEGER-LIKE KEYS INSIDE A cmd.json VALUE — a non-string `hints` or `summary` such as
+//     `{"2": "b", "1": "a"}`, which rides into the tool `description` verbatim. `JSON.parse` builds an
+//     ordinary object, and ECMAScript hoists integer-index keys to the front in ascending order, so
+//     the object is ALREADY reordered before this module sees it; Python keeps insertion order. This
+//     is the parser's doing, not the serializer's — no serializer can recover an order the parser
+//     discarded — and only a hand-written JSON parser could fix it. Pinned as an expected divergence
+//     by test/run_mcp_protocol.py so a red suite has a named cause. The same class is what the
+//     fuzz suite already XFAILs for `pythonStr` (`json='{"2":1,"1":2}'`).
+//
+//     NOTE the shape that is NOT on this list any more: an integer-like ARG NAME. That produced the
+//     same divergence in `inputSchema.properties` until the r1 fix wave; it is now ELIMINATED rather
+//     than documented, because those keys are built here (pyJsonDumps' key-order note) instead of
+//     arriving through the parser.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -136,6 +149,26 @@ function scalarJson(v: unknown): string {
  * (a cmd.json's summary/hints/default ride into the tool description verbatim), and one stack frame
  * per nesting level would turn a deep sidecar into a stack overflow inside a live session. Input is
  * JSON-decoded, hence acyclic.
+ *
+ * KEY ORDER, which is the second thing a plain-object walk gets wrong. ECMAScript enumerates
+ * INTEGER-INDEX property keys FIRST, in ascending numeric order, before the string keys in insertion
+ * order; a CPython dict preserves insertion order for every key alike. So a pack declaring
+ * `args: [{"name":"alpha"},{"name":"0"},{"name":"zeta"},{"name":"2"}]` used to render
+ * `inputSchema.properties` as `0, 2, alpha, zeta` here against Python's `alpha, 0, zeta, 2` — same
+ * frame length, one differing byte in the middle (measured by the r1 spec review at byte 25947 of a
+ * 26744-byte tools/list frame). Not reachable from any sidecar in this repo, but a pack could do it,
+ * and a byte difference with no named cause is the worst way to find that out.
+ *
+ * So a `Map` is accepted as the ordered form of a JSON object, and every object this module builds
+ * whose keys can come from a cmd.json is built as one. The frames' own keys (`jsonrpc`, `id`,
+ * `result`, `type`, `properties`, …) are fixed literals that are never integer-like, so those stay
+ * plain objects.
+ *
+ * WHAT THIS CANNOT FIX, and it is the residual limit disclosed in the header: an object that arrives
+ * through `JSON.parse` — a non-string `hints`/`summary` riding into a tool description — has ALREADY
+ * been reordered before this function sees it, because JSON.parse builds an ordinary object. No
+ * serializer can recover an order the parser discarded; only a hand-written JSON parser could, and
+ * the shape is not worth one.
  */
 export function pyJsonDumps(v: unknown): string {
   interface Frame {
@@ -153,6 +186,19 @@ export function pyJsonDumps(v: unknown): string {
     if (done === null) {
       if (Array.isArray(value)) {
         stack.push({ open: "[", close: "]", values: value, keys: null, i: 0, parts: [] });
+      } else if (value instanceof Map) {
+        // A Map is how this module spells "a JSON object whose key ORDER is mine to control" — see
+        // the ordering note above. Maps iterate in insertion order for every key shape, which a
+        // plain object does not.
+        const entries = [...(value as Map<string, unknown>).entries()];
+        stack.push({
+          open: "{",
+          close: "}",
+          values: entries.map(([, val]) => val),
+          keys: entries.map(([k]) => k),
+          i: 0,
+          parts: [],
+        });
       } else if (isPlainObject(value)) {
         const entries = Object.entries(value);
         stack.push({
@@ -244,7 +290,10 @@ function toolOf(cmd: Record<string, unknown>): Record<string, unknown> {
     desc = pythonTruthy(desc) ? `${pythonStr(desc)}\n\n${pythonStr(hints)}` : hints;
   }
 
-  const props: Record<string, unknown> = {};
+  // A Map, not an object literal: `props`' keys are ARG NAMES a pack authors, so an integer-like one
+  // ("0", or a JSON number 5 that dictKey() renders "5") would be hoisted to the front of a plain
+  // object and diverge from Python's insertion order. See pyJsonDumps' key-order note.
+  const props = new Map<string, unknown>();
   const required: unknown[] = [];
   const rawArgs = Object.hasOwn(cmd, "args") ? cmd.args : [];
   // `for a in cmd.get("args", [])` — a present `null` reaches `for a in None` and raises, a dict
@@ -258,16 +307,17 @@ function toolOf(cmd: Record<string, unknown>): Record<string, unknown> {
     // absent key and for a JSON null, and for NOTHING else (0, false and "" all render).
     const dflt = Object.hasOwn(a, "default") ? a.default : null;
     const rendered = dflt === null || dflt === undefined ? "" : ` (default: ${pythonStr(dflt)})`;
-    props[dictKey(name)] = { type: "string", description: `positional arg${rendered}` };
+    props.set(dictKey(name), { type: "string", description: `positional arg${rendered}` });
     if (pythonTruthy(a.required)) required.push(name);
   }
-  // Assigned AFTER the loop, so a verb that declares an arg literally named `args` has that property
-  // overwritten while keeping its original position — the same in a Python dict and a JS object.
-  props.args = {
+  // Set AFTER the loop, so a verb that declares an arg literally named `args` has that property
+  // overwritten while keeping its original position — true of a Python dict and of a Map alike
+  // (`Map.set` on an existing key updates the value and leaves the slot where it was).
+  props.set("args", {
     type: "array",
     items: { type: "string" },
     description: "additional positional args / flags (e.g. sub-action tokens, --yes)",
-  };
+  });
   const schema: Record<string, unknown> = { type: "object", properties: props };
   if (required.length) schema.required = required;
 

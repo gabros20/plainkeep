@@ -316,13 +316,46 @@ export function stdioNeedsBlockingRestore(): boolean {
   return isPipeLike(1) || isPipeLike(2);
 }
 
+// Why the helper's failure is a DIAGNOSTIC and not a silent fall-through. Pure and exported so a test
+// can hand it a synthetic outcome, for the reason SpawnOutcome exists at all: reaching EMFILE/EAGAIN
+// for real means exhausting the machine's descriptors or process slots. Returns null when the helper
+// did its job, and otherwise the shortest true statement about why it did not — never a diagnosis the
+// outcome does not support (the same rule classifySpawnOutcome follows).
+export function blockingRestoreFailure(r: SpawnOutcome): string | null {
+  if (r.error?.code) return r.error.code;
+  if (typeof r.signal === "string" && r.signal !== "") return `killed by ${r.signal}`;
+  if (r.status !== null && r.status !== undefined && r.status !== 0) return `exit ${r.status}`;
+  return null;
+}
+
 // Best-effort by design: if the helper cannot run, the verb is spawned anyway and behaves exactly as
 // it did before this existed. Its own stdout/stderr are INHERITED — it has to hold the very
 // descriptors it is clearing — and it writes nothing.
+//
+// NON-FATAL, BUT NOT SILENT. This runs only when fd 1 or 2 is a pipe, i.e. exactly when the
+// O_NONBLOCK defect is live, so a helper that does not run restores a CRITICAL defect: the verb's
+// output past the pipe buffer is lost and the dispatcher reports a failure the floor does not have.
+// A transient EMFILE/EAGAIN is narrow — the same interpreter has to start a moment later for the verb
+// itself — but the mitigation for a SILENT-corruption bug must not itself fail silently, so the one
+// case where nothing else would say anything gets one line on stderr. stderr is chosen because stdout
+// is the machine channel (`--json`, and the MCP session's frames); the line is short enough not to be
+// the write that blocks, and the write is itself guarded because the descriptor it warns about is the
+// one it is writing to.
 function restoreBlockingStdio(py: string): void {
   if (!stdioNeedsBlockingRestore()) return;
+  let why: string | null;
   try {
-    spawnSync(py, ["-c", RESTORE_BLOCKING_PY], { stdio: ["ignore", "inherit", "inherit"] });
+    const r = spawnSync(py, ["-c", RESTORE_BLOCKING_PY], { stdio: ["ignore", "inherit", "inherit"] });
+    why = blockingRestoreFailure(r as SpawnOutcome);
+  } catch (e) {
+    why = (e as { code?: string })?.code ?? "unknown error";
+  }
+  if (why === null) return;
+  try {
+    process.stderr.write(
+      `plainkeep: could not clear O_NONBLOCK on stdout/stderr (${why}); ` +
+        `output larger than the pipe buffer may be truncated\n`,
+    );
   } catch {
     // a mitigation that fails must not become the failure it is preventing
   }

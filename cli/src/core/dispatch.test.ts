@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { EXIT_DENY } from "./guardrail.js";
 import {
+  blockingRestoreFailure,
   classifySpawnOutcome,
   dispatch,
   INTERCEPTS,
@@ -261,6 +262,21 @@ test("classifySpawnOutcome: a named signal death carries the number for main.ts 
   const unknown = classifySpawnOutcome({ status: null, signal: "SIGNOTREAL" }, "python3");
   expect(unknown.code).toBe(200);
   expect(unknown.signal).toBeUndefined();
+});
+
+test("blockingRestoreFailure: a helper that ran and exited 0 says nothing", () => {
+  // The overwhelmingly common outcome, and the one where a diagnostic would be pure noise: this runs
+  // on every piped verb.
+  expect(blockingRestoreFailure({ status: 0, signal: null })).toBeNull();
+});
+
+test("blockingRestoreFailure: every way the helper can fail produces a reason", () => {
+  // Silence here is the CRITICAL O_NONBLOCK defect restored with nothing said about it, so each of
+  // these must be a line on stderr rather than a fall-through.
+  expect(blockingRestoreFailure({ status: null, signal: null, error: { code: "EMFILE" } })).toBe("EMFILE");
+  expect(blockingRestoreFailure({ status: null, signal: null, error: { code: "EAGAIN" } })).toBe("EAGAIN");
+  expect(blockingRestoreFailure({ status: null, signal: "SIGKILL" })).toBe("killed by SIGKILL");
+  expect(blockingRestoreFailure({ status: 1, signal: null })).toBe("exit 1");
 });
 
 test("classifySpawnOutcome: agrees with what spawnSync really reports for a missing interpreter", () => {

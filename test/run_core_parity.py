@@ -419,10 +419,22 @@ def _compare_gate(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
 # with a raw stdout diff, and the next author rediscovers by hand the thing this guard exists to have
 # already explained). `--core-api intercepts` is the same data that drives those branches.
 #
-# Note the shape has two halves and only ONE of them belongs here: `flags` are short-circuited before
-# the gate and are genuinely not comparable against the floor, while `verbs` (dispatch.ts INTERCEPTS)
-# are answered after the gate and MUST stay comparable — byte-parity with the Python verb is what
-# makes an interception legitimate — so a verb appearing there must never cause a case to be skipped.
+# The shape has two halves and they are refused for DIFFERENT reasons, so they are read separately:
+#
+#   flags — short-circuited BEFORE the gate (`--version`, `--core-api`, …). The floor has no notion of
+#           them at all, so comparing one across modes reports a difference that is correct.
+#   verbs — answered after the gate (dispatch.ts INTERCEPTS), in two buckets:
+#             comparable    — `__complete`. Byte-parity with the Python verb is what makes
+#                             intercepting it legitimate, so these must NEVER be skipped: skipping
+#                             them would remove the only evidence that the interception is honest.
+#             noncomparable — `ui` (Task 6). Answered in-process but not comparable AS AN INVOCATION:
+#                             a TUI paints a terminal, so its stdout is frames, cursor moves and a
+#                             spinner whose frame count depends on how long a child took. Diffing
+#                             that against the floor is not a strict test, it is a flaky one.
+#
+# BOTH refusals are structural, and the second one exists because a classification nothing reads is a
+# comment rather than a gate: before this, a case author could write a dispatcher case for `ui` and
+# the harness would happily run it and go intermittently red for a reason no diff would explain.
 _INTERCEPTS_CACHE: dict | None = None
 
 
@@ -452,6 +464,21 @@ def _intercepted_argv(binary: str, argv: list[str]) -> str | None:
     if head in flags["bare"] and len(argv) == 1:
         return head
     return None
+
+
+def _noncomparable_verb(binary: str, argv: list[str]) -> str | None:
+    """The VERB a case dispatches, when the binary has classified it as not comparable against the
+    floor. Read from the binary's own registrations (`--core-api intercepts`), never from a list kept
+    here — a hand-kept copy is correct only until the next task registers an interception.
+
+    The verb is argv[0] after the dispatcher's normalization, which for the shapes a dispatcher case
+    can express is argv[0] itself: an OMITTED verb is the default-verb path (bare `plainkeep`, which
+    both dispatchers answer with `help`) and an EMPTY one is `help` too, and `help` is not
+    intercepted (run.md D6). No normalization is reimplemented here for that reason."""
+    if not argv:
+        return None
+    verbs = _load_intercepts(binary)["verbs"]
+    return argv[0] if argv[0] in verbs.get("noncomparable", []) else None
 
 def _install_floor(root: Path) -> None:
     """Make a built fixture vault runnable by the bash floor: the shim at the vault root, plus
@@ -534,6 +561,24 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
             f"is a SANCTIONED floor/core divergence (core: identity, exit 0; floor: unknown verb, "
             f"exit 4 — plan-phase1 'Binary introspection flags', advisor B4). Comparing it across "
             f"modes proves nothing. Assert the flag's behavior in a bun test or a shim check instead."
+        )
+    # The symmetric refusal for an interception the binary declares NON-comparable. Same shape as the
+    # flag refusal above and for the same reason: fail the CASE with an explanation, rather than let
+    # the comparator produce a diff whose meaning the next author has to rediscover.
+    nc = _noncomparable_verb(binary, argv)
+    if nc is not None:
+        return False, (
+            f"invalid dispatcher case: {nc!r} is answered IN-PROCESS by the binary and is registered "
+            f"NON-comparable (--core-api intercepts → verbs.noncomparable), so its stdout is not a "
+            f"byte stream this comparator can diff: a TUI paints a TERMINAL (frames, cursor moves, a "
+            f"spinner whose frame count depends on how long a child took) and a server is a SESSION "
+            f"rather than an invocation. Comparing it across modes would be FLAKY, not strict — it "
+            f"would fail on timing rather than on behavior. Assert it where it can be asserted "
+            f"honestly instead: drive {nc!r} end-to-end from its own harness (test/run_tui_pty.py for "
+            f"`ui`, the MCP driver for `mcp`), or a bun test for its pure seams. If this case only "
+            f"cares about the GATE — the verdict, exit code, stderr and audit line, all of which ARE "
+            f"comparable for an intercepted verb — rewrite it as compare: \"gate\", which runs the "
+            f"gate on both sides and never dispatches."
         )
     # An exclusion with nothing positive beside it is a case that passes in the failure it exists to
     # catch: an EMPTY stdout satisfies every "must not contain", so a completion path that silently

@@ -61,6 +61,12 @@ SKIP_LINE = "SKIP core-parity: no core binary (build with: cd cli && bun run bui
 # — which is why those cells are opt-in HERE and unconditional on the release/CI path. This is a
 # DELIBERATE coverage trade, spelled out in dispatcher.json's signal-passthrough-matrix rationale and
 # in ADR-013; a gated cell prints a visible SKIP and is counted in the summary, never a silent pass.
+#
+# THIS FILE IS NOT THE ONLY GATE. The same two variables also gate the bun-side signal sweep in
+# cli/src/core/dispatch.test.ts, which kills children with the same class of signal and, being part of
+# `bun test`, runs far more often than this suite. Gating only this file left the noise in place
+# (measured: 5 crash reports per `bun test`). If a third place ever kills a child with a
+# create-core-image signal, it belongs behind these same variables — do not invent a third name.
 CRASH_NOISE_OPT_INS = ("PLAINKEEP_REQUIRE_CORE", "PLAINKEEP_PARITY_FAULT_SIGNALS")
 
 # How many invocations the catalogs under test/cases/core-parity/ declare in TOTAL — platform- and

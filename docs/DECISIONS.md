@@ -443,11 +443,17 @@ outlive this branch's review.
   reddens a specific cell. **Linux delivery has never been measured**; CI's first
   run on ubuntu-latest is the measurement, and its expectations must not be pre-adjusted to match a
   guess.
-- **The fault-signal cells are opt-in on macOS — a deliberate coverage trade.** Each of those deaths
-  makes macOS write a crash report and pop a notification blaming plainkeep, per run. The 8 cells
-  whose signal has the "create core image" default action are therefore skipped locally on darwin
-  unless `PLAINKEEP_PARITY_FAULT_SIGNALS=1` or `PLAINKEEP_REQUIRE_CORE=1` (the CI/release path) is
-  set; a skipped cell prints a visible SKIP and is counted apart from the passes, never as one. The
+- **Signal tests that make macOS write a crash report are opt-in on darwin — a deliberate coverage
+  trade, in TWO suites.** Every death by a "create core image" signal makes macOS write a report and
+  pop a dialog blaming plainkeep, per run. Both places that do it are gated behind the same pair of
+  variables — `PLAINKEEP_PARITY_FAULT_SIGNALS=1` or `PLAINKEEP_REQUIRE_CORE=1` (the CI/release path):
+  the parity catalog's 8 cells (`test/cases/core-parity/dispatcher.json`) and the bun-side signal
+  sweep (`cli/src/core/dispatch.test.ts`), which is split so the quiet signals still run by default.
+  Each prints a visible SKIP — the harness per cell, the bun side as a notice plus bun's own skip
+  count — and neither ever reads as a pass. *Corrected 2026-08-01: the gate originally covered only
+  the parity catalog, which moved the noise instead of removing it, since `bun test` is the most-run
+  command in the repo and produced 5 reports per run on its own. The category is "anything in this
+  repo that kills a child with a report-generating signal", not "the parity catalog's cells".* The
   cost is real and macOS-specific: four of the six divergence pins are only enforced on an opt-in run
   or a release check, because CI runs Linux, where the same cells pin a *different* platform's
   delivery. Partial coverage in this exact file is what hid two defect classes already.

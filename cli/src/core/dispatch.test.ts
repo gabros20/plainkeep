@@ -297,24 +297,73 @@ test("classifySpawnOutcome: agrees with what spawnSync really reports for a miss
 // the inversion becomes the bug — and this test is what says so, in either direction.
 // --------------------------------------------------------------------------------------------------
 
+// THE CRASH-NOISE GATE, bun side. Same category, same env vars and same discipline as the parity
+// catalog's (test/run_core_parity.py, test/cases/core-parity/dispatcher.json): a signal whose macOS
+// default action is "create core image" (man 3 signal) makes the OS write a .ips crash report and pop
+// a "Python quit unexpectedly" dialog EVERY time a child dies of it. `bun test` is the most-run
+// command in this repo, so leaving these ungated moved the noise rather than removing it — which is
+// exactly what happened when the gate was first scoped to the parity catalog alone.
+//
+// The boundary is therefore NOT "parity cells" but "anything in this repo that kills a child with a
+// report-generating signal". Note 7/SIGEMT: the parity catalog deliberately excludes it (Linux has no
+// SIGEMT, so a cross-platform catalog cannot name it) but the sweeps below DO hit it, which is one of
+// the ways the first gate under-reached.
+//
+// `test.skipIf`, never an early `return`: a test that returns early PASSES while asserting nothing,
+// which Task 4's quality review filed as a defect (M4/LOW-6) — reintroducing that shape while fixing
+// a coverage gap would be its own joke. A skipped test is counted as `skip` by bun and names the
+// variable that runs it.
+const CORE_IMAGE_SIGNALS = new Set([3, 4, 5, 6, 7, 8, 10, 11, 12]);
+const FAULT_SIGNALS_OPTED_IN =
+  process.env.PLAINKEEP_PARITY_FAULT_SIGNALS === "1" || process.env.PLAINKEEP_REQUIRE_CORE === "1";
+// Gated only on darwin: the cost being avoided is a macOS crash report, so on Linux these are free.
+const CRASH_NOISY = process.platform === "darwin" && !FAULT_SIGNALS_OPTED_IN;
+const NOT_DARWIN = process.platform !== "darwin";
+
+// bun's reporter counts skips ("2 skip") but never names them, so the count alone tells a reader
+// something was not run without telling them WHAT or HOW to run it — the same half-visibility the
+// parity harness's SUITE-NOTE exists to fix. One line, only when the gate is actually suppressing
+// something, worded like the harness's.
+if (CRASH_NOISY) {
+  console.warn(
+    "SKIP (crash-noise gate): 2 core-image signal tests are NOT RUN, and therefore NOT PASSED — " +
+      "each kills children with signals macOS answers with a crash report and a dialog. " +
+      "Run them with PLAINKEEP_PARITY_FAULT_SIGNALS=1 (or PLAINKEEP_REQUIRE_CORE=1, the CI/release path).",
+  );
+}
+
 // Numbers that terminate by default on BOTH macOS and Linux, including all five whose names the two
 // platforms disagree about (7, 10, 12, 30, 31 — where the whole defect lives).
 const TERMINATING_SIGNALS = [1, 2, 3, 6, 7, 10, 12, 13, 14, 15, 30, 31];
+const QUIET_TERMINATING = TERMINATING_SIGNALS.filter((n) => !CORE_IMAGE_SIGNALS.has(n));
+const NOISY_TERMINATING = TERMINATING_SIGNALS.filter((n) => CORE_IMAGE_SIGNALS.has(n));
 
-test("signalNumberOf recovers the TRUE number for every signal a child can die of", () => {
-  for (const n of TERMINATING_SIGNALS) {
-    const r = spawnSync(
-      "python3",
-      ["-c", `import os, signal\nsignal.signal(${n}, signal.SIG_DFL)\nos.kill(os.getpid(), ${n})`],
-      { stdio: "ignore" },
-    );
-    expect(r.status).toBeNull(); // it really died by the signal rather than exiting
-    expect(r.signal).toBeTruthy();
-    // The assertion that matters: the number we recover is the number that was sent, whatever bun
-    // decided to call it.
-    expect([n, signalNumberOf(r.signal as string)]).toEqual([n, n]);
-  }
+function assertNumberRecovered(n: number): void {
+  const r = spawnSync(
+    "python3",
+    ["-c", `import os, signal\nsignal.signal(${n}, signal.SIG_DFL)\nos.kill(os.getpid(), ${n})`],
+    { stdio: "ignore" },
+  );
+  expect(r.status).toBeNull(); // it really died by the signal rather than exiting
+  expect(r.signal).toBeTruthy();
+  // The assertion that matters: the number we recover is the number that was sent, whatever bun
+  // decided to call it.
+  expect([n, signalNumberOf(r.signal as string)]).toEqual([n, n]);
+}
+
+// Split rather than gated wholesale, so a routine `bun test` still covers 7 of the 12 numbers —
+// including 30 and 31, two of the five whose names the platforms disagree about, which is where the
+// defect this sweep exists for actually lives.
+test("signalNumberOf recovers the TRUE number for every QUIET signal a child can die of", () => {
+  for (const n of QUIET_TERMINATING) assertNumberRecovered(n);
 });
+
+test.skipIf(CRASH_NOISY)(
+  "signalNumberOf recovers the TRUE number for the CORE-IMAGE signals too (crash-noise gated: PLAINKEEP_PARITY_FAULT_SIGNALS=1)",
+  () => {
+    for (const n of NOISY_TERMINATING) assertNumberRecovered(n);
+  },
+);
 
 test("signalNumberOf never yields 0 or a bogus number for an unknown name", () => {
   // A name in neither table (Linux real-time signals are the realistic case) must be null, so the
@@ -360,22 +409,45 @@ const DELIVERY: Array<[string, number, "delivered" | "sigtrap" | "ignored"]> = [
   ["SIGUSR2", 31, "delivered"],
 ];
 
-test("re-raising a signal in the bun runtime delivers exactly the classes the matrix pins", () => {
-  // macOS numbers; on another platform the same numbers name different signals, so only assert the
-  // classes where the two agree — the Python matrix, which resolves names per platform, is the
-  // portable guard.
-  if (process.platform !== "darwin") return;
-  for (const [name, n, expected] of DELIVERY) {
-    const r = spawnSync(process.execPath, ["-e", `process.kill(process.pid, ${n})`], { stdio: "ignore" });
-    const actual =
-      r.signal === null ? "ignored" : signalNumberOf(r.signal) === n ? "delivered" : "sigtrap";
-    // WHEN THIS GOES RED for a "sigtrap" or "ignored" row: bun now delivers that signal, so the
-    // dispatcher reproduces the floor for it — flip that row, flip the matching cell in
-    // dispatcher.json to {"core":"signal","floor":"signal"}, and delete its bullet in dispatch.ts.
-    expect([name, actual]).toEqual([name, expected]);
-    if (actual === "sigtrap") expect(signalNumberOf(r.signal as string)).toBe(5);
-  }
-});
+// macOS numbers; on another platform the same numbers name different signals, so only assert the
+// classes where the two agree — the Python matrix, which resolves names per platform, is the portable
+// guard. That used to be an early `return` on non-darwin, i.e. a test that PASSED while asserting
+// nothing (quality review M4/LOW-6); it is a visible skip now, on the same mechanism as the
+// crash-noise gate below it.
+function assertDeliveryClass(name: string, n: number, expected: string): void {
+  const r = spawnSync(process.execPath, ["-e", `process.kill(process.pid, ${n})`], { stdio: "ignore" });
+  const actual =
+    r.signal === null ? "ignored" : signalNumberOf(r.signal) === n ? "delivered" : "sigtrap";
+  // WHEN THIS GOES RED for a "sigtrap" or "ignored" row: bun now delivers that signal, so the
+  // dispatcher reproduces the floor for it — flip that row, flip the matching cell in
+  // dispatcher.json to {"core":"signal","floor":"signal"}, and delete its bullet in dispatch.ts.
+  expect([name, actual]).toEqual([name, expected]);
+  if (actual === "sigtrap") expect(signalNumberOf(r.signal as string)).toBe(5);
+}
+
+test.skipIf(NOT_DARWIN)(
+  "re-raising a QUIET signal in the bun runtime delivers exactly the classes the matrix pins",
+  () => {
+    for (const [name, n, expected] of DELIVERY) {
+      if (CORE_IMAGE_SIGNALS.has(n)) continue;
+      assertDeliveryClass(name, n, expected);
+    }
+  },
+);
+
+// The eight rows that make bun's crash handler fire — and therefore the OS write a report. This is
+// where BOTH pinned "sigtrap" divergences and half the agreement rows live, so gating it is the real
+// coverage cost of a quiet `bun test`; the parity catalog's identically-gated cells are the other
+// half of the same trade, and CI runs both (Linux, plus PLAINKEEP_REQUIRE_CORE=1).
+test.skipIf(NOT_DARWIN || CRASH_NOISY)(
+  "re-raising a CORE-IMAGE signal delivers the pinned classes (crash-noise gated: PLAINKEEP_PARITY_FAULT_SIGNALS=1)",
+  () => {
+    for (const [name, n, expected] of DELIVERY) {
+      if (!CORE_IMAGE_SIGNALS.has(n)) continue;
+      assertDeliveryClass(name, n, expected);
+    }
+  },
+);
 
 test("SIGPIPE is still ignored by the bun runtime — the documented 141 divergence still applies", () => {
   // Run in a CHILD so a future bun that stops ignoring SIGPIPE reddens this test instead of killing

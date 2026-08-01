@@ -345,7 +345,7 @@ as `ui-v0.2.0` with `plainkeep-ui` release assets (`plainkeep-ui-darwin-arm64`, 
 the `ops-ui`-named assets from ADR-011's release workflow.
 
 ## ADR-013 — Hybrid core: a compiled TS binary in front of the Python engine (Phase 1) (2026-08-01)
-**Status. PROPOSED.** Phase 1 is built and gated on branch `feat/hybrid-core-phase1` (nothing
+**Status.** PROPOSED. Phase 1 is built and gated on branch `feat/hybrid-core-phase1` (nothing
 pushed); this entry is written for the promotion decision, not as a record of one. It
 supersedes the **distribution model** of ADR-011 only — the *TUI* stops being a separately downloaded
 `plainkeep-ui` binary and becomes part of the core binary. ADR-011's stack split (stdlib-Python
@@ -424,8 +424,10 @@ outlive this branch's review.
   process-wide. So for exactly the failures where the signal *was* the diagnosis, it stops being one.
   Unreachable from `bin/` today — nothing there sets a fault disposition — but reachable by a
   crashing native extension, which is the optional search/model plane Phase 2 packages. Every signal
-  is a named case in `test/cases/core-parity/dispatcher.json`, so a bun upgrade that changes delivery
-  in either direction reddens a specific cell. **Linux delivery has never been measured**; CI's first
+  **but SIGEMT** — 20 of the 21, the exception being macOS-only, so a cross-platform catalog cannot
+  guard it (the case rationale says so, and the log records it AGREEING on macOS) — is a named case in
+  `test/cases/core-parity/dispatcher.json`, so a bun upgrade that changes delivery in either direction
+  reddens a specific cell. **Linux delivery has never been measured**; CI's first
   run on ubuntu-latest is the measurement, and its expectations must not be pre-adjusted to match a
   guess.
 - **The fault-signal cells are opt-in on macOS — a deliberate coverage trade.** Each of those deaths
@@ -455,7 +457,7 @@ outlive this branch's review.
   action has run, on floor and core alike — `@clack/prompts` 0.7.0 never removes the SIGINT/SIGTERM
   listeners each `spinner()` adds, which drops bun's default disposition. It is a pre-existing
   disclosure pinned by `test/run_tui_pty.py`, and the ~15-line `withSpinner()` fix is deliberately NOT
-  in Phase 1 because it changes TUI behaviour. The 110 Minor/LOW/INFO findings from this run's
+  in Phase 1 because it changes TUI behaviour. The 101 Minor/LOW/INFO findings from this run's
   fourteen reviews — batched rather than fixed, none blocking — are collected in
   `.orchestrate/followups.md` (a run artifact, untracked: read it before the branch's review notes are
   cleared, and promote the entries worth keeping into issues). Three are named here so that promoting

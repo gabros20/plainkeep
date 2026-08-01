@@ -14,17 +14,20 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   same flags, same `--json` envelope, same exit codes, same `.logs/` lines — and the old bash
   dispatcher is kept verbatim as the zero-install floor, reachable any time with
   `PLAINKEEP_CORE=off plainkeep …`. What you feel (medians of 25 runs through the shim, macOS arm64):
-  **TAB completion is ~1.6x faster** (55 ms against the floor's 87 ms), a verb whose output goes to a
-  terminal or a file is ~7% faster (88 vs 96 ms), **bare `plainkeep` in a terminal now opens the TUI**
+  **TAB completion is about half again as fast** — 55 ms against the floor's 87 ms, a ratio of
+  1.54–1.62x across four runs. A verb whose output goes to **a file** is ~7% faster (88 vs 96 ms), and
+  on a **terminal** the helper described below never runs at all, so it is faster there too.
+  **Bare `plainkeep` in a terminal now opens the TUI**
   (piped or redirected it still prints help, so scripts and agents are unaffected), and `plainkeep ui`
   and `plainkeep mcp` are answered inside the binary — no separate `plainkeep-ui` download needed on
   that path. Every claim here is gated by a permanent differential test suite
   (`test/run_core_parity.py`, 216 checks) that runs each invocation through both the binary and the
   bash floor and compares exit status, stdout, stderr and the audit line.
-  **Three things to know before you rely on it.** (1) **Piping a verb's output costs ~14 ms more than
-  the bash floor** — clearing a bun quirk that would otherwise truncate output past the pipe buffer
-  needs one extra helper process, so `plainkeep <verb> | …` is ~8% slower under the core (103 vs
-  96 ms) while a terminal, a file and MCP tool calls are all faster; a durable fix belongs to Phase 2.
+  **Three things to know before you rely on it.** (1) **Piping a verb's output is ~7 ms (~8%) slower
+  than the bash floor** — 103 vs 96 ms. Clearing a bun quirk that would otherwise truncate output past
+  the pipe buffer needs one extra helper process, and that helper costs ~14 ms on the piped path — the
+  core's ~6 ms head start absorbs half of it, which is how a 14 ms helper nets out to ~7 ms against the
+  floor. A terminal, a file and MCP tool calls are all still faster. A durable fix belongs to Phase 2.
   (2) **A verb killed by a fault signal reports the wrong one**: SIGILL/SIGFPE/SIGBUS/SIGSEGV surface
   as SIGTRAP and print a bun crash report to stderr, and SIGPIPE/SIGXFSZ exit `128+N`. Fifteen of the
   twenty-one terminating signals pass through exactly (measured on bun 1.3.14 / macOS arm64; Linux not

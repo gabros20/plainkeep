@@ -6,7 +6,9 @@
 # Since the hybrid-core refactor (docs/design/proposals/2026-07-29-hybrid-core-binary.md §3, Phase 1
 # Task 4) this file is a SHIM: the dispatch itself normally happens inside the compiled core binary
 # (.local/bin/plainkeep-core), which does the same gate → resolve → exec in ONE process instead of
-# three. The bash floor below is kept — VERBATIM, not a re-implementation — as the zero-install path
+# three — except when stdout/stderr is a PIPE, where it also spawns a helper to clear bun's
+# O_NONBLOCK flag and is therefore slower than this floor (ADR-013's consequences carry the
+# measurements). The bash floor below is kept — VERBATIM, not a re-implementation — as the zero-install path
 # and the escape hatch, and test/cases/core-parity/dispatcher.json proves the two agree on exit code,
 # stdout, stderr and the audit log line.
 set -euo pipefail

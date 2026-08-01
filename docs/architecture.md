@@ -80,7 +80,10 @@ Two rules keep the chokepoint honest. They are the two most load-bearing lines i
 `plainkeep <verb>` used to be a bash dispatcher that spawned `guardrail.py`, then `resolver.py`, then
 the verb — three interpreters to run one. It is now a **shim** in front of a compiled binary
 (`cli/` → `plainkeep-core`) that gates, resolves and execs in one process, with the same risk classes,
-the same exit codes, and the same `.logs/` line. The bash dispatcher is preserved verbatim inside that
+the same exit codes, and the same `.logs/` line. (One caveat worth carrying, because the "three
+interpreters become one" line is otherwise easy to over-read: when stdout or stderr is a **pipe** the
+binary additionally spawns a short-lived helper to undo a bun quirk, so the piped path costs two
+processes and is measurably slower than the bash floor. ADR-013's consequences have the numbers.) The bash dispatcher is preserved verbatim inside that
 shim as the zero-install floor: `PLAINKEEP_CORE=off` still runs it, and a permanent differential
 oracle (`test/run_core_parity.py`) compares the two on exit status, stdout, stderr and the audit line
 so "same enforcement, two implementations" is a tested claim rather than an intention. Both `plainkeep

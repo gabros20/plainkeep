@@ -76,6 +76,18 @@ Two rules keep the chokepoint honest. They are the two most load-bearing lines i
   error itself: `3` needs `--yes` with the exact re-run, `4` is not-found with a did-you-mean, `5` is
   denied. For an agent, error messages *are* the feedback loop.
 
+**Who runs the chokepoint changed in Phase 1 of the hybrid core (ADR-013); what it enforces did not.**
+`plainkeep <verb>` used to be a bash dispatcher that spawned `guardrail.py`, then `resolver.py`, then
+the verb — three interpreters to run one. It is now a **shim** in front of a compiled binary
+(`cli/` → `plainkeep-core`) that gates, resolves and execs in one process, with the same risk classes,
+the same exit codes, and the same `.logs/` line. The bash dispatcher is preserved verbatim inside that
+shim as the zero-install floor: `PLAINKEEP_CORE=off` still runs it, and a permanent differential
+oracle (`test/run_core_parity.py`) compares the two on exit status, stdout, stderr and the audit line
+so "same enforcement, two implementations" is a tested claim rather than an intention. Both `plainkeep
+ui` and `plainkeep mcp` are answered inside the binary now, and both still re-enter `plainkeep <verb>`
+as a child process for every action — the rule above is what they may not skip, whatever language
+they are written in.
+
 The risk classes are `read`, `safe_write`, `draft_only`, `confirm`, and `deny`. They encode one idea:
 **the blast radius of a mistake, not the intent of the caller.**
 
@@ -128,13 +140,17 @@ The first **built** tier is deliberately thin: Raycast script commands that shel
 the `--json` surface before anything heavier earns its keep. Mobile is documentation, not an app,
 because git is the only sync transport.
 
-The second built tier is **`plainkeep ui`**, the human terminal UI (ADR-011). See
+The second built tier is **`plainkeep ui`**, the human terminal UI (ADR-011; absorbed into the core
+binary by ADR-013). See
 [terminal-ui.md](terminal-ui.md) for how to use it.
 
-Its TypeScript source lives in this template's `ui/` directory, but a vault never sees that source.
-`ui/` is not in `script/engine.txt`. What `plainkeep setup ui --yes` installs is a **self-contained
-compiled binary**: built with Bun, shipped on the template repo's GitHub releases, sha256-verified,
-and placed in `$PLAINKEEP_HOME/.local/bin/` where the tiny stdlib `bin/ui/` shim looks first.
+Its TypeScript source lives in this template's `cli/` directory (it moved there from `ui/` when the
+core binary absorbed it — ADR-013), but a vault never sees that source: `cli/` is not in
+`script/engine.txt`. What a vault gets is a **self-contained compiled binary** built with Bun. Which
+binary depends on the dispatcher: under the core, the TUI *is* the core binary — `plainkeep ui` is
+answered in-process, and bare `plainkeep` in a terminal opens it. On the bash floor the stdlib
+`bin/ui/` shim still execs the separately installed `plainkeep-ui` that `plainkeep setup ui --yes`
+downloads and sha256-verifies into `$PLAINKEEP_HOME/.local/bin/`. Same source tree, two artifacts.
 
 `plainkeep ui` is the human *face* of the same one door. It reads `plainkeep.json` (the `actions[]` grammar) to
 generate menus and forms, so nothing has to be memorized. Every action it takes re-enters

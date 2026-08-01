@@ -343,3 +343,120 @@ dispatcher onto PATH, rename `.ops-engine-ref` → `.plainkeep-engine-ref`, and 
 `PLAINKEEP_*` environment variables in place of the old `OPS_*` ones. The terminal UI is released
 as `ui-v0.2.0` with `plainkeep-ui` release assets (`plainkeep-ui-darwin-arm64`, etc.), superseding
 the `ops-ui`-named assets from ADR-011's release workflow.
+
+## ADR-013 — Hybrid core: a compiled TS binary in front of the Python engine (Phase 1) (2026-08-01)
+**Status. PROPOSED.** Phase 1 is built and gated on branch `feat/hybrid-core-phase1` (nothing
+pushed); this entry is written for the promotion decision, not as a record of one. It
+supersedes the **distribution model** of ADR-011 only — the *TUI* stops being a separately downloaded
+`plainkeep-ui` binary and becomes part of the core binary. ADR-011's stack split (stdlib-Python
+engine, TypeScript for the interactive chrome, the machine contract as the seam between them) stands
+unchanged and is the reason this was cheap.
+**Context.** The entry plane was three interpreter spawns deep — bash dispatcher → `guardrail.py` →
+`resolver.py` → the verb — and the engine lives *inside every vault*, which is what necessitates
+`script/get`/`setup`/`update`, `engine.txt`, `.plainkeep-engine-ref` and the 3-way merges that made
+the ADR-012 rename migration expensive. The full argument, the measurements behind it, and the three
+architectures priced against each other are in
+[`design/proposals/2026-07-29-hybrid-core-binary.md`](design/proposals/2026-07-29-hybrid-core-binary.md);
+that proposal has a correction block at the top recording what Phase 1 falsified in it.
+**Decision.** Adopt the proposal's Option B — a single compiled `plainkeep` core binary (TypeScript
+under `cli/`, bun-compiled, tsgo-typechecked) that owns the dispatch, in front of the untouched
+Python engine — and ship it in three phases. **Phase 1, what this branch actually contains:**
+1. `cli/` absorbs `ui/`: one TS workspace producing two artifacts from one source tree
+   (`plainkeep-core`, and `plainkeep-ui` for the floor).
+2. The root `plainkeep` is a **shim**. `PLAINKEEP_CORE=auto|require|off` (with `PLAINKEEP_CORE_BIN`
+   as an absolute override) chooses the core binary or the **bash floor** — the pre-core dispatcher
+   preserved verbatim in the same file, still the zero-install path.
+3. Guardrail and resolver **semantics** are re-implemented in TS (`cli/src/core/guardrail.ts`,
+   `resolver.ts`) so gate + resolve + exec happen in one process. `bin/lib/guardrail.py` and
+   `bin/lib/resolver.py` are **untouched** and still authoritative for everything Python.
+4. In-core interceptions, in the order they landed: `__complete` (TAB completion), `ui` (the clack
+   TUI, also reached by bare `plainkeep` on a TTY), and `mcp` (the stdio server). `help` is NOT
+   intercepted — it still regenerates `plainkeep.json` through the Python manifest plane.
+5. A permanent, Python-owned differential oracle: `test/run_core_parity.py` over language-neutral
+   catalogs in `test/cases/core-parity/`, comparing the binary against the bash floor on exit status,
+   stdout, stderr and the audit line — **216 checks**, of which 208 run locally on macOS and 8 are
+   the opt-in fault-signal cells (below). Plus 91 bun unit tests and a PTY gate for the TUI.
+**Alternatives.** Priced in the proposal §2 and not re-argued here: **A** all-Python (uv-distributed,
+Textual TUI) — rejected because the interactive chrome stays at interpreter speed and the existing
+clack TUI is discarded; **C** full TS rewrite — rejected because the compute plane (LanceDB, MLX,
+extract/STT/VLM tiers) and the frozen Python plugin SDK drag it back to the hybrid after months of
+parity risk. The one thing measurement has since changed about that comparison is the latency claim —
+see the first consequence.
+**Consequences — what this costs, measured.** Every figure below was measured on **bun 1.3.14 /
+macOS arm64**; none is an estimate. Each is also recorded next to the code it constrains
+(`cli/src/core/dispatch.ts`'s header, `test/cases/core-parity/dispatcher.json`'s rationales), because
+the run logs cited by name live under `.orchestrate/`, which is deliberately untracked and will not
+outlive this branch's review.
+- **The piped path pays TWO spawns, and is now slower than the floor it replaces.** The headline
+  "three spawns become one" holds on a terminal and for a file, and is FALSE for a pipe. bun marks
+  its own stdout/stderr `O_NONBLOCK` when they are pipes, that flag lives on the open file
+  description, and `stdio: "inherit"` hands it to CPython, which then dies with `BlockingIOError` on
+  the first write it cannot satisfy in full — a verb's output past the pipe buffer was silently lost
+  (measured: 81,920 bytes delivered and exit 1, where the floor delivered 500,062 and exit 0). The
+  fix spawns one `python3` helper to clear the flag, and it runs only when fd 1 or 2 is a pipe.
+  Medians over 25 reps on a trivial verb (`.orchestrate/review-task7-quality-r1.md` §R1): piped **core
+  84.2 ms vs floor 76.8 ms** — about 10% slower, spreads non-overlapping — where on a TTY or a file
+  the core is ~11% faster (69.7 vs 78.3 ms). The helper itself costs +13.4 ms. Reproduced
+  independently while writing this entry, on the real `status --json` verb through the shim
+  (`.orchestrate/raw/task8-timing.log`, 25 reps): piped 103.0 vs the floor's 95.5 ms, to a file 88.5
+  vs 95.5 — same direction, same magnitude, and the core's own pipe-minus-file delta of 14.5 ms is the
+  helper. Interactive use pays none of it;
+  agents driving MCP still win (59.2 ms/call vs the floor's 78.8 over 200 calls); the caller who pays
+  is the shell script running piped verbs in a loop. **The durable fix belongs to Phase 2** — the
+  helper spawns a Python interpreter to work around a bun limitation, inside a binary whose point is
+  not needing Python, which is the dependency direction backwards. It is a stopgap carried
+  deliberately: correctness first, and 13 ms is the price of not truncating output.
+- **The Python guardrail and resolver are PERMANENT, so parity is a standing obligation rather than a
+  migration step.** They cannot be deleted in any phase: the frozen plugin SDK re-exports the gate
+  (`bin/lib/api.py:37`, `classify = guardrail.classify`), `bin/doctor/run.py:15` imports the
+  guardrail, and `bin/lib/manifest.py:55` (which `help` and `mcp` render from) plus
+  `bin/new/run.py:20` and `bin/plugin/run.py:29` import the resolver. Two implementations of one
+  contract will drift unless something watches them, which is why `run_core_parity.py` joined the
+  permanent suite instead of being a one-time gate.
+- **Six pinned signal divergences, macOS-measured, Linux UNMEASURED.** Of the 21 default-terminating
+  signals, **15 reproduce the floor exactly and 6 diverge** on bun 1.3.14 / macOS arm64
+  (`.orchestrate/raw/task4-fix2-signal-matrix.log`): SIGILL, SIGFPE, SIGBUS and SIGSEGV die as
+  SIGTRAP because bun's crash handler intercepts the re-raise (and prints a crash report to stderr
+  where the floor is silent), and SIGPIPE and SIGXFSZ exit 128+N because bun ignores them
+  process-wide. So for exactly the failures where the signal *was* the diagnosis, it stops being one.
+  Unreachable from `bin/` today — nothing there sets a fault disposition — but reachable by a
+  crashing native extension, which is the optional search/model plane Phase 2 packages. Every signal
+  is a named case in `test/cases/core-parity/dispatcher.json`, so a bun upgrade that changes delivery
+  in either direction reddens a specific cell. **Linux delivery has never been measured**; CI's first
+  run on ubuntu-latest is the measurement, and its expectations must not be pre-adjusted to match a
+  guess.
+- **The fault-signal cells are opt-in on macOS — a deliberate coverage trade.** Each of those deaths
+  makes macOS write a crash report and pop a notification blaming plainkeep, per run. The 8 cells
+  whose signal has the "create core image" default action are therefore skipped locally on darwin
+  unless `PLAINKEEP_PARITY_FAULT_SIGNALS=1` or `PLAINKEEP_REQUIRE_CORE=1` (the CI/release path) is
+  set; a skipped cell prints a visible SKIP and is counted apart from the passes, never as one. The
+  cost is real and macOS-specific: four of the six divergence pins are only enforced on an opt-in run
+  or a release check, because CI runs Linux, where the same cells pin a *different* platform's
+  delivery. Partial coverage in this exact file is what hid two defect classes already.
+- **Toolchain: bun >= 1.2.21 to build.** Older bun DROPS empty-string entries when spawning a child,
+  so the dispatcher would silently eat an empty verb argument (verified broken on 1.1.45 and 1.2.0,
+  fixed on 1.2.21; `cli/package.json`'s `check:bun` refuses to build below it). `.bun-version` pins
+  **1.3.14**, the revision every measurement in this entry was taken on, and CI installs from that
+  file rather than `latest` — pinning behaviour that is measured, not assumed.
+- **MCP is byte-identical to the Python server with one irreducible exception.** Whole sessions are
+  byte-compared across both modes. The exception is key ORDER inside a non-string cmd.json value:
+  `JSON.parse` hoists integer-like keys before any serializer sees them, so no serializer can recover
+  the order Python preserves. It is pinned by `case_parser_key_order` and enumerated, with the other
+  unreachable-from-this-repo fidelity limits, in `cli/src/core/mcp.ts`'s header and
+  `.orchestrate/task-7-report.md` §7. "Byte-compatible" is true only with that list attached.
+- **Unchanged, deliberately:** the `plainkeep.json/3` envelope, the exit-code protocol (0/2/3/4/5),
+  the risk classes, the multi-root plugin model and the trust ceiling. The seam did its job — this
+  refactor changes who dispatches, not what a caller sees. The bash floor remains a complete
+  dispatcher, so `PLAINKEEP_CORE=off` is a real escape hatch and not a legacy branch.
+- **Known and deferred, not lost:** `plainkeep ui` cannot be terminated except by SIGKILL once an
+  action has run, on floor and core alike — `@clack/prompts` 0.7.0 never removes the SIGINT/SIGTERM
+  listeners each `spinner()` adds, which drops bun's default disposition. It is a pre-existing
+  disclosure pinned by `test/run_tui_pty.py`, and the ~15-line `withSpinner()` fix is deliberately NOT
+  in Phase 1 because it changes TUI behaviour. The Minor and INFO findings from this run's fourteen
+  reviews — batched rather than fixed, none blocking — are collected in `.orchestrate/followups.md`
+  (a run artifact, untracked: read it before the branch's review notes are cleared, and promote the
+  entries worth keeping into issues).
+**Phases 2–3, unchanged from the proposal** and NOT decided by promoting this entry: Phase 2 packages
+`bin/**` as a uv-provisioned `plainkeep-engine` and takes the code out of the vault (and owns the
+durable fix for the O_NONBLOCK helper); Phase 3 deletes `script/`, `engine.txt`,
+`.plainkeep-engine-ref` and the `ui-v*` pipeline.

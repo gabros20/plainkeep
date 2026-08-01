@@ -1,5 +1,46 @@
 # Hybrid core proposal — a compiled TS core binary over the Python engine, code out of the vault
 
+> ## CORRECTION (2026-08-01, after building Phase 1) — two claims below are FALSE as written
+>
+> The text of this proposal is left exactly as it was written on 2026-07-29, because a design
+> document that quietly edits itself to match what was built teaches nobody anything. Phase 1 is
+> built (branch `feat/hybrid-core-phase1`, ADR-013 in [`../../DECISIONS.md`](../../DECISIONS.md)) and
+> measurement falsified two of its claims. Read the two corrections before quoting anything below.
+>
+> **1. "Three interpreter spawns to run one verb" → one (§1, §3) is true on a terminal and FALSE on a
+> pipe, which is the path agents and scripts use.** bun marks its own stdout/stderr `O_NONBLOCK` when
+> they are pipes; the flag lives on the open file description, so `stdio: "inherit"` hands it to
+> CPython, which dies with `BlockingIOError` on the first write it cannot satisfy in full — the verb's
+> output past the pipe buffer was silently lost. Clearing the flag needs a second process (bun exposes
+> no way to do it from JS), so **the piped path pays TWO spawns, not one**, at a measured +13.4 ms.
+> Medians over 25 reps on bun 1.3.14 / macOS arm64: piped **core 84.2 ms vs bash floor 76.8 ms** — on
+> the piped path the core is now ~10% SLOWER than the bash it replaces, not faster. On a TTY or a file
+> it is ~11% faster (69.7 vs 78.3 ms), and an MCP tool call still wins outright (59.2 vs 78.8 ms/call).
+> The trade was taken deliberately — losing a verb's output is a correctness defect and 13 ms is not —
+> but the durable fix is Phase 2's: today's stopgap spawns a *Python interpreter* to work around a
+> *bun* limitation, inside a binary whose stated point is not needing Python. Mechanism and cost:
+> `cli/src/core/dispatch.ts`, "O_NONBLOCK REMOVAL".
+>
+> **2. "`test/run_guardrail.py` and `test/run_resolver.py` already exercise this surface as a
+> subprocess — they become the acceptance gate, run against the binary" (§3) is wrong about
+> `run_guardrail.py`, and wrong about what follows from it.** `run_guardrail.py` loads
+> `bin/lib/guardrail.py` **in-process via `importlib`** (`test/run_guardrail.py:9,20-22`) and never
+> spawns anything, so it can never be pointed at a binary; `run_resolver.py` does both (an in-process
+> import at line 63 *and* a `subprocess.run` of the dispatcher at line 114). The consequence is bigger
+> than the mechanism: the Python guardrail and resolver are **permanent**, not migration scaffolding.
+> The frozen plugin SDK re-exports the gate (`bin/lib/api.py:37`), `bin/doctor/run.py:15` imports the
+> guardrail, and `bin/lib/manifest.py:55`, `bin/new/run.py:20` and `bin/plugin/run.py:29` import the
+> resolver — so no phase deletes them, and **parity is a standing obligation rather than a one-time
+> gate**. That is why the acceptance oracle is a new, permanent, Python-owned differential harness
+> (`test/run_core_parity.py` over `test/cases/core-parity/`, 216 checks) instead of the existing
+> suites re-pointed at the binary.
+>
+> Also worth knowing before quoting §5: the machine contract, the exit-code protocol and the risk
+> classes did survive Phase 1 unchanged, as promised. What §5 does not mention, because nobody knew
+> it yet, is that a verb killed by SIGILL/SIGFPE/SIGBUS/SIGSEGV reports SIGTRAP under the core and
+> that SIGPIPE/SIGXFSZ exit 128+N — six pinned divergences out of 21 signals, macOS-measured, Linux
+> unmeasured. See ADR-013's consequences.
+
 **Status: PROPOSED (2026-07-29).** Not yet an ADR. If accepted, this becomes ADR-013 and supersedes
 the *distribution model* of ADR-011 (engine files flowing into vaults via `script/update`) while
 keeping ADR-011's stack split and its reasoning intact.

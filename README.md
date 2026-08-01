@@ -193,11 +193,11 @@ fetches the exact pinned release.
 ## Project layout
 
 ```
-plainkeep            # the dispatcher: plainkeep <verb> (symlinked onto PATH by setup)
+plainkeep            # the dispatcher: a shim over the compiled core, with the bash floor inside it
 plainkeep.json       # GENERATED — the machine contract
 AGENTS.md  CLAUDE.md # the agent contract
 bin/                 # engine verbs (lib/ = shared code + the frozen plugin SDK)
-ui/                  # the terminal UI source (ships to vaults as a compiled binary)
+cli/                 # the core binary + terminal UI source (ships to vaults compiled, never as source)
 plugins/             # YOUR verbs + installed packs — never touched by updates
 frontends/raycast/   # zero-build Raycast script commands
 skills/operate-plainkeep/  # the operating manual any agent loads

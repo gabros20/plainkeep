@@ -23,9 +23,18 @@ from pathlib import Path
 
 ENGINE_BIN = Path(__file__).resolve().parents[1]          # bin/ — ships with the CODE, reserved
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # importable as `lib.resolver` AND top-level
+import vaultroot  # noqa: E402
+
 
 def _ops_home() -> Path:
-    return Path(os.environ.get("PLAINKEEP_HOME", ENGINE_BIN.parent))
+    """The SELECTED data root — where PLUGIN packs live. `ENGINE_BIN.parent` used to be the fallback,
+    which is the fifth copy of the engine-relative vault derivation ADR-014 D2 deletes (the plan
+    section enumerates four Python sites plus `resolveHome()`; this one is the same class and is
+    called out in the Task 1b report). Note the distinction the ADR draws and this file already got
+    right: deriving the ENGINE from the code's own location is correct — `ENGINE_BIN` above — while
+    deriving the VAULT from it is the assumption being deleted."""
+    return vaultroot.active_root()
 
 
 def _is_verb_dir(d: Path) -> bool:

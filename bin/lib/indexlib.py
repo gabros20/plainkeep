@@ -20,7 +20,17 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))
+import sys as _sys0
+_sys0.path.insert(0, str(Path(__file__).resolve().parent))  # importable as `lib.indexlib` AND top-level
+try:
+    from . import vaultroot  # type: ignore  # (namespace sibling)
+except ImportError:
+    import vaultroot  # type: ignore
+
+# The SELECTED data root — no engine-relative fallback (ADR-014 D2, Phase 2 Task 1b). An index built
+# against a guessed root is the quiet half of the same failure a wrong-root write is: it indexes the
+# wrong notes and answers searches from them.
+PLAINKEEP_HOME = vaultroot.active_root()
 CONTENT = Path(os.environ.get("PLAINKEEP_CONTENT", PLAINKEEP_HOME / "wiki"))
 INDEX_DIR = PLAINKEEP_HOME / ".index"
 DB = INDEX_DIR / "plainkeep.sqlite"

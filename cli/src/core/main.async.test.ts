@@ -8,6 +8,7 @@
 // registers a rejecting interception and imports it in a CHILD process, and this asserts that child.
 import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, realpathSync } from "node:fs";
+import { markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -16,6 +17,7 @@ import path from "node:path";
 // exit code would be 0, which is a different failure than the one under test.
 function rejectVault(): string {
   const home = realpathSync(mkdtempSync(path.join(tmpdir(), "pk-async-reject-")));
+  markVault(home);  // Task 1b: dispatch validates the root before anything else runs
   const d = path.join(home, "bin", "v_reject");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v_reject", risk: "read" }));

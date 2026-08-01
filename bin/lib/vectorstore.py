@@ -15,11 +15,13 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))  # importable as `lib.
 # The write seam (lib/vaultio.py) — imported both ways for the same reason as the line above:
 # indexlib does a bare `import vectorstore` (indexlib.py:51) and test/run_search_vec.py:65 too.
 try:
-    from . import vaultio  # type: ignore  # (namespace sibling)
+    from . import vaultio, vaultroot  # type: ignore  # (namespace siblings)
 except ImportError:
     import vaultio  # type: ignore
+    import vaultroot  # type: ignore
 
-PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))
+# The SELECTED data root — no engine-relative fallback (ADR-014 D2, Phase 2 Task 1b).
+PLAINKEEP_HOME = vaultroot.active_root()
 LANCE_DIR = PLAINKEEP_HOME / ".index" / "vectors.lance"
 TABLE = "chunks"
 # Build an ANN index once the table is big enough to need it; below this, flat scan is exact + fast.

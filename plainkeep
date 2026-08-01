@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # plainkeep — the single entrypoint dispatcher (§4.2). Verbs live in bin/<verb>/run.py with a cmd.json
 # sidecar; `plainkeep help` renders the surface from those, and the guardrail gates each by its risk.
-# PLAINKEEP_HOME defaults to this repo. The verb set is whatever bin/*/ exists — run `plainkeep help`.
+# The verb set is whatever bin/*/ exists — run `plainkeep help`.
 #
 # Since the hybrid-core refactor (docs/design/proposals/2026-07-29-hybrid-core-binary.md §3, Phase 1
 # Task 4) this file is a SHIM: the dispatch itself normally happens inside the compiled core binary
@@ -11,14 +11,67 @@
 # measurements). The bash floor below is kept — VERBATIM, not a re-implementation — as the zero-install path
 # and the escape hatch, and test/cases/core-parity/dispatcher.json proves the two agree on exit code,
 # stdout, stderr and the audit log line.
+#
+# WHICH VAULT (ADR-014, Phase 2 Task 1b). This script no longer decides. `$0`'s directory used to be
+# the fallback data root — `PK="${PLAINKEEP_HOME:-$(cd "$(dirname "$0")" && pwd)}"` — which is the
+# same "the engine lives in the vault" assumption as the engine-relative fallbacks in bin/lib, and it
+# means a copy of the launcher silently repoints the whole safety model. Discovery now runs once, in
+# bin/lib/vaultroot.py, and whichever dispatcher takes the invocation exports the CANONICAL root it
+# returns. `$0`'s directory is still used for the one thing it is a correct answer to: finding the
+# ENGINE (this script ships inside it).
 set -euo pipefail
-PK="${PLAINKEEP_HOME:-$(cd "$(dirname "$0")" && pwd)}"
-export PLAINKEEP_HOME="$PK"
+ENGINE="$(cd "$(dirname "$0")" && pwd)"
 
 # --------------------------------------------------------------------------------------------------
-# The bash floor — the dispatcher as it was before the core binary existed, unchanged.
+# The global `--vault` selector: PRE-VERB ONLY (Task 1b). `plainkeep --vault work capture x` selects;
+# `plainkeep capture --vault work` does NOT — there it is capture's own argument, and that asymmetry
+# is the point: one unambiguous position, so no verb can ever be surprised by an argument that also
+# steers the safety model. It is stripped here, before the verb is read, before the gate, before
+# completion/TUI/MCP interception and before the child's argv is built.
+# --------------------------------------------------------------------------------------------------
+PK_VAULT_SET=0
+PK_VAULT=""
+if [ "${1:-}" = "--vault" ]; then
+  if [ $# -lt 2 ]; then
+    echo "plainkeep: --vault needs a value (<name|id|absolute-path>)" >&2
+    exit 2
+  fi
+  PK_VAULT="$2"
+  PK_VAULT_SET=1
+  shift 2
+fi
+
+# --------------------------------------------------------------------------------------------------
+# Root discovery. Runs on BARE `python3` deliberately: the venv interpreter lives at
+# $PLAINKEEP_HOME/.venv, which is the very thing being resolved, and vaultroot.py is stdlib-only so
+# the floor interpreter is always enough. Any refusal (2 = usage, 5 = policy-denied location) is the
+# discovery module's own — this script only propagates it, so the floor and the core refuse with
+# byte-identical text because they run the SAME code.
+# --------------------------------------------------------------------------------------------------
+pk_discover() {
+  local out rc
+  set +e
+  if [ "$PK_VAULT_SET" -eq 1 ]; then
+    out="$(python3 "$ENGINE/bin/lib/vaultroot.py" --select --vault "$PK_VAULT")"
+  else
+    out="$(python3 "$ENGINE/bin/lib/vaultroot.py" --select)"
+  fi
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || exit "$rc"
+  PLAINKEEP_HOME="$(printf '%s\n' "$out" | sed -n '1p')"
+  PLAINKEEP_VAULT_ID="$(printf '%s\n' "$out" | sed -n '2p')"
+  export PLAINKEEP_HOME PLAINKEEP_VAULT_ID
+}
+
+# --------------------------------------------------------------------------------------------------
+# The bash floor — the dispatcher as it was before the core binary existed, unchanged apart from the
+# root it runs against now being discovered rather than assumed.
 # --------------------------------------------------------------------------------------------------
 pk_floor() {
+  pk_discover
+  local PK="$PLAINKEEP_HOME"
+
   # Interpreter selection (ADR-008): the stdlib floor runs on bare `python3` from PATH, but the OPTIONAL
   # deps (search + models) live in a repo-local $PLAINKEEP_HOME/.venv that `plainkeep setup` creates. A
   # bare-`python3` dispatcher can't see them, so prefer the venv interpreter WHEN it exists — this is what
@@ -60,16 +113,31 @@ pk_floor() {
 # the binary is looked for (the suite's binary-mode runs point it at an absolute built binary so that
 # COPIED fixture vaults route through the real core too).
 #
+# The default location is ENGINE-relative, not vault-relative: the core binary is part of the INSTALL
+# (it ships with this script), and Task 1b's whole point is that nothing about WHERE CODE LIVES may
+# decide which vault gets written to. Before, this read `$PLAINKEEP_HOME/.local/bin/plainkeep-core`,
+# which made the binary's location a function of the data root.
+#
 # `-x` is not enough for the same reason it is not enough for the venv python: a core binary built for
 # another platform, truncated by a half-finished download, or linked against a missing library is
 # executable and dead. So the candidate must also PASS `--core-selftest` before it is trusted with the
 # dispatch. auto degrades to the floor (with exactly ONE warning line, and none at all when there is
 # simply no binary installed); require refuses to degrade at all — never a silent fallback.
+#
+# The core does its OWN discovery (dispatch.ts), running this same vaultroot.py, so the selector is
+# forwarded to it verbatim rather than resolved here: one invocation must not pay for discovery twice.
 # --------------------------------------------------------------------------------------------------
 PK_CORE_MODE="${PLAINKEEP_CORE:-auto}"
-PK_CORE="${PLAINKEEP_CORE_BIN:-$PLAINKEEP_HOME/.local/bin/plainkeep-core}"
+PK_CORE="${PLAINKEEP_CORE_BIN:-$ENGINE/.local/bin/plainkeep-core}"
 
 pk_core_live() { [ -x "$PK_CORE" ] && "$PK_CORE" --core-selftest >/dev/null 2>&1; }
+
+pk_core_argv() {
+  if [ "$PK_VAULT_SET" -eq 1 ]; then
+    exec "$PK_CORE" --vault "$PK_VAULT" "$@"
+  fi
+  exec "$PK_CORE" "$@"
+}
 
 case "$PK_CORE_MODE" in
   off)
@@ -81,12 +149,12 @@ case "$PK_CORE_MODE" in
       echo "plainkeep: build it with (cd cli && bun run build), or unset PLAINKEEP_CORE for the bash floor" >&2
       exit 1
     }
-    exec "$PK_CORE" "$@"
+    pk_core_argv "$@"
     ;;
   auto)
     if [ -x "$PK_CORE" ]; then
       if "$PK_CORE" --core-selftest >/dev/null 2>&1; then
-        exec "$PK_CORE" "$@"
+        pk_core_argv "$@"
       fi
       # Broken-but-executable: one line, then carry on. A core that cannot answer its own selftest
       # must never take plainkeep down with it.

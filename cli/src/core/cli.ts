@@ -13,6 +13,7 @@ import {
   sourceOf,
 } from "./resolver.js";
 import { mainCli } from "./guardrail.js";
+import { takeVaultSelector } from "./vaultroot.js";
 
 export interface CoreResult {
   stdout?: string;
@@ -99,7 +100,13 @@ export const CORE_IDENTITY = `plainkeep-core ${CORE_VERSION}`;
 export const INTERCEPTED_FLAGS_BARE = ["--version", "-v", "--core-selftest"] as const;
 export const INTERCEPTED_FLAGS_ALWAYS = ["--core-resolve", "--core-api", "--core-gate"] as const;
 
-export function runCore(argv: string[]): CoreResult | Promise<CoreResult> {
+export function runCore(rawArgv: string[]): CoreResult | Promise<CoreResult> {
+  // The global `--vault` selector comes off FIRST, before the identity probes, before the hidden
+  // introspection flags and before dispatch() ever sees an argv. Pre-verb only, and gone by the time
+  // anything downstream — the gate, completion, the TUI/MCP interceptions, the child's argv — could
+  // mistake it for something of its own. `plainkeep --vault work --version` is still the version
+  // probe; `plainkeep capture --vault work` is still capture's own argument.
+  const { selector, rest: argv } = takeVaultSelector(rawArgv);
   const head = argv[0] ?? "";
   if (argv.length === 1 && (INTERCEPTED_FLAGS_BARE as readonly string[]).includes(head)) {
     if (head === "--core-selftest") return { stdout: `${CORE_IDENTITY} selftest ok`, code: 0 };
@@ -120,5 +127,5 @@ export function runCore(argv: string[]): CoreResult | Promise<CoreResult> {
     return mainCli(argv.slice(1));
   }
   // Everything else is a verb (including no argv at all, which is the default verb `help`).
-  return dispatch(argv);
+  return dispatch(argv, selector);
 }

@@ -8,6 +8,7 @@
 //     run.py would have printed something else entirely had the spawn happened.
 import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { completeIntercept } from "./complete.js";
@@ -40,6 +41,7 @@ function withHome<T>(home: string, fn: () => T): T {
 // A vault whose engine bin/ holds the given cmd.json sidecars, keyed by directory name.
 function vault(cmds: Record<string, unknown>): string {
   const home = mkdtempSync(path.join(tmpdir(), "pk-complete-"));
+  markVault(home);  // Task 1b: dispatch validates the root before anything else runs
   for (const [dir, cmd] of Object.entries(cmds)) {
     const d = path.join(home, "bin", dir);
     mkdirSync(d, { recursive: true });
@@ -248,6 +250,7 @@ test("descriptions are colon-cleaned and Python-stripped", () => {
 
 test("a malformed sidecar falls through rather than guessing what Python made of it", () => {
   const home = mkdtempSync(path.join(tmpdir(), "pk-complete-bad-"));
+  markVault(home);  // Task 1b: dispatch validates the root before anything else runs
   try {
     const d = path.join(home, "bin", "x");
     mkdirSync(d, { recursive: true });

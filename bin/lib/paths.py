@@ -2,10 +2,22 @@
 from __future__ import annotations
 import os
 import re
+import sys
 from datetime import date, datetime
 from pathlib import Path
 
-PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))
+try:
+    from . import vaultroot  # type: ignore  # (namespace sibling)
+except ImportError:      # imported top-level by a verb that put bin/ on sys.path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import vaultroot  # type: ignore
+
+# The SELECTED data root — from PLAINKEEP_HOME, with NO engine-relative fallback (ADR-014 D2/D3,
+# Phase 2 Task 1b). The `Path(__file__).resolve().parents[2]` that used to sit here is the "the
+# engine lives in the vault" assumption in code; because the write path does not consult the wall
+# for every write, its failure mode was a silent, successful write to the wrong root. The dispatcher
+# selects and validates a root and exports it; a verb reached any other way refuses (exit 2).
+PLAINKEEP_HOME = vaultroot.active_root()
 INBOX = PLAINKEEP_HOME / "inbox"
 TASKS = PLAINKEEP_HOME / "tasks"
 JOURNAL = PLAINKEEP_HOME / "journal"

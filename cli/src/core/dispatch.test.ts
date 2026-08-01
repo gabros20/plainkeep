@@ -5,10 +5,15 @@
 // bash-isms, and the choice NOT to canonicalize PLAINKEEP_HOME.
 import { test, expect } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, mkdirSync, writeFileSync, chmodSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { EXIT_DENY } from "./guardrail.js";
+import { markVault } from "./vault-fixture.js";
+import { VaultRefusal } from "./vaultroot.js";
 import {
   blockingRestoreFailure,
   classifySpawnOutcome,
@@ -48,6 +53,15 @@ async function withHomeAsync<T>(home: string, fn: () => Promise<T>): Promise<T> 
   }
 }
 
+// A throwaway vault that is actually a VAULT. Since Task 1b dispatch() validates the root before
+// it does anything else, so a bare mkdtemp is no longer a root any dispatch will accept — it refuses
+// with exit 2 and nothing downstream runs.
+function vaultDir(prefix: string): string {
+  const home = mkdtempSync(path.join(tmpdir(), prefix));
+  markVault(home);
+  return home;
+}
+
 test("verbFromArgv: no argv is the default verb `help` with no args", () => {
   expect(verbFromArgv([])).toEqual({ verb: "help", args: [] });
 });
@@ -70,30 +84,78 @@ test("verbFromArgv: a normal verb keeps every arg positionally, empties included
   });
 });
 
-test("resolveHome: a caller-supplied PLAINKEEP_HOME is returned VERBATIM, never canonicalized", () => {
+// REWRITTEN IN TASK 1b, deliberately. This pair used to pin the OPPOSITE of what the dispatcher now
+// promises: "a caller-supplied PLAINKEEP_HOME is returned VERBATIM, never canonicalized" and "with
+// no env, home is two parents above the executable". ADR-014 D2 deletes the second outright (the
+// executable-relative default resolved to `~` for an installed `~/.local/bin/plainkeep-core`), and
+// replaces the first — discovery returns the CANONICAL realpath and dispatch() exports THAT, which
+// is what lets the path-wall compare canonical-to-canonical. Keeping either assertion green would
+// have meant keeping the defect.
+test("dispatch EXPORTS the canonical root, not the caller's spelling of it", async () => {
   const real = mkdtempSync(path.join(tmpdir(), "pk-home-real-"));
   const holder = mkdtempSync(path.join(tmpdir(), "pk-home-link-"));
   const alias = path.join(holder, "vault");
   symlinkSync(real, alias);
+  markVault(real);
+  const d = path.join(real, "bin", "v");
+  mkdirSync(d, { recursive: true });
+  writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v", risk: "read" }));
+  writeFileSync(path.join(d, "run.py"), "raise SystemExit(0)\n");
   try {
-    // The whole point: the alias and its realpath are different strings, and the dispatcher must
-    // hand the child the one the caller typed. Canonicalizing here would silently relocate .logs and
-    // the resolver's engine bin/ relative to what the operator asked for.
-    expect(withHome(alias, resolveHome)).toBe(alias);
-    expect(alias).not.toBe(real);
+    // The alias and its realpath are different strings; the caller supplies the alias, and what the
+    // dispatcher (and therefore the child, the wall and the audit log) uses is the realpath.
+    await withHomeAsync(alias, async () => {
+      await dispatch(["v"]);
+      expect(process.env.PLAINKEEP_HOME).toBe(realpathSync(real));
+      expect(process.env.PLAINKEEP_VAULT_ID).toMatch(/^[0-9a-f-]{36}$/);
+    });
+    expect(alias).not.toBe(realpathSync(real));
   } finally {
     rmSync(holder, { recursive: true, force: true });
     rmSync(real, { recursive: true, force: true });
   }
 });
 
-test("resolveHome: with no env, home is two parents above the executable", () => {
+test("resolveHome REFUSES with no env — there is no executable-relative fallback left", () => {
   const prev = process.env.PLAINKEEP_HOME;
   delete process.env.PLAINKEEP_HOME;
   try {
-    expect(resolveHome()).toBe(path.resolve(path.dirname(process.execPath), "..", ".."));
+    expect(() => resolveHome()).toThrow(VaultRefusal);
+    // The code matters as much as the throw: usage (2), never the deny (5) that main.ts's
+    // last-resort catch would otherwise assign to any escaping exception.
+    try {
+      resolveHome();
+    } catch (e) {
+      expect((e as VaultRefusal).code).toBe(2);
+    }
   } finally {
     if (prev !== undefined) process.env.PLAINKEEP_HOME = prev;
+  }
+});
+
+test("dispatch REFUSES a PLAINKEEP_HOME that is not a marked vault, and spawns nothing", async () => {
+  // A bare directory carrying a whole verb surface — everything except the one thing that makes it
+  // a vault. The verb would exit 7 if it ran; the refusal is exit 2 and run.py is never reached.
+  const home = mkdtempSync(path.join(tmpdir(), "pk-unmarked-"));
+  const d = path.join(home, "bin", "v");
+  mkdirSync(d, { recursive: true });
+  writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v", risk: "read" }));
+  writeFileSync(path.join(d, "run.py"), "raise SystemExit(7)\n");
+  try {
+    let code: number | null = null;
+    await withHomeAsync(home, async () => {
+      try {
+        await dispatch(["v"]);
+      } catch (e) {
+        code = (e as VaultRefusal).code;
+      }
+    });
+    expect(code).toBe(2);
+    // No audit line either: the gate never ran, which is the ordering contract ("no audit-log
+    // append before a root is validated") asserted by side effect rather than by reading the code.
+    expect(existsSync(path.join(home, ".logs"))).toBe(false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
   }
 });
 
@@ -105,7 +167,7 @@ test("resolveHome: with no env, home is two parents above the executable", () =>
 
 // A vault with one read-class verb `help`, so the gate allows and INTERCEPTS decides the outcome.
 function helpVault(): string {
-  const home = mkdtempSync(path.join(tmpdir(), "pk-intercept-"));
+  const home = vaultDir("pk-intercept-");
   const d = path.join(home, "bin", "help");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "help", risk: "read" }));
@@ -168,7 +230,7 @@ test("interceptionFor: an Object.prototype member name is NOT a registered inter
 });
 
 test("dispatch: a verb named after an Object.prototype member RUNS, it is not swallowed", async () => {
-  const home = mkdtempSync(path.join(tmpdir(), "pk-proto-verb-"));
+  const home = vaultDir("pk-proto-verb-");
   try {
     for (const name of PROTOTYPE_NAMES) {
       const d = path.join(home, "bin", name);
@@ -188,7 +250,7 @@ test("dispatch: a verb named after an Object.prototype member RUNS, it is not sw
 });
 
 test("INTERCEPTS does not fire for a verb the gate refused — the gate still decides first", async () => {
-  const home = mkdtempSync(path.join(tmpdir(), "pk-intercept-deny-"));
+  const home = vaultDir("pk-intercept-deny-");
   const d = path.join(home, "bin", "danger");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "danger", risk: "deny" }));

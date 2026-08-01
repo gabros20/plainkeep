@@ -5,6 +5,7 @@
 // version probe, and the registration's comparability bucket.
 import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { INTERCEPTS, interceptionFor, dispatch } from "./dispatch.js";
@@ -79,6 +80,7 @@ test("only a COMPLETELY empty argv is bare — never `plainkeep \"\"`, never a r
 // which is how a test can tell "the interception ran" from "Python ran" rather than assuming.
 function uiVault(): string {
   const home = mkdtempSync(path.join(tmpdir(), "pk-ui-intercept-"));
+  markVault(home);  // Task 1b: dispatch validates the root before anything else runs
   const d = path.join(home, "bin", "ui");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "ui", risk: "read", tty: true }));

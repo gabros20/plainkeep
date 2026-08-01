@@ -5,7 +5,7 @@
 // through the ./index.ts barrel, which is the core's public surface (Task 4 closed the Task 1 seam
 // where this file reached into ./cli.ts directly).
 import type { CoreResult } from "./index.js";
-import { EXIT_DENY, runCore } from "./index.js";
+import { EXIT_DENY, runCore, VaultRefusal } from "./index.js";
 
 // Last-resort guard: this binary is an ENFORCEMENT tool, so an unexpected exception must never reach
 // the shell as a stack trace and exit 1 — a code outside the frozen protocol (0/2/3/4/5) that the
@@ -22,7 +22,13 @@ try {
   // which drives a rejecting interception through this exact file.
   r = await runCore(process.argv.slice(2));
 } catch (e) {
-  r = { stderr: `plainkeep-core: internal error (${e instanceof Error ? e.name : "Error"})`, code: EXIT_DENY };
+  // A VaultRefusal is a deliberate refusal on the frozen protocol, not an internal error: it keeps
+  // its own code (2 = usage, 5 = a policy-denied location) instead of being collapsed into deny (5).
+  // Its message may be EMPTY, which is not a bug — when bin/lib/vaultroot.py refused, its text has
+  // already been written to the real stderr and printing anything here would double it.
+  r = e instanceof VaultRefusal
+    ? { stderr: e.message || undefined, code: e.code }
+    : { stderr: `plainkeep-core: internal error (${e instanceof Error ? e.name : "Error"})`, code: EXIT_DENY };
 }
 // PRESENCE, not truthiness. `if (r.stdout)` also skipped the EMPTY string, which made "print one
 // empty line" inexpressible — and `__complete` can be asked for exactly that (a lone candidate whose

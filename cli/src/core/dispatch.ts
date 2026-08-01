@@ -20,6 +20,7 @@ import { completeIntercept } from "./complete.js";
 import { EXIT_NOT_FOUND, EXIT_OK, mainCli } from "./guardrail.js";
 import { runPy } from "./resolver.js";
 import { bareTtyLaunchesUi, uiIntercept } from "./ui.js";
+import { discoverRoot, requireHome } from "./vaultroot.js";
 
 // Exit codes for a spawn that never became a child. OFF the frozen gate protocol (0/2/3/4/5) by
 // design — these are the shell's own conventions, and the floor reaches them through bash's `exec`
@@ -35,24 +36,19 @@ const EXIT_COMMAND_NOT_FOUND = 127;
 // EXIT_UNKNOWN_SIGNAL below and for the same reasons; the two are adjacent so they read as a pair.
 const EXIT_SPAWN_FAILED = 201;
 
-// PLAINKEEP_HOME, resolved EXACTLY as the floor's `PK="${PLAINKEEP_HOME:-...}"`: a caller-supplied
-// value is trusted VERBATIM — never canonicalized, never rewritten. It is the vault's identity (the
-// resolver's engine bin/, the guardrail's .logs, every verb's own path derivation all hang off it),
-// and the shim contract is to preserve what the caller supplied.
+// PLAINKEEP_HOME, read back after dispatch() has set it from the validated discovery result. There
+// is NO fallback left: the executable-relative default that used to live here
+// (`path.resolve(path.dirname(process.execPath), "..", "..")`) is the assumption ADR-014 D2 deletes
+// — for an installed `~/.local/bin/plainkeep-core` it resolved to `~`, and because the write path
+// does not consult the wall for every write, that failure looked like success.
 //
-// The default, when nothing is supplied, is two parents above the executable
-// (`<home>/.local/bin/plainkeep-core` → `<home>`), mirroring resolver.ts's opsHome() and
-// guardrail.ts's plainkeepHome(). Note that this default is PHYSICAL where the floor's is LOGICAL:
-// Bun hands back an already-realpath'd process.execPath (a compiled binary has no logical argv[0] to
-// recover — argv is ["bun", "/$bunfs/root/main"]), while bash's `cd "$(dirname "$0")" && pwd` prints
-// the logical path. On macOS that is /private/tmp/v vs /tmp/v for a vault reached through a symlink.
-// It only bites when the binary is invoked DIRECTLY with no PLAINKEEP_HOME: through the shim (the
-// only supported entrypoint) PLAINKEEP_HOME is always exported first, so the env branch decides and
-// both sides agree byte-for-byte. Recorded in .orchestrate/task-4-report.md.
+// The value is also no longer the caller's spelling. Discovery returns the CANONICAL realpath and
+// dispatch() exports that, which is what makes "vault A was selected" a statement the path-wall can
+// enforce: the wall compares canonical-to-canonical, and on macOS `/tmp/v` and `/private/tmp/v` are
+// the same vault under two names. The old contract ("a caller-supplied value is trusted VERBATIM")
+// is deliberately gone with it.
 export function resolveHome(): string {
-  const env = process.env.PLAINKEEP_HOME;
-  if (env) return env;
-  return path.resolve(path.dirname(process.execPath), "..", "..");
+  return requireHome();
 }
 
 // The verb the floor would dispatch. Two bash behaviors, both load-bearing:
@@ -384,6 +380,10 @@ function restoreBlockingStdio(py: string): void {
 
 function spawnVerb(py: string, script: string, args: string[], home: string): CoreResult {
   restoreBlockingStdio(py);
+  // PLAINKEEP_HOME is the canonical root; PLAINKEEP_VAULT_ID travels with it (Task 1b) so a verb, a
+  // plugin or a scheduled job can assert WHICH vault it woke up in without re-reading the marker.
+  // It is read from process.env rather than threaded through, because dispatch() sets both together
+  // and an interception's fall-through reaches this same function.
   const r = spawnSync(py, [script, ...args], {
     stdio: "inherit",
     env: { ...process.env, PLAINKEEP_HOME: home },
@@ -528,12 +528,18 @@ export function spawnPythonVerb(verb: string, args: string[]): CoreResult {
 // The dispatcher contract end to end. Order is the floor's and is not negotiable: the gate runs
 // BEFORE resolution (so an unknown or refused verb never touches the filesystem beyond the gate's
 // own reads) and resolution runs before the spawn.
-export function dispatch(argv: string[]): CoreResult | Promise<CoreResult> {
-  const home = resolveHome();
-  // Export it before anything reads it: guardrail.ts and resolver.ts each re-derive PLAINKEEP_HOME
-  // per call, so assigning it here makes all three take the env branch and agree by construction —
-  // and it is the value the child inherits (floor line 7's `export PLAINKEEP_HOME="$PK"`).
-  process.env.PLAINKEEP_HOME = home;
+export function dispatch(argv: string[], selector: string | null = null): CoreResult | Promise<CoreResult> {
+  // ROOT DISCOVERY IS THE FIRST ACT (ADR-014 D3). It runs before the gate — which is what appends
+  // the audit line — before the resolver, which is what scans plugins, and before any interception.
+  // That ordering IS the "no mutating I/O, no audit-log append, no index creation, no plugin scan
+  // and no verb spawn before a root is validated" contract; it is not enforced by a check somewhere
+  // else, it is enforced by there being nothing above this line.
+  const sel = discoverRoot(selector);
+  // Export both before anything reads them: guardrail.ts and resolver.ts each re-derive
+  // PLAINKEEP_HOME per call, so assigning it here makes all three take the env branch and agree by
+  // construction — and it is what the child inherits.
+  process.env.PLAINKEEP_HOME = sel.root;
+  process.env.PLAINKEEP_VAULT_ID = sel.id;
 
   // Bare `plainkeep` ON A TERMINAL is the TUI; bare `plainkeep` anywhere else is still the default
   // verb. The rewrite happens HERE, before verbFromArgv and therefore before the gate, so the whole

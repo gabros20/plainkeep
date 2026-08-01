@@ -1,5 +1,6 @@
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
+import { markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runCore, CORE_IDENTITY } from "./cli.js";
@@ -35,6 +36,7 @@ test("--core-selftest identifies the core binary and exits 0", async () => {
 test("a non-flag argv dispatches: an unknown verb is the gate's not-found (4)", async () => {
   const prev = process.env.PLAINKEEP_HOME;
   const home = mkdtempSync(path.join(tmpdir(), "pk-core-cli-"));
+  markVault(home);  // Task 1b: an unmarked directory is no longer a root any dispatch accepts
   process.env.PLAINKEEP_HOME = home;
   try {
     for (const argv of [[], ["help"], ["capture", "hi"], ["--version", "extra"], ["--nope"]]) {

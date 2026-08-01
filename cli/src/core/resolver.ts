@@ -18,6 +18,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { requireHome } from "./vaultroot.js";
 
 export type Source = "engine" | `plugin:${string}`;
 
@@ -60,12 +61,12 @@ function sortedChildNames(dir: string): string[] {
   return names.sort();
 }
 
+// The SELECTED data root — where PLUGIN packs live. The executable-relative default that used to
+// sit here (mirroring Python `_ops_home()`'s `ENGINE_BIN.parent`) is deleted with the rest of them
+// (ADR-014 D2, Task 1b): a plugin scan is one of the things that must not happen before a root is
+// validated, and a guessed root would scan — and trust — packs from wherever the binary landed.
 function opsHome(): string {
-  const env = process.env.PLAINKEEP_HOME;
-  if (env) return env;
-  // Phase 1 default: two parents above the executable (.local/bin/plainkeep-core -> repo root),
-  // mirroring Python's `_ops_home()` default of ENGINE_BIN.parent (the vault root).
-  return path.resolve(path.dirname(process.execPath), "..", "..");
+  return requireHome();
 }
 
 function engineBin(): string {

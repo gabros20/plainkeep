@@ -19,16 +19,25 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+# bin/lib on sys.path FIRST: this file is exec'd standalone by the bash floor and by the parity
+# oracle, where the sibling modules below are not importable any other way.
+_LIB = os.path.dirname(os.path.abspath(__file__))
+if _LIB not in sys.path:
+    sys.path.insert(0, _LIB)
+
 # Exit-code protocol (Part 0.3) — single source of truth is lib/output.py; imported so the guardrail
-# CLI and dispatcher speak the same codes. Falls back to the literals when loaded in isolation (the
-# parity test execs this file standalone).
+# CLI and dispatcher speak the same codes. Falls back to the literals when loaded in isolation.
 try:
-    _LIB = os.path.dirname(os.path.abspath(__file__))
-    if _LIB not in sys.path:
-        sys.path.insert(0, _LIB)
     from output import EXIT_OK, EXIT_USAGE, EXIT_CONFIRM, EXIT_NOT_FOUND, EXIT_DENY  # noqa: F401
 except Exception:
     EXIT_OK, EXIT_USAGE, EXIT_CONFIRM, EXIT_NOT_FOUND, EXIT_DENY = 0, 2, 3, 4, 5
+
+# The LOCATION policy (wall.py) and the SELECTED data root (vaultroot.py). Neither import is guarded:
+# a missing sibling means a shredded engine tree, and the whole point of Task 1b is that a guardrail
+# which cannot establish where the vault is must refuse rather than guess.
+import vaultroot  # noqa: E402
+from wall import HOME, SYNC_DIR_MARKERS, WALLED_OFF_MARKERS, under_sync_dir  # noqa: E402,F401
+from wall import is_walled as wall_is_walled  # noqa: E402
 
 # Verb resolution (Part 2.1): the resolver is the single source of truth for the verb set and
 # cmd.json lookup, so plugin verbs (plugins/<pack>/, $PLAINKEEP_PATH) are gated identically to engine ones.
@@ -39,17 +48,10 @@ try:
 except Exception:
     _resolver = None
 
-# The SIBLING-ROOTS anchor (~/work, ~/files, ~/dotfiles). Two variables were relocating the same
-# conceptual thing: paths.py:17 reads PLAINKEEP_ROOTS_HOME, this file read only PLAINKEEP_TEST_HOME.
-# While nothing called classify() on a write path that divergence was invisible; with the seam live
-# (lib/vaultio.py) it means a relocated ~/files is DENIED by a wall still pointed at the real $HOME.
-# Converged here, PLAINKEEP_TEST_HOME first so the validated spec model (test/lib/guardrail.py:24)
-# and its 51 parity cases keep resolving exactly as before.
-HOME = (os.environ.get("PLAINKEEP_TEST_HOME")
-        or os.environ.get("PLAINKEEP_ROOTS_HOME")
-        or os.environ.get("HOME")
-        or "/Users/tamas")
-PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))
+# The SELECTED data root. No `parents[2]` fallback: deriving the vault from where the engine happens
+# to sit is the assumption ADR-014 deletes, and its failure mode is a successful write to the wrong
+# root with exit 0. `active_root()` refuses (exit 2) when nothing selected one.
+PLAINKEEP_HOME = vaultroot.active_root()
 BIN = Path(__file__).resolve().parents[1]
 
 VAULT = f"{HOME}/plainkeep"
@@ -77,26 +79,18 @@ def _with_real(*roots: str) -> list[str]:
 # while nothing called `classify()` on a write path (see lib/vaultio.py); the moment the seam is
 # live it would deny the vault's own verbs, so the wall follows the ACTIVE data root as well.
 #
-# KNOWN LIMIT, deliberately left to ADR-014 / Phase 2 Task 1: the wall cannot police a MISRESOLVED
-# root, because it is anchored to the same value it would have to doubt. Validating the root
-# (marker + registry, no silent fallback) is what closes that; this only makes the wall real for
-# the writes a correctly-resolved root performs.
+# NARROWING TO ONE ROOT is the next commit (ADR-014 D5): the root is validated as of this commit,
+# but the wall still carries the conventional location too, so the 51 validated cases and their
+# harnesses can move together rather than half a change at a time.
 VAULT_ROOTS = _with_real(VAULT, str(PLAINKEEP_HOME))
 FILES_ROOTS = _with_real(FILES)
 WORK_ROOTS = _with_real(WORK)
 WORKTREE_ROOTS = _with_real(f"{WORK}/.worktrees")
 DOTFILES_ROOTS = _with_real(DOTFILES)
 
-WALLED_OFF_MARKERS = [
-    f"{HOME}/Library/Mobile Documents", f"{HOME}/iCloud Drive",
-    "Mobile Documents", "iCloud", f"{HOME}/Pictures/Photos Library.photoslibrary", f"{HOME}/Pictures",
-]
-# Cloud-sync trees a .git must never live inside (doctor sync-wall, Part 0.4) — extends the location
-# wall with the sync clients; Syncthing's own maintainers warn never to sync a .git tree.
-SYNC_DIR_MARKERS = [
-    "Mobile Documents", "iCloud", "Dropbox", "Syncthing", ".sync",
-    "OneDrive", "Google Drive", "GoogleDrive",
-]
+# HOME / WALLED_OFF_MARKERS / SYNC_DIR_MARKERS / under_sync_dir are re-exported from wall.py (see the
+# import above). They moved because vault SELECTION has to ask the same location question before a
+# root exists, and this module cannot be imported that early any more.
 ALLOW, CONFIRM, DENY = "allow", "confirm", "deny"
 _ORDER = {ALLOW: 0, CONFIRM: 1, DENY: 2}
 SCHEDULABLE = {"read", "safe_write"}
@@ -140,15 +134,7 @@ def _under(path, root):
 
 
 def _walled(path):
-    pl = path.lower()
-    return any(m.lower() in pl for m in WALLED_OFF_MARKERS)
-
-
-def under_sync_dir(path: str) -> bool:
-    """True if `path` resolves inside a known cloud-sync tree (iCloud/Dropbox/Syncthing/…). Used by
-    doctor's sync-wall (Part 0.4) — a .git tree must never live under one."""
-    pl = (path or "").lower()
-    return any(m.lower() in pl for m in SYNC_DIR_MARKERS)
+    return wall_is_walled(path)
 
 
 def _under_any(path, roots) -> bool:

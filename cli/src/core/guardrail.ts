@@ -17,6 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { CoreResult } from "./cli.js";
 import { cmdJsonPath, knownVerbs, sourceOf } from "./resolver.js";
+import { requireHome, VaultRefusal } from "./vaultroot.js";
 
 // Exit-code protocol (Part 0.3), frozen: confirm→3, not-found→4, deny→5. Mirrors bin/lib/output.py,
 // which guardrail.py imports (falling back to these same literals when loaded in isolation).
@@ -44,11 +45,11 @@ export function decisionStr(d: Decision): string {
 }
 
 // PLAINKEEP_HOME resolution — identical to resolver.ts opsHome() so plugins.lock.json and the .logs
-// audit trail land where the resolver looks for verbs. Read PER CALL (no caching) like Python.
+// audit trail land where the resolver looks for verbs. Read PER CALL (no caching) like Python, and
+// with NO executable-relative fallback (ADR-014 D2, Task 1b): the audit log is the record of what
+// this binary allowed, so writing it to a guessed root is worse than not writing it at all.
 function plainkeepHome(): string {
-  const env = process.env.PLAINKEEP_HOME;
-  if (env) return env;
-  return path.resolve(path.dirname(process.execPath), "..", "..");
+  return requireHome();
 }
 
 // Deterministic nesting cap for the VALUE a gate decision is read from (a cmd.json is
@@ -553,6 +554,11 @@ export function mainCli(argv: string[]): CoreResult {
     }
     d = gate(verb, args);
   } catch (e) {
+    // A VaultRefusal is NOT an internal error and must not become a deny (5) with an audit line
+    // claiming the guardrail refused: no root was selected, so there is no vault to log to and the
+    // honest answer is the usage code the discovery module already chose. It can only be reached
+    // when mainCli() is entered without dispatch() having run (the hidden `--core-gate` probe).
+    if (e instanceof VaultRefusal) throw e;
     d = internalErrorDecision(e);
   }
   // Reached with a verdict in hand on EVERY path, so the audit line is always attempted (log() itself

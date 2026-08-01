@@ -44,6 +44,17 @@ export {
   type Interception,
   type SpawnOutcome,
 } from "./dispatch.js";
+// Phase 2 Task 1b — WHICH vault an invocation acts on: the pre-verb `--vault` selector and the
+// discovery call the dispatcher makes before it does anything else. The decision itself lives in
+// bin/lib/vaultroot.py and is shared with the bash floor rather than ported (see the module header).
+export {
+  discoverRoot,
+  engineRoot,
+  requireHome,
+  takeVaultSelector,
+  VaultRefusal,
+  type Root,
+} from "./vaultroot.js";
 // Task 5 — the first interception: `__complete` answered in-process from the live cmd.json surface,
 // falling through to the Python verb for every live-vault provider.
 export { completeIntercept } from "./complete.js";

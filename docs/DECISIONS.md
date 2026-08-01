@@ -416,6 +416,12 @@ outlive this branch's review.
   helper spawns a Python interpreter to work around a bun limitation, inside a binary whose point is
   not needing Python, which is the dependency direction backwards. It is a stopgap carried
   deliberately: correctness first, and ~13–15 ms is the price of not truncating a verb's output.
+  **That fix is upstream and identified rather than speculative:** `oven-sh/bun#33560` ("stdio: fix
+  O_NONBLOCK leak from process.stdout and make console writer EAGAIN-safe") is this exact defect,
+  child-inheritance case included, with #33827/#35953/#36066 adjacent. Checked 2026-08-01: all open
+  and unmerged, and the newest bun release is still 1.3.14 — so the trigger for deleting the helper is
+  a bun that carries #33560, and `dispatch.ts` names the lines to delete and the parity case that must
+  stay green without them.
 - **The Python guardrail and resolver are PERMANENT, so parity is a standing obligation rather than a
   migration step.** They cannot be deleted in any phase: the frozen plugin SDK re-exports the gate
   (`bin/lib/api.py:37`, `classify = guardrail.classify`), `bin/doctor/run.py:15` imports the

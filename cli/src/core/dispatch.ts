@@ -298,6 +298,23 @@ export function classifySpawnOutcome(r: SpawnOutcome, py: string): CoreResult {
 // (measured at ~15 ms for the helper). On a terminal it still pays one. That is a real regression
 // against the stated goal, and it buys back a verb's entire output — silently truncating a verb's
 // stdout is not a trade worth taking.
+//
+// WHEN TO DELETE THIS — the upstream fix exists and is identified, so this stopgap has a criterion
+// rather than an intention. **oven-sh/bun#33560**, "stdio: fix O_NONBLOCK leak from process.stdout
+// and make console writer EAGAIN-safe", is our exact bug: materializing `process.stdout` sets
+// O_NONBLOCK on the shared open file description, and it explicitly covers the child-inheritance case
+// (a child spawned with `stdio: "inherit"` flipping the parent's fd 1). Checked 2026-08-01: OPEN and
+// UNMERGED, and the newest bun release is still 1.3.14 (13 May 2026) — the version we pin and
+// measured on — so nothing has landed. Adjacent, also open: #33827 (restore O_NONBLOCK on inherited
+// stdio at exit), #35953 and #36066 (poll instead of spin on an EAGAIN pipe).
+//
+// The day we move to a bun carrying #33560: delete `RESTORE_BLOCKING_PY`, `isPipeLike`,
+// `stdioNeedsBlockingRestore`, `blockingRestoreFailure`, `restoreBlockingStdio` and its call in
+// `spawnVerb` — the piped path drops back to one spawn and its ~14 ms. The test that proves the
+// deletion is safe already exists and must stay green WITHOUT the helper: the
+// `large-output-across-the-pipe-buffer` case in test/cases/core-parity/dispatcher.json, whose three
+// invocations push 500 KB through a pipe and assert a tail marker that a truncating build cannot
+// produce. If it is green with these lines gone, upstream really did fix it.
 const RESTORE_BLOCKING_PY =
   "import os\nfor fd in (1, 2):\n    try:\n        os.set_blocking(fd, True)\n    except OSError:\n        pass\n";
 

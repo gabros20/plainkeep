@@ -65,6 +65,7 @@ MENU = "What do you want to do?"
 # the first version of this suite failed exactly that way.
 CAPTURE_PLACEHOLDER = "(triage later)"
 CAPTURED = "captured"                       # the spinner's stop message
+SPINNER = "capturing"                       # the spinner's START message (the action is in flight)
 OUTRO = "bye — everything you did went through"
 NO_TTY_REFUSAL = "is an interactive terminal UI"
 # app.ts's manifest-load failure message — the ordinary way `plainkeep ui` fails on a real vault.
@@ -462,6 +463,52 @@ def check_off_protocol_never_escapes(binary: str) -> None:
               len(lines_for_verb(vault, "ui")) == 1, f"{lines_for_verb(vault, 'ui')!r}")
 
 
+def check_cancel_during_action(binary: str) -> None:
+    """Ctrl-C typed WHILE AN ACTION IS RUNNING is a deliberate quit, and must exit 0 like the floor.
+
+    This is the path @clack/core's block() owns: while a spinner is up it installs a keypress handler
+    that calls process.exit(0) directly, so the interception never resumes. interception.ts guards
+    that window, and the guard has to tell a deliberate quit apart from an anomaly — 0 stays 0, an
+    off-protocol code becomes 5.
+
+    Pinned HERE rather than argued in a comment because "0 means the user quit" is a property of the
+    DEPENDENCY SET (measured: the shipped bundle's only in-window process.exit is clack's, and it
+    passes 0), and a version bump can change it. If some future dependency exits 0 on an error path,
+    this row is what will have to be revisited.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        vault = build_vault(td)
+        # Make the action slow so the spinner is reliably still up when the 0x03 byte lands. Without
+        # this the capture finishes first and the test would be driving the menu instead.
+        runpy = vault / "bin" / "capture" / "run.py"
+        runpy.write_text("import time\ntime.sleep(8)\n" + runpy.read_text(), encoding="utf-8")
+        s = Session([str(vault / "plainkeep")], vault_env(vault, binary), vault)
+        try:
+            s.expect(MENU)
+            s.send(b"\r")
+            s.expect(CAPTURE_PLACEHOLDER)
+            s.send(b"cancelled capture\r")
+            s.expect(SPINNER)                    # the action is in flight
+            s.send(b"\x03")                      # deliberate quit, mid-action
+            kind, code = s.wait(timeout=20.0)
+        except Timeout as e:
+            check("cancel: Ctrl-C during a running action exits 0 (floor parity)", False, str(e))
+            s.kill()
+            return
+        finally:
+            s.kill()
+        check("cancel: Ctrl-C during a running action exits 0 (floor parity, not an anomaly)",
+              (kind, code) == ("exit", 0), f"{kind}={code}")
+        # A deliberate quit is not an event worth narrating: the guard must stay silent here. If it
+        # ever starts reporting, the user gets a scary line for having pressed Ctrl-C.
+        check("cancel: the guard says nothing about a deliberate quit",
+              "ended early" not in s.clean, s.clean[-200:])
+        # ...and clack still renders its own "Canceled", not the "Something went wrong" it prints for
+        # any code > 1. That string is the user-visible half of this decision.
+        check("cancel: clack still renders 'Canceled', not 'Something went wrong'",
+              "Canceled" in s.clean and "Something went wrong" not in s.clean, s.clean[-200:])
+
+
 def _discover_binary() -> str | None:
     cand = os.environ.get("PLAINKEEP_CORE_BIN") or str(REPO / ".local" / "bin" / "plainkeep-core")
     p = Path(cand)
@@ -512,6 +559,7 @@ def main() -> int:
     check_action_end_to_end(binary)
     check_off_protocol_never_escapes(binary)
     check_signal_disposition(binary)
+    check_cancel_during_action(binary)
 
     print(f"{BOLD}TUI pty gate — the in-core terminal UI (Task 6) — {len(results)} checks "
           f"(binary: {binary}){RESET}\n")

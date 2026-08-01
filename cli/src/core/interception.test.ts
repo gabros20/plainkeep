@@ -70,21 +70,23 @@ test("runOwningStdio installs the guard only for the body's lifetime", async () 
 // The process.exit guard (Q2) — driven in a child, because the thing under test ends the process.
 // --------------------------------------------------------------------------------------------------
 
-test("a dependency's process.exit(0) inside the window does NOT report success", () => {
-  // The measured shape: @clack/core's block() calls process.exit(0) on Ctrl-C while a spinner is up,
-  // so an INTERRUPTED action used to exit 0 — a silent success for a run that did not complete.
+test("a dependency's process.exit(0) is a DELIBERATE QUIT and stays 0, silently", () => {
+  // @clack/core's block() calls process.exit(0) on Ctrl-C while a spinner is up. That is the user
+  // choosing to stop, not a failure — it must reach the shell as 0, exactly as the bash floor does.
+  // (An earlier version of this guard reported 5 here, which told the shell an anomaly had occurred
+  // for a normal cancel and made clack print "Something went wrong".)
   const r = runProbe("dependency-exit-zero");
-  expect(r.code).toBe(EXIT_ANOMALOUS);
-  // The output written before the exit still made it out (the guard reports rather than truncates).
+  expect(r.code).toBe(0);
+  // The output written before the exit still made it out.
   expect(r.stdout).toContain("before the dependency exits");
-  // ...and it says so, so the operator can tell this from an ordinary refusal.
-  expect(r.stderr).toContain("'probe' ended early — the run did not complete, so its status is 5 rather than 0");
+  // ...and NOTHING was said about it: a quit is not an event worth narrating.
+  expect(r.stderr).toBe("");
 });
 
 test("a dependency's off-protocol process.exit is redirected onto the protocol", () => {
   const r = runProbe("dependency-exit-off");
   expect(r.code).toBe(EXIT_ANOMALOUS);
-  expect(r.stderr).toContain("'probe' ended early — the run did not complete, so its status is 5 rather than 1");
+  expect(r.stderr).toContain("'probe' ended early with a status this system has no meaning for (1); reporting 5");
 });
 
 test("the guard is uninstalled after the window, so a later exit is the caller's own", () => {

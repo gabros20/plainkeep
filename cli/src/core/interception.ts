@@ -101,12 +101,28 @@ function reportUndrainedBytes(): void {
  *  * `process.exit` is restored on the way out, including when the body throws — the guard must not
  *    outlive the window it belongs to, or a later caller's exit would be silently rewritten.
  *
- * A dependency-initiated exit is treated as ANOMALOUS regardless of the code it asked for, including
- * 0. That is a deliberate decision, not a clamp falling out: the contract is that the interception
- * RETURNS its code, so a `process.exit` from inside the window means control was taken away from the
- * seam and this run's success cannot be vouched for. Reporting 0 there is precisely the "silent
- * success" the Global Constraints forbid — it is what made an interrupted `plainkeep ui` action look
- * like a completed one.
+ * A dependency-initiated exit has its INTENT MAPPED onto the protocol — it is not blanket-treated as
+ * a failure, and the distinction matters:
+ *
+ *   * `process.exit(0)` is a DELIBERATE QUIT. The one call site that reaches this in the shipped
+ *     graph is @clack/core's `block()` keypress handler on Ctrl-C, i.e. the user chose to stop.
+ *     Quitting an interactive program you chose to quit is not an error — it exits 0, exactly as the
+ *     bash floor does, and no diagnostic is printed.
+ *   * anything OFF the protocol (1, 127, …) becomes EXIT_ANOMALOUS, because those codes mean nothing
+ *     in this system and must never reach the shell.
+ *
+ * An earlier version reported 5 for EVERY dependency exit including 0. That was wrong three ways at
+ * once: it told the shell an anomaly had occurred when the user had simply quit, it made clack print
+ * "Something went wrong" (its own exit hook renders that for any code > 1) after a normal cancel, and
+ * it diverged from the floor, where Ctrl-C exits 0 and says "Canceled".
+ *
+ * WHETHER 0-AS-CANCEL IS DISTINGUISHABLE FROM 0-AS-ERROR — measured, not assumed, because the answer
+ * decides whether honouring 0 is safe. `bun build` of src/core/main.ts contains exactly TWO real
+ * `process.exit` call sites: clack's `block()` Ctrl-C handler (`process.exit(0)`) and main.ts's own
+ * final `process.exit(r.code)`, which is outside this window. No error path in the graph exits 0, so
+ * within the shipped dependency set a dependency-initiated 0 unambiguously means "the user quit".
+ * That is a property of a DEPENDENCY SET and a version bump can change it, which is why it is pinned
+ * by test/run_tui_pty.py's cancel row rather than by this paragraph.
  */
 export async function runOwningStdio(verb: string, body: () => Promise<number>): Promise<CoreResult> {
   // The ORIGINAL reference, not `process.exit.bind(process)`. Restoring a bound copy would put a
@@ -115,26 +131,29 @@ export async function runOwningStdio(verb: string, body: () => Promise<number>):
   // never truly be uninstalled. Invoked below with .call(process) to keep the receiver right.
   const realExit = process.exit;
   const guarded = ((code?: number): never => {
-    // `code` is recorded for the diagnostic below; it deliberately does NOT decide the exit status.
+    // `process.exit()` with no argument means 0, same as node/bun.
     const requested = typeof code === "number" ? code : 0;
+    const final = clampToProtocol(requested);
     reportUndrainedBytes();
-    if (requested !== EXIT_ANOMALOUS) {
-      // Addressed to the OPERATOR, not to the next maintainer. The routine way this fires is a user
-      // pressing Ctrl-C during a spinner, and telling them a dependency ended the process from
-      // inside an stdio-owning interception is implementation noise in the face of someone who just
-      // wanted to stop. It has to say something, though: a bare exit 5 with no line at all is the
-      // "refusals teach" rule broken in the other direction.
+    // ONLY when the code was actually changed. A deliberate Ctrl-C quit is the routine path through
+    // here and it must be silent — printing a line every time someone quits is noise, and the
+    // previous version of this guard did exactly that.
+    if (final !== requested) {
+      // Addressed to the OPERATOR, not to the next maintainer: "a dependency ended the process from
+      // inside an stdio-owning interception" is implementation detail in the face of someone whose
+      // command just stopped. It has to say something, though — a bare exit 5 with no line at all is
+      // the "refusals teach" rule broken in the other direction.
       try {
         fs.writeSync(
           2,
-          `plainkeep: '${verb}' ended early — the run did not complete, so its status is ` +
-            `${EXIT_ANOMALOUS} rather than ${requested}\n`,
+          `plainkeep: '${verb}' ended early with a status this system has no meaning for ` +
+            `(${requested}); reporting ${final}\n`,
         );
       } catch {
         // never let the diagnostic be the failure
       }
     }
-    return realExit.call(process, EXIT_ANOMALOUS);
+    return realExit.call(process, final);
   }) as typeof process.exit;
 
   process.exit = guarded;

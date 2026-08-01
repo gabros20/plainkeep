@@ -11,6 +11,7 @@
 // TUI into `CoreResult.stdout` is not merely impractical, it is wrong — the output is a terminal
 // being painted, and it has to appear WHILE the user is answering prompts, not after.
 import type { CoreResult } from "./cli.js";
+import { EXIT_ANOMALOUS, runOwningStdio } from "./interception.js";
 import { VERSION } from "../tui/version.js";
 
 // `plainkeep ui --version` / `-v`, answered HEADLESSLY and before anything touches the terminal —
@@ -83,17 +84,37 @@ export function bareTtyLaunchesUi(argv: string[]): boolean {
 //   * SIGINT after any action has run — BOTH sides SURVIVE it. @clack/prompts' spinner() registers
 //     `process.on("SIGINT", …)` (it stops the spinner frame), and registering any SIGINT listener
 //     removes node/bun's default terminating disposition for the rest of the process's life.
+//   * SIGTERM after any action has run — BOTH sides SURVIVE that too. The same spinner() call
+//     registers a SIGTERM listener beside the SIGINT one.
 //
 // The third row is why this had to be measured rather than reasoned about: before the absorption it
 // was the one row where floor and core DISAGREED — the floor survived (the listener is in
 // plainkeep-ui) while the core died -2 (plainkeep-core was a parent with no listener, and the signal
 // goes to the whole foreground process group). Running the TUI in-process closes that divergence for
-// free, because the listener is now registered in the process that receives the signal. All three
-// rows agree after this change.
+// free, because the listener is now registered in the process that receives the signal.
 //
-// So the disposition is whatever @clack/prompts makes it, identically in both modes, which is the
-// definition of matching the floor. If a future clack stops registering that handler, both modes
-// move together and stay equal — which is the property worth having.
+// WHAT "INSTALL NOTHING" ACTUALLY COSTS, stated plainly because it is easy to read this as harmless:
+// once ANY action has run, plainkeep-core cannot be stopped by SIGINT or by SIGTERM for the rest of
+// the session. A supervisor, a script, or a `kill` that waits on this process gets NOTHING until it
+// escalates to SIGKILL — and there is no graceful shutdown on SIGTERM, because the handler that
+// swallows it only redraws a spinner frame. Floor parity holds (the same clack runs inside
+// plainkeep-ui), so this is a DISCLOSURE, not a regression introduced here — but it is a real
+// operational property of `plainkeep ui` and it is not something anybody chose.
+//
+// AND THE MECHANISM IS A LEAK, NOT A DESIGN. @clack/prompts 0.7.0 contains zero removeListener calls,
+// so every spinner() permanently adds five process listeners. The behavior above is downstream of a
+// dependency forgetting to clean up, which is exactly the kind of thing a version bump fixes. Do NOT
+// treat "both modes move together" as the safety net — an earlier version of this comment claimed
+// that and it is false: the floor's TUI is a SEPARATELY BUILT, SEPARATELY INSTALLED artifact
+// (bin/ui/run.py resolves $PLAINKEEP_UI_BIN, then .local/bin/plainkeep-ui, then PATH), so a clack
+// bump changes the core at its next build while an installed standalone keeps the old disposition
+// until someone reinstalls it. setuplib's staleness probe exists precisely because that copy goes
+// stale. The modes move APART.
+//
+// Which is why the behavior is pinned by tests rather than by this comment: test/run_tui_pty.py
+// asserts rows 1, 3 and 3b directly (SIGINT at the menu dies -2; SIGINT after an action survives;
+// SIGTERM after an action survives). The day clack changes, those go red and this comment gets
+// rewritten from evidence instead of quietly becoming a lie.
 
 /**
  * The `ui` interception, registered into dispatch.ts's INTERCEPTS post-gate and post-normalization —
@@ -121,59 +142,28 @@ export async function uiIntercept(args: string[]): Promise<CoreResult> {
   // is on PATH at all. An explicit $PLAINKEEP_BIN still wins inside resolvePlainkeepBin().
   useSelfExec(process.execPath);
 
-  // A throw from the TUI must not escape as an unhandled rejection: main.ts awaits this inside its
-  // try, so a rejection already maps to the deterministic deny/5 — but the standalone entry prints
-  // the message and exits 1, and losing that message would make a TUI crash unreadable. Print it the
-  // same way, then hand back a code on the frozen protocol instead of the standalone's off-protocol 1.
-  let code: number;
-  try {
-    code = await main();
-  } catch (e) {
-    console.error((e as Error)?.message ?? String(e));
-    code = EXIT_USAGE;
-  }
-
-  // DECISION: stdout is drained HERE, before resolving, rather than relying on main.ts.
+  // Everything from here runs under the seam's enforcement (interception.ts): process.exit is
+  // guarded for the TUI's lifetime, the returned code is clamped onto the frozen protocol, and
+  // stdout is drained before this resolves. All three used to be this file's own promises, and a
+  // quality review measured all three being broken — most sharply by @clack/core's `block()`, which
+  // calls process.exit(0) on Ctrl-C while a spinner is up, so an INTERRUPTED action reported success
+  // and the drain never ran at all.
   //
-  // WHAT ACTUALLY GUARANTEES THE FINAL FRAME TODAY — stated first, because it is not this call.
-  // Measured on bun 1.3.14 / macOS arm64: after a single 200 KB `process.stdout.write`,
-  // `writableLength` is 0 immediately, on a TTY *and* on a pipe alike
-  // (.orchestrate/raw/task6-drain-measure.log). Bun's stdout writes complete synchronously, so there
-  // is nothing queued at this point and this drain returns at its `writableLength === 0` early exit
-  // without awaiting anything. The end-to-end proof that the last frame survives is empirical rather
-  // than architectural: test/run_tui_pty.py reads the outro line OFF THE TERMINAL and only then
-  // reaps the process, so a truncating exit would redden that check.
-  //
-  // WHY IT IS HERE ANYWAY, honestly framed (Task 5's review, N2, flagged the previous version of
-  // this argument in main.ts for claiming a truncation nobody had reproduced — this is not a second
-  // helping of that): it is a CHEAP PRECONDITION, not a fix for a demonstrated bug. dispatch.ts's
-  // seam contract says an stdio-owning interception "must have drained before it resolves", and the
-  // only way that contract can be honoured by construction rather than by the runtime happening to
-  // flush synchronously is for the owner to check. If a future bun buffers stdout asynchronously —
-  // or someone runs the TUI with stdout redirected to a slow sink — this is already in the right
-  // place. It costs one property read in the common case.
-  await drainStdout();
-  return { code };
-}
-
-// The gate protocol's usage code, which is what a TUI that died of an internal error is: it did not
-// complete the thing you asked for. Never 1 — that is off the frozen protocol (0/2/3/4/5) and is
-// exactly the code main.ts's guard exists to keep this binary from ever producing.
-const EXIT_USAGE = 2;
-
-const DRAIN_TIMEOUT_MS = 2000;
-
-// Bounded for the same reason main.ts's is: a reader that has stopped reading with a full pipe can
-// never let the drain complete, and a hung TUI on exit is worse than a lost byte.
-async function drainStdout(): Promise<void> {
-  const stream = process.stdout;
-  if (stream.writableLength === 0) return;
-  await Promise.race([
-    new Promise<void>((resolve) => {
-      stream.write("", () => resolve());
-    }),
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, DRAIN_TIMEOUT_MS).unref();
-    }),
-  ]);
+  // WHY THE CLAMP IS NOT DECORATIVE, and why it is at THIS seam rather than in app.ts: cli/src/tui/
+  // app.ts returns 1 when it cannot load the manifest (`plainkeep help --json` did not answer), which
+  // is an ORDINARY failure — a vault that is not plainkeep.json/3, or a $PLAINKEEP_BIN that is not a
+  // dispatcher — and 1 is off the protocol. Clamping here also covers any future TUI path that
+  // invents a code, which fixing app.ts alone would not.
+  return runOwningStdio("ui", async () => {
+    try {
+      return await main();
+    } catch (e) {
+      // The standalone entry prints the message and exits 1; losing the message would make a TUI
+      // crash unreadable, so it is printed the same way. The CODE is the clamp's (5), not 1, and
+      // deliberately the same code a RETURNED failure now gets — a thrown manifest failure and a
+      // returned one are the same class of event and used to be classified differently (2 vs 1).
+      console.error((e as Error)?.message ?? String(e));
+      return EXIT_ANOMALOUS;
+    }
+  });
 }

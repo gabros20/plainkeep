@@ -67,6 +67,8 @@ CAPTURE_PLACEHOLDER = "(triage later)"
 CAPTURED = "captured"                       # the spinner's stop message
 OUTRO = "bye — everything you did went through"
 NO_TTY_REFUSAL = "is an interactive terminal UI"
+# app.ts's manifest-load failure message — the ordinary way `plainkeep ui` fails on a real vault.
+NO_MANIFEST = "did not return a verb manifest"
 HELP_MARKER = "the personal OS command surface"
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][A-B0-9]|\x1b[=>]")
@@ -376,6 +378,90 @@ def check_action_end_to_end(binary: str) -> None:
               f"{[f[1] for f in gate_lines(vault)]!r}")
 
 
+def check_signal_disposition(binary: str) -> None:
+    """PIN the signal behavior decision 2 rests on, because that decision is delegated entirely to a
+    DEPENDENCY and no comment can keep it true.
+
+    `@clack/prompts` 0.7.0 registers SIGINT/SIGTERM listeners in every spinner() and never removes
+    them (zero removeListener calls in the package), which is what makes plainkeep-core survive both
+    signals for the rest of a session once any action has run. That is a leak, not a design — exactly
+    the sort of thing a version bump fixes — so these three rows exist to go RED the day it changes
+    rather than letting the behavior drift silently.
+
+    Costs no crash-report noise: SIGINT and SIGTERM are not fault signals, so unlike the parity
+    suite's signal matrix these produce no macOS crash reports.
+    """
+    def session(vault: Path) -> Session:
+        return Session([str(vault / "plainkeep")], vault_env(vault, binary), vault)
+
+    def run_to_menu_then(after_action: bool, stimulus: int | None) -> tuple[str, int] | None:
+        with tempfile.TemporaryDirectory() as td:
+            vault = build_vault(td)
+            s = session(vault)
+            try:
+                s.expect(MENU)
+                if after_action:
+                    s.send(b"\r")
+                    s.expect(CAPTURE_PLACEHOLDER)
+                    s.send(b"signal probe\r")
+                    s.expect(CAPTURED)
+                    s.expect(MENU)          # a spinner has now existed in this process
+                if stimulus is not None:
+                    os.kill(s.pid, stimulus)
+                return s.wait(timeout=8.0)
+            except Timeout:
+                return None
+            finally:
+                s.kill()
+
+    # ROW 1 — before any spinner exists there is no listener, so bun's default disposition applies
+    # and the process dies by the signal (WIFSIGNALED, subprocess returncode -2). This is the row
+    # that makes `plainkeep ui` behave like every other verb under Ctrl-C.
+    got = run_to_menu_then(False, signal.SIGINT)
+    check("signal: SIGINT at the menu (no spinner yet) KILLS the process by SIGINT",
+          got == ("signal", int(signal.SIGINT)), f"{got!r}")
+
+    # ROW 3 — after one action, clack's leaked SIGINT listener has removed the default disposition.
+    got = run_to_menu_then(True, signal.SIGINT)
+    check("signal: SIGINT after one action is SWALLOWED (clack's leaked listener)",
+          got == ("alive", -1), f"{got!r}")
+
+    # ROW 3b — and so is SIGTERM, which is the operationally interesting one: plainkeep-core cannot
+    # be stopped by a supervisor or a plain `kill` for the rest of the session, only by SIGKILL.
+    # Disclosed rather than fixed (floor parity: the same clack runs inside plainkeep-ui).
+    got = run_to_menu_then(True, signal.SIGTERM)
+    check("signal: SIGTERM after one action is SWALLOWED TOO — only SIGKILL ends the session",
+          got == ("alive", -1), f"{got!r}")
+
+
+def check_off_protocol_never_escapes(binary: str) -> None:
+    """A TUI that cannot load the manifest must not reach the shell with exit 1.
+
+    cli/src/tui/app.ts returns 1 when `plainkeep help --json` gives it no verb manifest, and 1 is off
+    the frozen protocol (0/2/3/4/5). Driven here through the REAL failure the user hits — a
+    $PLAINKEEP_BIN that exists and is executable but is not a dispatcher — rather than by injecting a
+    return value, so it stays true regardless of which internal path produces the failure.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        vault = build_vault(td)
+        env = vault_env(vault, binary, PLAINKEEP_BIN="/bin/echo")
+        s = Session([str(vault / "plainkeep")], env, vault)
+        try:
+            s.expect(NO_MANIFEST)
+            kind, code = s.wait(timeout=20.0)
+        except Timeout as e:
+            check("off-protocol: a manifest failure exits on the frozen protocol, never 1", False, str(e))
+            s.kill()
+            return
+        finally:
+            s.kill()
+        check("off-protocol: a manifest failure exits on the frozen protocol, never 1",
+              (kind, code) == ("exit", 5), f"{kind}={code} (1 would be off-protocol)")
+        # The gate still ran and recorded the verb — a failing interception must not suppress the log.
+        check("off-protocol: the `ui` audit line is written even when the TUI fails",
+              len(lines_for_verb(vault, "ui")) == 1, f"{lines_for_verb(vault, 'ui')!r}")
+
+
 def _discover_binary() -> str | None:
     cand = os.environ.get("PLAINKEEP_CORE_BIN") or str(REPO / ".local" / "bin" / "plainkeep-core")
     p = Path(cand)
@@ -424,6 +510,8 @@ def main() -> int:
     check_version_probe(binary)
     check_plainkeep_bin_override(binary)
     check_action_end_to_end(binary)
+    check_off_protocol_never_escapes(binary)
+    check_signal_disposition(binary)
 
     print(f"{BOLD}TUI pty gate — the in-core terminal UI (Task 6) — {len(results)} checks "
           f"(binary: {binary}){RESET}\n")

@@ -612,7 +612,7 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             res["ran"].append(_run_verb("job", "apply", fake=fake))
         elif layer.id == "ui":
             # ADR-011: download the compiled plainkeep-ui release binary (sha256-verified) into
-            # $PLAINKEEP_HOME/.local/bin — or compile from ui/ source in a contributor checkout.
+            # $PLAINKEEP_HOME/.local/bin — or compile from cli/ source in a contributor checkout.
             _install_ui(res, fake=fake)
     except BaseException as exc:
         exc.ops_partial_ran = list(res["ran"])

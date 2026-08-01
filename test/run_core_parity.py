@@ -63,6 +63,13 @@ SKIP_LINE = "SKIP core-parity: no core binary (build with: cd cli && bun run bui
 # in ADR-013; a gated cell prints a visible SKIP and is counted in the summary, never a silent pass.
 CRASH_NOISE_OPT_INS = ("PLAINKEEP_REQUIRE_CORE", "PLAINKEEP_PARITY_FAULT_SIGNALS")
 
+# How many invocations the catalogs under test/cases/core-parity/ declare in TOTAL — platform- and
+# mode-independent, because it counts what is DECLARED, not what a given run chooses to execute. It is
+# pinned so that deleting a case (or an invocation) reddens instead of quietly shrinking coverage; see
+# the accounting invariant at the bottom of main() for why a self-consistency check cannot do that job.
+# ADDING cases is expected and welcome: raise this number in the same commit that adds them.
+EXPECTED_CATALOG_INVOCATIONS = 203
+
 results: list[tuple[str, bool, str]] = []
 skipped: list[tuple[str, str]] = []
 
@@ -980,18 +987,65 @@ def main() -> int:
 
     catalogs = _load_catalogs()
     ncases = 0
+    ninvocations = 0
     for catalog, doc in catalogs:
         for case in doc.get("cases", []):
             if only and only not in f"{catalog}/{case['name']}":
                 continue
             ncases += 1
+            ninvocations += len(case.get("invocations", []))
             _run_case(binary, catalog, case)
     ncatalog_checks = len(results)
     if not only or only in "shim":
         _shim_checks(binary)
+    nshim = len(results) - ncatalog_checks
+
+    # THE ACCOUNTING INVARIANT (quality review r2, M-8). Two clauses, because one of them alone would
+    # have been theatre:
+    #
+    #   (1) run + skipped == DECLARED. Every invocation the catalogs declare lands in exactly one pile
+    #       — a check or a visible skip. Catches a fixture that failed to build (that case contributes
+    #       one FAIL instead of its N invocations) and any double-counting.
+    #   (2) DECLARED == EXPECTED_CATALOG_INVOCATIONS, a pinned number. This is the clause that closes
+    #       M-8's actual hazard, and clause (1) does NOT: deleting a case lowers the declared count and
+    #       the run count TOGETHER, so a self-consistency check balances perfectly while coverage
+    #       quietly shrinks. Only an expectation from outside the run can notice that.
+    #
+    # Until this existed, "195 ran + 8 skipped = 203 declared" was arithmetic a HUMAN did across two
+    # log files — the same shape as every defect this suite has caught for passing on the wrong
+    # grounds. CI runs every cell on Linux either way, so what this protects is precisely the local
+    # macOS run that the crash-noise gate created. It is one assertion about the suite's own
+    # bookkeeping, deliberately not a skip-category design (M-4 stays batched).
+    #
+    # The pin is skipped for a FILTERED run, which declares a subset by construction and is already
+    # "not a gate".
+    accounted = ncatalog_checks + len(skipped)
+    balanced = accounted == ninvocations
+    pinned = only is not None or ninvocations == EXPECTED_CATALOG_INVOCATIONS
+    detail = ""
+    if not balanced:
+        detail = (
+            f"the catalogs declare {ninvocations} invocation(s) but {ncatalog_checks} ran and "
+            f"{len(skipped)} were skipped, totalling {accounted}. Something was neither run nor "
+            f"skipped: look for a 'fixture-build' FAIL above. "
+        )
+    if not pinned:
+        detail += (
+            f"the catalogs now declare {ninvocations} invocation(s), expected "
+            f"{EXPECTED_CATALOG_INVOCATIONS}. If you ADDED cases, raise EXPECTED_CATALOG_INVOCATIONS "
+            f"in this file and say so in the commit. If you did not add any, coverage has SHRUNK — "
+            f"find what stopped being declared. Never edit the number to make this pass."
+        )
+    check(
+        f"[accounting] all {ninvocations} declared catalog invocations are accounted for "
+        f"({ncatalog_checks} run + {len(skipped)} skipped)"
+        + ("" if only else f", and the catalogs still declare {EXPECTED_CATALOG_INVOCATIONS}"),
+        balanced and pinned,
+        detail,
+    )
 
     print(f"{BOLD}core-parity differential oracle — {ncatalog_checks} checks across {ncases} "
-          f"catalog cases + {len(results) - ncatalog_checks} shim/root-discovery checks "
+          f"catalog cases + {nshim} shim/root-discovery checks + 1 accounting invariant "
           f"(binary: {binary}){RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)
     for name, ok, detail in results:

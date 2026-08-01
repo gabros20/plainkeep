@@ -21,7 +21,7 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   (piped or redirected it still prints help, so scripts and agents are unaffected), and `plainkeep ui`
   and `plainkeep mcp` are answered inside the binary — no separate `plainkeep-ui` download needed on
   that path. Every claim here is gated by a permanent differential test suite
-  (`test/run_core_parity.py`, 216 checks) that runs each invocation through both the binary and the
+  (`test/run_core_parity.py`, 217 checks) that runs each invocation through both the binary and the
   bash floor and compares exit status, stdout, stderr and the audit line.
   **Three things to know before you rely on it.** (1) **Piping a verb's output is ~7 ms (~8%) slower
   than the bash floor** — 103 vs 96 ms. Clearing a bun quirk that would otherwise truncate output past

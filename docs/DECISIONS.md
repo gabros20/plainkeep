@@ -374,8 +374,10 @@ Python engine — and ship it in three phases. **Phase 1, what this branch actua
    intercepted — it still regenerates `plainkeep.json` through the Python manifest plane.
 5. A permanent, Python-owned differential oracle: `test/run_core_parity.py` over language-neutral
    catalogs in `test/cases/core-parity/`, comparing the binary against the bash floor on exit status,
-   stdout, stderr and the audit line — **216 checks**, of which 208 run locally on macOS and 8 are
-   the opt-in fault-signal cells (below). Plus 91 bun unit tests and a PTY gate for the TUI.
+   stdout, stderr and the audit line — **217 checks**, of which 209 run locally on macOS and 8 are
+   the opt-in fault-signal cells (below); one of the 217 is an accounting invariant asserting that the
+   catalogs still declare every invocation they are pinned to declare, so coverage cannot shrink
+   quietly. Plus 91 bun unit tests and a PTY gate for the TUI.
 **Alternatives.** Priced in the proposal §2 and not re-argued here: **A** all-Python (uv-distributed,
 Textual TUI) — rejected because the interactive chrome stays at interpreter speed and the existing
 clack TUI is discarded; **C** full TS rewrite — rejected because the compute plane (LanceDB, MLX,

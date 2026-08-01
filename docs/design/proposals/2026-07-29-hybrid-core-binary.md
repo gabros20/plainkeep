@@ -38,7 +38,7 @@
 > guardrail, and `bin/lib/manifest.py:55`, `bin/new/run.py:20` and `bin/plugin/run.py:29` import the
 > resolver — so no phase deletes them, and **parity is a standing obligation rather than a one-time
 > gate**. That is why the acceptance oracle is a new, permanent, Python-owned differential harness
-> (`test/run_core_parity.py` over `test/cases/core-parity/`, 216 checks) instead of the existing
+> (`test/run_core_parity.py` over `test/cases/core-parity/`, 217 checks) instead of the existing
 > suites re-pointed at the binary.
 >
 > Also worth knowing before quoting §5: the machine contract, the exit-code protocol and the risk

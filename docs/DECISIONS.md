@@ -507,8 +507,9 @@ exec'd by installed path, not as an importable Python package or a wheel. The ph
 (deletion is Phase 3) is unchanged and reaffirmed there.
 
 ## ADR-014 — plainkeep is an installed tool with registered data roots, not a directory named `~/plainkeep` (2026-08-01)
-**Status.** **PROPOSED** (2026-08-01) — not yet accepted, and it is the gate on Phase 2: no Phase 2
-implementation task starts until this entry is Accepted. It **amends ADR-013's Phase 2 description**
+**Status.** **Accepted** (2026-08-02) — proposed 2026-08-01, accepted by the maintainer the next day.
+It is the gate on Phase 2, and it is now open: Phase 2 implementation may start. It
+**amends ADR-013's Phase 2 description**
 in exactly one respect (the engine ships as a versioned immutable *file tree* exec'd by installed
 path, not as an importable Python package), noted in place at the end of that entry; ADR-013's
 Phase 1 record and its Phase 2/3 deletion boundary stand unchanged. Basis:

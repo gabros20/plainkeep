@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import paths, filing, agent, output  # noqa: E402
+from lib import agent, filing, output, paths, vaultio  # noqa: E402
 
 # An item is a TASK when its first word is an imperative action verb (matched as a whole word,
 # so "merges"/"writing" don't false-trigger), or it's an explicit todo/checkbox line.
@@ -78,7 +78,7 @@ def record_rule(rule: str):
         txt = txt.replace("## Filing rules", f"## Filing rules\n- {rule}", 1)
     else:
         txt += f"\n## Filing rules\n- {rule}\n"
-    conv.write_text(txt, encoding="utf-8")
+    vaultio.write_text(conv, txt, encoding="utf-8")
 
 
 def items():
@@ -129,7 +129,7 @@ def cmd_drafts(argv, dry, yes, js):
             print("    skipped")
         else:
             text = p.read_text(encoding="utf-8")
-            p.write_text(re.sub(r"(?m)^status:\s*draft\s*$", "status: active", text, count=1),
+            vaultio.write_text(p, re.sub(r"(?m)^status:\s*draft\s*$", "status: active", text, count=1),
                          encoding="utf-8")
             _commit(rel, f"organize: promote agent draft {p.stem} -> active")
             paths.append_journal(f"triage drafts: promoted {p.stem} -> active")
@@ -183,7 +183,7 @@ def cmd_drafts_decide(argv):
         return output.emit({"slug": slug, "decision": "reject", "deleted": True}, "triage",
                            human=lambda _: f"rejected {slug} (deleted)")
     text = p.read_text(encoding="utf-8")
-    p.write_text(re.sub(r"(?m)^status:\s*draft\s*$", "status: active", text, count=1), encoding="utf-8")
+    vaultio.write_text(p, re.sub(r"(?m)^status:\s*draft\s*$", "status: active", text, count=1), encoding="utf-8")
     _commit(rel, f"organize: promote agent draft {slug} -> active")
     paths.append_journal(f"triage drafts: promoted {slug} -> active")
     return output.emit({"slug": slug, "decision": "accept", "status": "active"}, "triage",

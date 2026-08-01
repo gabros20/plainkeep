@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 
 def main(argv):
@@ -24,8 +24,8 @@ def main(argv):
         data = {"dry_run": True, "would_write": str(rel), "text": text}
         return output.emit(data, "capture",
                            human=lambda _: f"would capture -> {rel}  (dry run — nothing written)")
-    paths.INBOX.mkdir(parents=True, exist_ok=True)
-    f.write_text(f"---\ntype: capture\ncreated: {paths.today()}\nsource: capture\n---\n{text}\n",
+    vaultio.mkdir(paths.INBOX)
+    vaultio.write_text(f, f"---\ntype: capture\ncreated: {paths.today()}\nsource: capture\n---\n{text}\n",
                  encoding="utf-8")
     paths.append_journal(f"captured: {text[:70]}{'…' if len(text) > 70 else ''}")
     data = {"path": str(rel), "text": text}

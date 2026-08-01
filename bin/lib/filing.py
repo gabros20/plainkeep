@@ -9,6 +9,7 @@ from datetime import date
 from pathlib import Path
 
 from . import paths  # type: ignore  # (namespace sibling)
+from . import vaultio  # type: ignore  # (namespace sibling)
 
 STATUSES = ("inbox", "active", "waiting", "done")
 
@@ -55,9 +56,9 @@ def create_task(title: str, intent: str | None = None, status: str = "active",
     """Create a task file (the §7.2 two-zone shape) and return its path. intent defaults to title."""
     tid = next_task_id()
     d = paths.TASKS / status
-    d.mkdir(parents=True, exist_ok=True)
+    vaultio.mkdir(d)
     f = d / f"{tid}.md"
-    f.write_text(TASK_TEMPLATE.format(id=tid, status=status, created=paths.today(),
+    vaultio.write_text(f, TASK_TEMPLATE.format(id=tid, status=status, created=paths.today(),
                                       source=source, title=title[:70],
                                       intent=(intent if intent is not None else title)),
                  encoding="utf-8")
@@ -73,9 +74,9 @@ def create_note(text: str, folder: str = "notes", typ: str = "note", status: str
     while slug in existing:
         slug, i = f"{base}-{i}", i + 1
     d = paths.WIKI / folder
-    d.mkdir(parents=True, exist_ok=True)
+    vaultio.mkdir(d)
     f = d / f"{slug}.md"
-    f.write_text(f"---\ntype: {typ}\ntitle: {title}\nstatus: {status}\ncreated: {paths.today()}\n"
+    vaultio.write_text(f, f"---\ntype: {typ}\ntitle: {title}\nstatus: {status}\ncreated: {paths.today()}\n"
                  f"updated: {paths.today()}\ntags: []\naliases: []\n---\n# {title}\n\n{text}\n",
                  encoding="utf-8")
     return f

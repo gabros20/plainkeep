@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import paths  # type: ignore  # (namespace sibling)
 from . import resolver  # type: ignore  # multi-root verb resolution (Part 2.1)
+from . import vaultio  # type: ignore  # (namespace sibling)
 
 BIN = Path(__file__).resolve().parents[1]   # the verbs live with the CODE (bin/), not under PLAINKEEP_HOME
 MANIFEST = paths.PLAINKEEP_HOME / "plainkeep.json"  # ...but plainkeep.json is written to the data root (PLAINKEEP_HOME)
@@ -107,7 +108,7 @@ def write_manifest() -> Path:
         "capabilities": _capabilities(),
         "verbs": cmds,
     }
-    MANIFEST.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    vaultio.write_text(MANIFEST, json.dumps(doc, indent=2) + "\n", encoding="utf-8")
     return MANIFEST
 
 

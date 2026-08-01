@@ -5,7 +5,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 
 def _tasks(status):
@@ -31,7 +31,7 @@ def main(argv):
             for f in waiting:
                 lines.append(f"- ⏸ {f.stem} {paths.title_of(f)} (waiting: {paths.fm_field(f, 'why') or '—'})")
             lines.append("\n## Log\n")
-            with open(note, "a", encoding="utf-8") as fh:
+            with vaultio.open_append(note, encoding="utf-8") as fh:
                 fh.write("\n".join(lines) + "\n")
 
     y = paths.journal_path(date.today() - timedelta(days=1))

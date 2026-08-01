@@ -19,6 +19,7 @@ GREEN, RED, BOLD, DIM, RESET = "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\0
 SUITES = [
     ("guardrail model (§5)", "run_deterministic.py"),
     ("guardrail enforcement (§5)", "run_guardrail.py"),
+    ("path-wall on the write path (§5 Iron Law)", "run_pathwall.py"),
     ("jobs registry (§15)", "run_jobs.py"),
     ("jobs scheduler verb (§15)", "run_jobverb.py"),
     ("sweep decay model (§9.4)", "run_sweep.py"),

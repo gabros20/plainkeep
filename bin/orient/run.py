@@ -14,7 +14,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 DB = paths.PLAINKEEP_HOME / ".index" / "plainkeep.sqlite"
 LINE_CACHE = paths.PLAINKEEP_HOME / ".cache" / "orient.line"
@@ -133,8 +133,8 @@ def main(argv):
             pass
         line = _line(_gather())
         try:
-            LINE_CACHE.parent.mkdir(parents=True, exist_ok=True)
-            LINE_CACHE.write_text(line + "\n", encoding="utf-8")
+            vaultio.mkdir(LINE_CACHE.parent)
+            vaultio.write_text(LINE_CACHE, line + "\n", encoding="utf-8")
         except Exception:
             pass
         print(line)

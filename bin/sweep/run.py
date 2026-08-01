@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 HOME = Path(os.environ.get("PLAINKEEP_SWEEP_HOME", os.environ.get("HOME", "")))
 SWEEP_DAYS = int(os.environ.get("PLAINKEEP_SWEEP_DAYS", "7"))
@@ -57,8 +57,8 @@ def main(argv):
                 say(f"  {'would move' if dry else 'moved'}: {zname}/{item.name} -> _swept/{bucket}/")
                 rows.append({"action": "promote", "zone": zname, "name": item.name, "bucket": bucket})
                 if not dry:
-                    dest_dir.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(item), str(dest))
+                    vaultio.mkdir(dest_dir)
+                    vaultio.move(str(item), str(dest))
                     os.utime(dest, None)  # stamp swept-time into mtime (starts the 60-day clock)
                 promoted += 1
 

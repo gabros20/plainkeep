@@ -515,6 +515,11 @@ Phase 1 record and its Phase 2/3 deletion boundary stand unchanged. Basis:
 `.orchestrate/panel-synthesis-phase2.md` over two blind panel answers
 (`.orchestrate/panel-fable-phase2.md`, `.orchestrate/raw/panel-codex-phase2.log`) and
 `.orchestrate/scout-phase2.md`. Every file:line below was re-read while writing this entry.
+> **Amended by ADR-015 (2026-08-02).** The snippet quoted just below is `guardrail.py` as it stood
+> when this entry was written. ADR-015 anchored the wall to the active data root and converged the
+> sibling-roots variable, so those four lines have moved. Nothing in this entry's reasoning changes:
+> the wall still cannot police a *misresolved* root, and validating the root is still Task 1.
+
 **Context — the thing nobody had written down.** Phase 2 has been discussed as a packaging exercise.
 The line that decides its real nature is `bin/lib/guardrail.py:42-49`:
 
@@ -693,3 +698,83 @@ present itself as a vault and position the wall.
   to be proven per-spawn, not assumed; and the contents, plugins and schedules of `gabros20/ops` have
   not been inspected by anyone in this design round, which is why the canary is mandatory evidence
   rather than a formality.
+
+## ADR-015 — the path-wall is enforced on the write path, not just modelled (2026-08-02)
+**Status.** **Accepted** (2026-08-02). Independent of ADR-014's status: it changes no discovery
+contract and introduces no new variable. It is the prerequisite that makes ADR-014's Task 1 gate
+observable at all, and it **supersedes the snippet quoted in ADR-014's Context** — that entry quotes
+`bin/lib/guardrail.py:42-49` as it stood before this change; the reasoning it draws from the snippet
+is unaffected, but the four lines themselves have moved.
+
+**Context — the wall existed and nothing called it.** `bin/lib/guardrail.py`'s own docstring says
+`classify()` is the reusable seam, "a write-verb calls this on the path IT computes (Iron Law — the
+verb owns placement), so the wall holds where the path is actually known." No verb ever did. The
+only callers in the tree were the test harness and `lib/api.py`'s re-export for plugins; the single
+`classify(` hit inside a verb (`bin/triage/run.py`) is an unrelated local text classifier. What the
+dispatcher enforced was `gate()` — the verb's **declared risk class** — after which
+`bin/capture/run.py` computed `paths.INBOX / …` and went straight to `mkdir` / `write_text` /
+`append_journal` with nothing between it and the disk.
+
+This was found while designing Phase 2, by a panelist that refused to inherit the brief's claim, and
+it had already survived being asserted in both directions by other readers. A guardrail unit test
+could not have caught it: the failing region is not inside `classify()`, it is the absence of a call
+to it. The scored-verdict lesson is recorded as a standing rule — **a gate that never exercises the
+failing region is a green test of nothing**.
+
+**Decision.**
+1. **`bin/lib/vaultio.py`** is the enforced seam: `guard()` classifies
+   `{"kind": "write", "path": …, "realpath": …}` and refuses `DENY` on the shared exit-code protocol
+   (5 = `EXIT_DENY`). `mkdir` / `write_text` / `write_bytes` / `append_text` / `open_append` /
+   `move` / `copy2` / `copytree` / `replace` wrap it. The verb still owns placement — the Iron Law is
+   unchanged; the seam only asks whether the placement is allowed, at the one moment it is knowable.
+2. **Every vault-data write in `bin/` routes through it** — 80 call sites across 28 files — including
+   `paths.ensure_journal`/`append_journal`, so plugins reaching them through the frozen SDK
+   (`lib/api.py`) inherit the wall with no plugin edits and no API change.
+3. **The wall follows the active data root.** `VAULT = f"{HOME}/plainkeep"` alone is the
+   *conventional* location and does not move with `PLAINKEEP_HOME`; anchored there, a vault anywhere
+   else had every guarded write denied. `VAULT_ROOTS` now carries the conventional root **and** the
+   active `PLAINKEEP_HOME`. Each root also carries its `realpath`, because `classify()` re-runs the
+   verdict on the resolved path and takes the stricter one — on macOS a root under `/tmp` or
+   `/var/folders` resolves through `/private/…` and would otherwise read as an escape.
+4. **The sibling-roots anchor is converged.** `bin/lib/paths.py` read `PLAINKEEP_ROOTS_HOME`;
+   `guardrail.py` read only `PLAINKEEP_TEST_HOME`. Two variables were relocating the same conceptual
+   thing, which was invisible while nothing consulted the wall and would have denied every write to
+   a relocated `~/files` once something did. `guardrail.HOME` now falls back
+   `PLAINKEEP_TEST_HOME → PLAINKEEP_ROOTS_HOME → $HOME`, test-first so the validated spec model
+   (`test/lib/guardrail.py`) and its 51 parity cases resolve exactly as before.
+5. **`test/run_pathwall.py`** is the gate, and every assertion in it is a **filesystem walk**, not an
+   exit code. During development the walled-root case exited 5 *while having already written the
+   note* — the journal append refused after the inbox write succeeded — which is the whole argument
+   for the assertion shape, observed live. It also ratchets: any new raw write in `bin/` fails the
+   suite unless it joins the exemption list, keyed by source text with a stated reason.
+
+**What this does NOT do, stated so a green suite is not over-read.**
+- **It cannot police a misresolved data root**, because the wall is anchored to the value it would
+  have to doubt. That is ADR-014 / Phase 2 Task 1 (marker, registry, no silent fallback), and this
+  entry does not pre-empt it. What changes is that Task 1's gate is now *provable*: "a `capture`
+  against a bad root creates zero files" is a real assertion instead of an unreachable one.
+- **15 write sites stay outside the wall**, each listed with a reason: `~/work` fleet trees
+  (`new project`, `repo clone/adopt`, `archive`) which the wall denies without task context, `~/.Trash`
+  (the recoverable end of the decay machine, outside the three roots by design), a human-supplied
+  `--out` on `share`, and the guardrail's own audit log (it records the refusal, so it cannot be
+  subject to it).
+- **One of those is a contradiction, not an omission, and it is the sharpest thing this work
+  surfaced.** `_in_originals` denies every write under `~/files/**/in/` — "originals are read-only
+  evidence", a *validated* case (`originals-in-readonly`) — while `files ingest --client` and
+  `new client` exist precisely to put an original into `in/`. Creating a new original is not
+  modifying evidence, but the rule as validated does not draw that line and the fix would flip a
+  validated case, so it is recorded rather than quietly redrawn. Today only the verb's own
+  uniquifying loop guarantees ingest never overwrites an original.
+
+**Alternatives rejected.** Adding `classify()` calls verb-by-verb with no shared helper (nothing
+stops verb #35 from skipping it — the exact failure being fixed). Widening the wall so the exempt
+destinations pass (it would delete the rule for `~/work` and `in/` to avoid writing down a policy
+question). Refining `_in_originals` to "deny only an existing path" (correct-looking, but it flips a
+validated case, and a wiring commit is the wrong place to move the spec).
+
+**Consequences.** One `guardrail.classify()` call per guarded write — a pure in-process path
+decision, no I/O beyond one `realpath`. A verb whose computed path escapes now exits 5 with the
+wall's reason instead of writing; that is the point, and the ratchet is what keeps it true. Test
+fixtures that symlink the repo into a temp `PLAINKEEP_HOME` now refuse writes that resolve back into
+the real checkout — `test/run_setup_layers.py` was doing exactly that to `plainkeep.json` and now
+copies it, which the wall was right to catch.

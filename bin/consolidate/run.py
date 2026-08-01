@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 
 def _wiki_health():
@@ -57,7 +57,7 @@ def main(argv):
     note = paths.journal_path(date.today())
     if not dry:
         note, _ = paths.ensure_journal()
-        with open(note, "a", encoding="utf-8") as fh:
+        with vaultio.open_append(note, encoding="utf-8") as fh:
             fh.write("\n".join(block) + "\n")
         paths.append_journal("consolidated" + (" (automated)" if "--automated" in argv else ""))
 

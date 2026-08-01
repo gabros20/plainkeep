@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths, resolver  # noqa: E402
+from lib import output, paths, resolver, vaultio  # noqa: E402
 
 TEMPLATE = paths.PLAINKEEP_HOME / "templates" / "project-repo"
 VERB_TEMPLATE = paths.PLAINKEEP_HOME / "templates" / "verb"
@@ -52,8 +52,8 @@ def _new_verb(rest, dry=False):
     if dry:
         return output.emit({"dry_run": True, "type": "verb", "name": name, "risk": risk, "code": f"{rel}/run.py"}, "new",
                            human=lambda _: f"would scaffold verb '{name}' ({rel}/, risk: {risk})  (dry run — nothing written)")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(VERB_TEMPLATE, dest)
+    vaultio.mkdir(dest.parent)
+    vaultio.copytree(VERB_TEMPLATE, dest)
     _fill(dest, {"{{name}}": name, "{{risk}}": risk,
                  "{{summary}}": summary or f"TODO: describe {name}"})
     from lib.manifest import write_manifest  # regenerate plainkeep.json so `plainkeep help` shows the new verb
@@ -77,9 +77,9 @@ def _all_slugs() -> set:
 
 def _hub(folder: str, typ: str, slug: str, name: str) -> Path:
     d = paths.WIKI / folder
-    d.mkdir(parents=True, exist_ok=True)
+    vaultio.mkdir(d)
     f = d / f"{slug}.md"
-    f.write_text(f"---\ntype: {typ}\ntitle: {name}\nstatus: active\ncreated: {paths.today()}\n"
+    vaultio.write_text(f, f"---\ntype: {typ}\ntitle: {name}\nstatus: active\ncreated: {paths.today()}\n"
                  f"updated: {paths.today()}\ntags: []\naliases: []\nremote:\n---\n# {name}\n\n"
                  f"## Timeline\n- {paths.today()} created via `plainkeep new {typ}`\n", encoding="utf-8")
     return f
@@ -91,7 +91,7 @@ def _fill(root: Path, repl: dict):
             t = p.read_text(encoding="utf-8")
             for k, v in repl.items():
                 t = t.replace(k, v)
-            p.write_text(t, encoding="utf-8")
+            p.write_text(t, encoding="utf-8")   # inside the ~/work repo — see test/run_pathwall.py EXEMPT
 
 
 def main(argv):
@@ -128,7 +128,7 @@ def main(argv):
                                f"would create client '{name}' (wiki/clients/{slug}.md + {tree}/)  (dry run — nothing written)")
         hub = _hub("clients", "client", slug, name)
         for sub in ("in", "out", "work"):
-            (tree / sub).mkdir(parents=True, exist_ok=True)
+            (tree / sub).mkdir(parents=True, exist_ok=True)  # in/ is walled — see run_pathwall EXEMPT
         paths.append_journal(f"new client: {slug}")
         data = {"type": "client", "slug": slug, "hub": str(hub.relative_to(paths.PLAINKEEP_HOME)), "tree": str(tree)}
 

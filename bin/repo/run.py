@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 DAY = 86400
@@ -36,10 +36,10 @@ def _find_repos():
 
 
 def _hub(slug, name, remote=""):
-    d = paths.WIKI / "projects"; d.mkdir(parents=True, exist_ok=True)
+    d = paths.WIKI / "projects"; vaultio.mkdir(d)
     f = d / f"{slug}.md"
     if not f.exists():
-        f.write_text(f"---\ntype: project\ntitle: {name}\nstatus: active\ncreated: {paths.today()}\n"
+        vaultio.write_text(f, f"---\ntype: project\ntitle: {name}\nstatus: active\ncreated: {paths.today()}\n"
                      f"updated: {paths.today()}\ntags: []\naliases: []\nremote: {remote}\n---\n# {name}\n\n"
                      f"## Timeline\n- {paths.today()} adopted via `plainkeep repo adopt`\n", encoding="utf-8")
     return f

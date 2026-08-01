@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -627,6 +628,13 @@ def main() -> int:
         broken_home.mkdir()
         for entry in REPO.iterdir():
             if entry.name in (".venv", ".git", ".orchestrate", "__pycache__"):
+                continue
+            # plainkeep.json is COPIED, not symlinked: `plainkeep help` regenerates a stale manifest,
+            # and through a symlink that write lands in the real checkout. The path-wall now refuses
+            # it (guardrail takes the stricter of path and realpath), which is the correct verdict —
+            # this fixture wanted an isolated home and was writing through to the developer's repo.
+            if entry.name == "plainkeep.json":
+                shutil.copy2(entry, broken_home / entry.name)
                 continue
             os.symlink(entry, broken_home / entry.name)
         vbin = broken_home / ".venv" / "bin"

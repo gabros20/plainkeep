@@ -18,7 +18,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import notetype, output, paths  # noqa: E402
+from lib import notetype, output, paths, vaultio  # noqa: E402
 from enrich import run as enrichverb  # noqa: E402
 
 GREEN, DIM, YEL, RESET = "\033[32m", "\033[2m", "\033[33m", "\033[0m"
@@ -141,8 +141,8 @@ def main(argv: list[str]) -> int:
     body = "\n\n".join(body_parts)
 
     d = paths.WIKI / notetype.type_dir("bookmark")
-    d.mkdir(parents=True, exist_ok=True)
-    f.write_text(notetype.render("bookmark", title=title, url=url, body=body, slug=slug), encoding="utf-8")
+    vaultio.mkdir(d)
+    vaultio.write_text(f, notetype.render("bookmark", title=title, url=url, body=body, slug=slug), encoding="utf-8")
 
     if os.environ.get("PLAINKEEP_ENRICH", "").strip().lower() != "off":
         try:
@@ -154,9 +154,9 @@ def main(argv: list[str]) -> int:
     if archive:
         if html:
             ad = paths.FILES_ROOT / "bookmarks"
-            ad.mkdir(parents=True, exist_ok=True)
+            vaultio.mkdir(ad)
             archived = ad / f"{slug}.html"
-            archived.write_text(html, encoding="utf-8")
+            vaultio.write_text(archived, html, encoding="utf-8")
         else:
             print(f"{YEL}note{RESET}  --archive skipped (no fetched HTML)", file=sys.stderr)
 

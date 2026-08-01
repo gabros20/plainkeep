@@ -9,7 +9,7 @@ from datetime import date
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 
 def main(argv):
@@ -37,7 +37,7 @@ def main(argv):
     if dirty:
         block.append(f"- ⚠ {len(dirty)} uncommitted change(s) in ~/plainkeep (commit before backup)")
     if not dry:
-        with open(note, "a", encoding="utf-8") as fh:
+        with vaultio.open_append(note, encoding="utf-8") as fh:
             fh.write("\n".join(block) + "\n")
         paths.append_journal("closed the day" + (" (automated)" if automated else ""))
 

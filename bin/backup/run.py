@@ -32,7 +32,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths  # noqa: E402
+from lib import output, paths, vaultio  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 
@@ -255,7 +255,7 @@ def cmd_bundle(argv):
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     rows, events = [], []
     if not dry:
-        dest.mkdir(parents=True, exist_ok=True)
+        vaultio.mkdir(dest)
     for name, repo in _bundle_repos():
         if not (repo / ".git").exists():
             continue
@@ -342,10 +342,10 @@ def cmd_init(argv):
         },
         "retention": {"keep_daily": 7, "keep_weekly": 4, "keep_monthly": 12},
     }
-    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG.write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    vaultio.mkdir(BACKUP_DIR)
+    vaultio.write_text(CONFIG, json.dumps(cfg, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     plist_path = BACKUP_DIR / "com.plainkeep.backup.cloud.plist"
-    plist_path.write_text(_plist(cfg), encoding="utf-8")
+    vaultio.write_text(plist_path, _plist(cfg), encoding="utf-8")
     label = "com.plainkeep.backup.cloud"
     steps = [
         f"cp {plist_path} ~/Library/LaunchAgents/{label}.plist",

@@ -9,6 +9,16 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import sys as _sys
+_sys.path.insert(0, str(Path(__file__).resolve().parent))  # importable as `lib.vectorstore` AND top-level
+
+# The write seam (lib/vaultio.py) — imported both ways for the same reason as the line above:
+# indexlib does a bare `import vectorstore` (indexlib.py:51) and test/run_search_vec.py:65 too.
+try:
+    from . import vaultio  # type: ignore  # (namespace sibling)
+except ImportError:
+    import vaultio  # type: ignore
+
 PLAINKEEP_HOME = Path(os.environ.get("PLAINKEEP_HOME", Path(__file__).resolve().parents[2]))
 LANCE_DIR = PLAINKEEP_HOME / ".index" / "vectors.lance"
 TABLE = "chunks"
@@ -33,7 +43,7 @@ def available() -> bool:
 
 
 def connect():
-    LANCE_DIR.parent.mkdir(parents=True, exist_ok=True)
+    vaultio.mkdir(LANCE_DIR.parent)
     return _lancedb().connect(str(LANCE_DIR))
 
 

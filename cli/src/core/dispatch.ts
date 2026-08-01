@@ -19,6 +19,7 @@ import type { CoreResult } from "./cli.js";
 import { completeIntercept } from "./complete.js";
 import { EXIT_NOT_FOUND, EXIT_OK, mainCli } from "./guardrail.js";
 import { runPy } from "./resolver.js";
+import { bareTtyLaunchesUi, uiIntercept } from "./ui.js";
 
 // Exit codes for a spawn that never became a child. OFF the frozen gate protocol (0/2/3/4/5) by
 // design — these are the shell's own conventions, and the floor reaches them through bash's `exec`
@@ -340,6 +341,16 @@ export const INTERCEPTS: Record<string, Interception> = {
     comparable: true,
     run: (args) => completeIntercept(args, () => spawnPythonVerb("__complete", args)),
   },
+  // Task 6 — the terminal UI, in-process. The first STDIO-OWNING and first ASYNC interception: it
+  // paints the terminal for its whole lifetime and returns only `{ code }`.
+  //
+  // comparable: FALSE, and this is the bucket's first real user. A TUI's stdout is a terminal being
+  // painted — frames, cursor moves, a spinner whose frame count depends on how long a child took —
+  // so byte-comparing an `ui` invocation against the floor would be comparing two nondeterministic
+  // renderings and would be flaky rather than wrong-detecting. Its behavior is proven where it can
+  // be proven honestly instead: test/run_tui_pty.py drives a real PTY and asserts the menu rendered,
+  // an action ran, and the audit line was written.
+  ui: { comparable: false, run: (args) => uiIntercept(args) },
 };
 
 // The ONE way to read INTERCEPTS, and it exists because the obvious `INTERCEPTS[verb]` is wrong.
@@ -385,7 +396,17 @@ export function dispatch(argv: string[]): CoreResult | Promise<CoreResult> {
   // and it is the value the child inherits (floor line 7's `export PLAINKEEP_HOME="$PK"`).
   process.env.PLAINKEEP_HOME = home;
 
-  const { verb, args } = verbFromArgv(argv);
+  // Bare `plainkeep` ON A TERMINAL is the TUI; bare `plainkeep` anywhere else is still the default
+  // verb. The rewrite happens HERE, before verbFromArgv and therefore before the gate, so the whole
+  // rest of the dispatcher — gate, audit line, interception lookup — sees an ordinary `ui` dispatch
+  // and nothing downstream needs to know this route exists. That placement is what makes the audit
+  // line say `ui` rather than `help`, which is the verb that actually ran.
+  //
+  // This is the ONE observable change to a non-`ui` invocation in Task 6, and it is deliberately the
+  // narrowest possible: empty argv AND both stdin and stdout are TTYs (ui.ts, bareTtyLaunchesUi).
+  // Everything else — `plainkeep ""`, `plainkeep help`, any piped or redirected bare invocation —
+  // dispatches exactly as it did before.
+  const { verb, args } = verbFromArgv(bareTtyLaunchesUi(argv) ? ["ui"] : argv);
 
   // The gate (floor lines 31-35): any nonzero verdict is returned verbatim — its exit code and its
   // stderr are the guardrail's, and the audit line has already been appended by mainCli().

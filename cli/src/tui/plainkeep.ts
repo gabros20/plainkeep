@@ -4,15 +4,37 @@
 import { execa } from "execa";
 import { existsSync } from "node:fs";
 
+// The dispatcher this TUI re-enters, when the TUI is running INSIDE a binary that is itself a
+// dispatcher. Set by the entry that launched us, because this module cannot infer it:
+// `process.execPath` names a different program depending on which binary is running, and only one
+// of the two answers is a dispatcher.
+//
+//   * plainkeep-core (Task 6, the in-process TUI) — execPath IS the dispatcher. Re-entering it is
+//     run.md D8: "TUI/MCP re-entry self-execs the binary's own path … never PATH-lookup 'plainkeep'
+//     from inside the binary." core/ui.ts calls useSelfExec(process.execPath) before main().
+//   * plainkeep-ui (the standalone floor binary, launched by bin/ui/run.py) — execPath is the TUI
+//     itself, so self-exec would re-enter the TUI instead of a verb. It sets nothing and keeps the
+//     PATH lookup, which is what it has always done.
+//
+// A setter rather than a parameter threaded through main → drive → execute → runPlainkeep: this is
+// one process-wide fact about which binary we are, decided once at startup, and threading it would
+// touch six signatures in a task whose whole point is that TUI behavior does not change.
+let selfExecPath: string | null = null;
+
+export function useSelfExec(binPath: string): void {
+  selfExecPath = binPath;
+}
+
 // Locate the `plainkeep` dispatcher: explicit $PLAINKEEP_BIN wins (an absolute path to the plainkeep
-// script), else the `plainkeep` on PATH. We resolve it once. The TUI is useless without it — fail
-// loudly with the fix.
+// script), then the self-exec path when an entry declared one, else the `plainkeep` on PATH. We
+// resolve it once. The TUI is useless without it — fail loudly with the fix.
 export function resolvePlainkeepBin(): string {
   const explicit = process.env.PLAINKEEP_BIN;
   if (explicit) {
     if (existsSync(explicit)) return explicit;
     throw new PlainkeepMissing(`PLAINKEEP_BIN=${explicit} does not exist`);
   }
+  if (selfExecPath) return selfExecPath;
   // Rely on PATH resolution via the shell — execa with a bare name searches PATH.
   return "plainkeep";
 }

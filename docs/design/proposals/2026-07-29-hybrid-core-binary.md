@@ -4,7 +4,8 @@
 >
 > The text of this proposal is left exactly as it was written on 2026-07-29, because a design
 > document that quietly edits itself to match what was built teaches nobody anything. Phase 1 is
-> built (branch `feat/hybrid-core-phase1`, ADR-013 in [`../../DECISIONS.md`](../../DECISIONS.md)) and
+> built (branch `feat/hybrid-core-phase1`) and ACCEPTED as ADR-013 on 2026-08-01
+> ([`../../DECISIONS.md`](../../DECISIONS.md)), which supersedes the status line below, and
 > measurement falsified two of its claims. Read the two corrections before quoting anything below.
 >
 > **1. "Three interpreter spawns to run one verb" → one (§1, §3) is true on a terminal and FALSE on a

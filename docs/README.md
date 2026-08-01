@@ -41,4 +41,5 @@ here follow [Diátaxis](https://diataxis.fr): each file serves one purpose. Pick
 
 **Operating the system** (humans and agents alike):
 [`skills/operate-plainkeep/SKILL.md`](../skills/operate-plainkeep/SKILL.md), paired with the agent
-contract [`AGENTS.md`](../AGENTS.md). Contributing to the engine: [`CONTRIBUTING.md`](../CONTRIBUTING.md).
+contract [`AGENTS.md`](../AGENTS.md). Contributing to the engine: [`CONTRIBUTING.md`](../CONTRIBUTING.md),
+with the known deferred work in [`followups.md`](followups.md).

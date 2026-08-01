@@ -345,8 +345,7 @@ as `ui-v0.2.0` with `plainkeep-ui` release assets (`plainkeep-ui-darwin-arm64`, 
 the `ops-ui`-named assets from ADR-011's release workflow.
 
 ## ADR-013 — Hybrid core: a compiled TS binary in front of the Python engine (Phase 1) (2026-08-01)
-**Status.** PROPOSED. Phase 1 is built and gated on branch `feat/hybrid-core-phase1` (nothing
-pushed); this entry is written for the promotion decision, not as a record of one. It
+**Status.** Accepted (2026-08-01). Phase 1 is built and gated on branch `feat/hybrid-core-phase1`. It
 supersedes the **distribution model** of ADR-011 only — the *TUI* stops being a separately downloaded
 `plainkeep-ui` binary and becomes part of the core binary. ADR-011's stack split (stdlib-Python
 engine, TypeScript for the interactive chrome, the machine contract as the seam between them) stands
@@ -479,15 +478,14 @@ outlive this branch's review.
   action has run, on floor and core alike — `@clack/prompts` 0.7.0 never removes the SIGINT/SIGTERM
   listeners each `spinner()` adds, which drops bun's default disposition. It is a pre-existing
   disclosure pinned by `test/run_tui_pty.py`, and the ~15-line `withSpinner()` fix is deliberately NOT
-  in Phase 1 because it changes TUI behaviour. The 101 Minor/LOW/INFO findings from this run's
-  fourteen reviews — batched rather than fixed, none blocking — are collected in
-  `.orchestrate/followups.md` (a run artifact, untracked: read it before the branch's review notes are
-  cleared, and promote the entries worth keeping into issues). Three are named here so that promoting
-  this ADR does not depend on that file surviving: **`pyJsonDumps` emits invalid JSON for a `Map` with
-  non-string keys** and **is a line-for-line clone of `pythonRepr` that only it got the key-order fix
-  for** (`cli/src/core/mcp.ts` vs `guardrail.ts` — the two walkers have begun to drift), and
-  **`check:bun` does not gate `build:ui`**, so a bun older than 1.2.21 can still build the floor's UI
-  binary.
+  in Phase 1 because it changes TUI behaviour. The Minor/LOW/INFO findings this run's fourteen
+  reviews batched rather than fixed — 57 after curation, none blocking — are tracked in
+  [`followups.md`](followups.md), grouped by area with the file:line and the reason each was deferred.
+  The three worth naming here: **`pyJsonDumps` emits invalid JSON for a `Map` with non-string keys**
+  (verified unreachable today) and **is a line-for-line clone of `pythonRepr` that only it got the
+  key-order fix for** (`cli/src/core/mcp.ts` vs `guardrail.ts` — the two walkers have begun to drift),
+  and **`check:bun` does not gate `build:ui`**, so a bun older than 1.2.21 can still build the floor's
+  UI binary.
 **One operational consequence that is live right now, not deferred:** the `ui-v*` release pipeline
 (`.github/workflows/release-ui.yml`) is **already non-functional**. Phase 1 moved the TUI's source
 from `ui/` into `cli/` and deleted `ui/`; that workflow still reads `ui/package.json` and
@@ -499,7 +497,7 @@ question. **Until it is repointed or deleted, the floor's `plainkeep-ui` cannot 
 builds from source (`cd cli && bun run build:ui`), but no new release can be cut. The workflow now
 says so at the top of its own file, which is where a maintainer stands when it goes red.
 
-**Phases 2–3, unchanged from the proposal** and NOT decided by promoting this entry: Phase 2 packages
+**Phases 2–3, unchanged from the proposal** and NOT decided by accepting this entry: Phase 2 packages
 `bin/**` as a uv-provisioned `plainkeep-engine` and takes the code out of the vault (and owns the
 durable fix for the O_NONBLOCK helper); Phase 3 deletes `script/`, `engine.txt`,
 `.plainkeep-engine-ref` and the `ui-v*` pipeline — which, per the paragraph above, is dead already

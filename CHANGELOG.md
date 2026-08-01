@@ -8,7 +8,7 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ### Added
 - **A compiled `plainkeep` core binary now does the dispatching** ([`docs/DECISIONS.md`](docs/DECISIONS.md)
-  ADR-013, Phase 1 — status PROPOSED). `plainkeep <verb>` used to be a bash script that started three
+  ADR-013, Phase 1 — accepted 2026-08-01). `plainkeep <verb>` used to be a bash script that started three
   Python interpreters (guardrail, resolver, verb); the gate and the resolver are now compiled into one
   binary that does all three jobs in one process. **Nothing about the surface changed** — same verbs,
   same flags, same `--json` envelope, same exit codes, same `.logs/` lines — and the old bash

@@ -22,6 +22,11 @@ register one in COMPARATORS — the vault builder and runner are catalog-agnosti
 Binary discovery: $PLAINKEEP_CORE_BIN else <repo>/.local/bin/plainkeep-core. Absent (or not
 executable) => print a LOUD single SKIP line and exit 0, UNLESS PLAINKEEP_REQUIRE_CORE=1, in which
 case the same line is an error and the suite exits 1. SKIP is visible, never a silent PASS.
+
+The same rule covers the ONE other thing this oracle declines to do by default: on macOS, the
+fault-signal cells marked "crash_noise" in a catalog are skipped unless PLAINKEEP_REQUIRE_CORE=1 or
+PLAINKEEP_PARITY_FAULT_SIGNALS=1 is set (Task 8 item A — see CRASH_NOISE_OPT_INS below for the trade
+and its cost). They print a SKIP line each and are counted separately on the summary line.
 """
 from __future__ import annotations
 import json
@@ -49,11 +54,49 @@ GREEN, RED, YELLOW, DIM, BOLD, RESET = (
 
 SKIP_LINE = "SKIP core-parity: no core binary (build with: cd cli && bun run build)"
 
+# The fault-signal gate (Task 8, item A). An invocation marked "crash_noise": true in a catalog kills
+# a child with a signal whose macOS default action is "create core image" (man 3 signal: QUIT, ILL,
+# TRAP, ABRT, EMT, FPE, BUS, SEGV, SYS). Every such death makes macOS write a .ips crash report into
+# ~/Library/Logs/DiagnosticReports and pop a user notification — per run, on a machine that is not CI
+# — which is why those cells are opt-in HERE and unconditional on the release/CI path. This is a
+# DELIBERATE coverage trade, spelled out in dispatcher.json's signal-passthrough-matrix rationale and
+# in ADR-013; a gated cell prints a visible SKIP and is counted in the summary, never a silent pass.
+CRASH_NOISE_OPT_INS = ("PLAINKEEP_REQUIRE_CORE", "PLAINKEEP_PARITY_FAULT_SIGNALS")
+
 results: list[tuple[str, bool, str]] = []
+skipped: list[tuple[str, str]] = []
 
 
 def check(name: str, cond: bool, detail: str = "") -> None:
     results.append((name, bool(cond), detail))
+
+
+def skip(name: str, why: str) -> None:
+    skipped.append((name, why))
+
+
+def _crash_noise_opted_in() -> bool:
+    return any(os.environ.get(v) == "1" for v in CRASH_NOISE_OPT_INS)
+
+
+def _crash_noise_skip(inv: dict) -> str | None:
+    """Why this invocation is being skipped, or None if it runs.
+
+    Gated only on macOS: the cost being avoided is a macOS crash report plus a notification, so on
+    Linux these cells are free and skipping them would trade coverage for nothing. CI is Linux AND
+    sets PLAINKEEP_REQUIRE_CORE=1, so the cells run there twice over.
+    """
+    if not inv.get("crash_noise"):
+        return None
+    if sys.platform != "darwin":
+        return None
+    if _crash_noise_opted_in():
+        return None
+    return (
+        "fault-signal cell — killing a child with this signal writes a macOS crash report and pops a "
+        "notification. NOT RUN, and therefore NOT PASSED. Run it with "
+        "PLAINKEEP_PARITY_FAULT_SIGNALS=1 (or PLAINKEEP_REQUIRE_CORE=1, the CI/release path)."
+    )
 
 
 # --------------------------------------------------------------------------------------------------
@@ -862,13 +905,22 @@ def _run_case(binary: str, catalog: str, case: dict) -> None:
         return
     try:
         for i, inv in enumerate(case["invocations"]):
+            label = inv.get("api") or inv.get("verb") or inv["compare"]
+            args = inv.get("args") or []
+            # The signal cells all share one verb name, so the label alone would not say WHICH cell was
+            # skipped — and an unattributable skip is the thing this gate must not become.
+            detail_label = f"{label}({args[0]})" if args and isinstance(args[0], str) else label
+            name = f"[{catalog}] {case['name']} · {inv['compare']}:{detail_label} #{i}"
+            why = _crash_noise_skip(inv)
+            if why is not None:
+                skip(name, why)
+                continue
             try:
                 cmp = COMPARATORS[inv["compare"]]
                 ok, detail = cmp(binary, fx, inv)
             except Exception as e:
                 ok, detail = False, f"exception: {e!r}"
-            label = inv.get("api") or inv.get("verb") or inv["compare"]
-            check(f"[{catalog}] {case['name']} · {inv['compare']}:{label} #{i}", ok, detail)
+            check(name, ok, detail)
     finally:
         fx.cleanup()
 
@@ -920,10 +972,20 @@ def main() -> int:
     for name, ok, detail in results:
         mark = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"
         print(f"  {mark} {name}" + (f"\n       {DIM}{detail}{RESET}" if (detail and not ok) else ""))
+    # Skips print in the SAME list as the results and are counted on the summary line, so a run that
+    # did not exercise a cell cannot be read off as a run that exercised it and liked what it saw.
+    for name, why in skipped:
+        print(f"  {YELLOW}{BOLD}SKIP{RESET} {name}\n       {YELLOW}{why}{RESET}")
     failed = len(results) - passed
     label = f"{YELLOW}Result (FILTERED — not a gate):{RESET}" if only else f"{BOLD}Result:{RESET}"
+    nskip = len(skipped)
     print(f"\n{label} {GREEN}{passed} passed{RESET}, "
-          f"{(RED if failed else DIM)}{failed} failed{RESET}, {len(results)} checks")
+          f"{(RED if failed else DIM)}{failed} failed{RESET}, "
+          f"{(YELLOW if nskip else DIM)}{nskip} skipped{RESET}, {len(results)} checks run")
+    if nskip:
+        print(f"{YELLOW}{BOLD}{nskip} fault-signal cell(s) NOT RUN on this machine — this run does "
+              f"not gate them. Re-run with PLAINKEEP_PARITY_FAULT_SIGNALS=1 before a release, or let "
+              f"CI (PLAINKEEP_REQUIRE_CORE=1) do it.{RESET}")
     return 1 if failed else 0
 
 

@@ -273,6 +273,13 @@ fixing it needs.
   checks invoke the Python script directly and only one routes through the shim.
 - **`test/fuzz/`** — the fuzz harnesses have no runner and no recorded invocation, so they run only
   when someone remembers they exist.
+- **ADR-019's own detection rule is not enforced by anything.** Nothing requires a new gate to ship
+  with a call-site mutation showing it red, which is precisely the shape ADR-019 names — and it would
+  be the sixth instance if it were claimed as enforced. *Stated rather than solved: the honest
+  mechanism is a reviewer's question ("show me it red"), and this repo has no way to require one. A
+  weaker but real version is available and not taken — a `run_all.py` gate that every suite added
+  after this date carries a recorded RED measurement in its module docstring, which checks that
+  someone wrote a number down, not that the number is true.*
 - **`test/run_core_parity.py:388-393`** — nothing pins that the floor script installed into fixtures
   is verbatim-current; a matching edit to both sides would pass undetected.
 - **`cli/src/core/cli.ts:57-63`** — the sanctioned `--version` floor↔core divergence pins only the

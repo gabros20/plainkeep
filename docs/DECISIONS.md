@@ -1240,3 +1240,101 @@ snapshot could not detect the break: the question is not what `lib.api` exports,
   version recorded and checked); there is no `sync --check` or garbage collection of packages a pack
   no longer declares; `$PLAINKEEP_PATH` packs are scanned by the shadow preflight but have no
   lockfile, so they can declare nothing.
+
+## ADR-019 — the unwired rule: a guardrail nothing consults, and how to detect one (2026-08-02)
+
+**Status.** **Accepted** (2026-08-02). It decides nothing about the product; it names a failure
+class this repo has now shipped **five** times in two phases and fixes what a task must produce
+before it may call a rule enforced. Basis: the five instances below, each re-read at HEAD while
+writing this entry, each with the measurement that closed it. Written in Phase 2 Task 7 because that
+task hit the sixth instance — a release gate that had never been executed at all.
+
+**Context — five times, and not once by the same mechanism.**
+
+| # | the rule | what was true | how it was found | measurement |
+|---|---|---|---|---|
+| 1 | `guardrail.classify()` — "a write-verb calls this on the path IT computes" | **zero callers in `bin/`**. The only callers were the test harness and `lib/api.py`'s plugin re-export; the one `classify(` inside a verb (`bin/triage/run.py`) is an unrelated text classifier. `bin/capture/run.py` went from `paths.INBOX / …` straight to `mkdir`/`write_text` | a Phase 2 panelist who refused to inherit the brief's claim — after the claim had been asserted in **both directions** by other readers | 59 validated guardrail verdicts, all recorded against a function the product never called (ADR-015) |
+| 2 | `VaultError.saw` — the discovery refusal's evidence field | **no reachable reader.** The field was populated and nothing ever printed it; `vault status`'s `selected_by` was a constant beside it | Task 1b quality review r1, IMPORTANT-4 | fixed in `c6a3ee8`; "a reachable reader for the first time" (r2) |
+| 3 | `originals-in-delete-denied` — the wall's delete verdict | shipped with **no enforcing seam**. `classify({"kind": "delete", …})` returned DENY correctly; nothing asked it. `plainkeep files ingest` renamed a filed original out of `in/` with **rc 0** | Task 1c quality review r1, IMPORTANT-2 | before: `in/ before ['brief.pdf'] → after ['brief-2.pdf']`, rc 0, no wall, no exit code, no trace |
+| 4 | the delete **ratchet** — the gate written to stop #3 recurring | **passed while its own guard was deleted.** `'"kind": "delete"' in seam and "_guard_delete" in seam` is satisfied by the helper's own `def` and docstring, so the check whose *name* claimed the property was the one that could not fail | Task 1c fix wave r3, NEW-4 | with both call sites removed and the helper kept: `run_pathwall.py → 15 passed, 0 failed`, all three delete-ratchet checks **green** |
+| 5 | the engine **seal** — "immutability is enforced, not asserted" | **written but never verified.** `verify()` checked presence and never mode; `require_intact()` checked four paths exist; `doctor` inherited the blind spot; `_chmod_tree` swallowed every `OSError` | Task 2 quality review r1, IMPORTANT-5 | a `SIGKILL` in the rename→seal window leaves a **fully writable** engine that `--verify` calls OK, `doctor` calls complete, and every dispatch accepts — and `--install` then refuses as "already installed", so it persists |
+
+And the sixth, which is why this entry exists rather than a sixth follow-up line: the `ui-v*` release
+pipeline's three-way version check (tag == the engine-owned pin == the constant compiled into
+`plainkeep-ui`) lived as an inline shell snippet in a **tag-triggered** workflow. Nothing but cutting
+a release could execute it, nothing ever did, and its `sed` parser — which yields the empty string on
+a reformatted declaration, after which nothing is compared against nothing and the gate passes — had
+no test at all. In the same file, ADR-013's prose *about* that workflow stayed factually wrong for a
+whole phase and through the reviews of it.
+
+**The through-line is not carelessness.** Every one of the six was reviewed. Four were reviewed by
+people who had the rule's own source open. What they share is that **the failing region is the
+absence of something**, and absence has no line number to put a test on. A unit test of
+`classify()` exercises `classify()`; the defect was in `capture/run.py`, which does not mention it.
+That is the standing rule ADR-015 already recorded — *a gate that never exercises the failing region
+is a green test of nothing* — and five repeats say a standing rule was not enough.
+
+**Decision.**
+
+1. **A rule is not "enforced" until a test drives the PRODUCT'S real entry point and observes the
+   rule's effect.** Not the model, not the helper, not the class: the dispatcher, the verb, the
+   workflow step — whatever a user or CI actually invokes. Concretely, the accepted forms are: run
+   `plainkeep <verb>` through the real dispatcher and assert the exit code **and the filesystem**;
+   run the workflow's own command line; drive the binary. The rejected form is any assertion that
+   only shows the rule *would* answer correctly if asked. Instances 1, 3 and 5 all had that
+   assertion and all three shipped unwired.
+
+2. **The detection technique is mutation of the CALL SITE, not of the rule.** Delete or neuter the
+   *invocation* and require a product-level test to go red. This is what actually found the
+   remaining instances, and its results are the numbers in the table: instance 4 was found by
+   removing both `_guard_delete` call sites and watching `run_pathwall.py` stay 15/15 green; its fix
+   was then mutation-tested five ways (both guards removed → 2 red; `move()` only → 2 red;
+   `replace()` only → 2 red; a new unpinned `os.replace()` in an unrelated verb → 1 red;
+   `os.replace(a,b)` rewritten as `Path(a).replace(b)` → 2 red). Mutating the rule's *body* proves
+   only that the rule's own tests work.
+
+3. **A structural ratchet must read the AST, not the source text.** Instance 4 is the whole argument:
+   a substring search for the guard's name matched the guard's own definition. Ratchets ask
+   per-function questions of the parse tree — "does this function contain a call to `_guard_delete`",
+   not "does this file contain that string" — and they name the offending function and line when they
+   fail. A ratchet that dies on a modified tree reports the crash instead of the damage, so it
+   degrades to a failed check rather than an exception (`run_pathwall.py` does).
+
+4. **A rule that can only run on a rare trigger must be moved to one that runs every time.** Release
+   gates, tag-triggered jobs, opt-in suites: the trigger is the reason the rule rots. Where the rare
+   input genuinely cannot be synthesised (there is no tag on an ordinary push), the check moves into
+   the routine batch with the rare leg exercised against **fixtures**, and the rare trigger passes
+   the real value to the same implementation. Two implementations that agree by hand is what was
+   there before.
+
+5. **The proof that the consumer calls it is itself a check.** Not a comment, not a convention. Task
+   7's `test/run_uirelease.py` asserts that `.github/workflows/release-ui.yml` invokes it with the
+   tag, that the workflow no longer carries a second copy of the comparison, and that `run_all.py`
+   lists the suite — because "we wired it up" is exactly the claim that was false five times.
+
+**Applied here, and measured.** `test/run_uirelease.py` is red at `5c4e641` (21 passed, 5 failed, 26
+checks) and green after the two product fixes and three wirings (26/26, from the repo root and from
+`test/`). Its drift cells mutate one leg of the version triple on a copy and require the checker to
+name the disagreeing pair; an unmutated fixture is asserted green in the same run, so the drift cells
+cannot be passing for a checker that always complains. `build:ui`'s bun floor was proved end to end
+by mutation of the call site in the sense above: with `check:bun` replaced by an always-refusing
+script, `bun run build:ui` exits 1 and `.local/bin/plainkeep-ui` is **not created**; restored, it
+builds and the artifact appears.
+
+**Consequences.**
+
+- **Cost, and it is real.** A product-level proof is slower and more fragile than a unit test: it
+  needs a fixture vault, a real dispatch, sometimes a compiled binary. `run_uirelease.py` is cheap
+  because its subject is text, but instance 3's proof writes 199 fixture files and runs two real
+  `ingest` processes. The rule is not "unit tests are bad" — it is that a unit test may not be the
+  *last* word on whether a rule is enforced.
+- **This does not detect a rule that is called and wrong.** It detects a rule that is not called. The
+  five instances were all the second kind, which is why this entry is scoped to it; correctness of a
+  reached rule is what the validated-case oracle is for.
+- **A sixth instance would mean the detection rule itself is unwired**, which is the recursion worth
+  saying out loud: nothing currently forces a new gate to carry a call-site mutation. That is
+  registered in [`followups.md`](followups.md) rather than solved here, because the honest fix is a
+  reviewer's question — *show me it red* — and this repo does not have a mechanism to require one.
+- **Naming.** "Unwired" rather than "dead": dead code is unreachable and harmless. An unwired rule is
+  reachable, documented, tested, cited in an ADR, and enforcing nothing — which is worse than absent,
+  because everyone downstream reasons as though it holds.

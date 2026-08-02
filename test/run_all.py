@@ -71,6 +71,7 @@ SUITES = [
     ("plainkeep models verb", "run_models.py"),
     ("setup layers verb", "run_setup_layers.py"),
     ("enrichment pipeline wiring", "run_enrich_pipeline.py"),
+    ("ui release gates: version three-way + bun floor (Phase 2 Task 7)", "run_uirelease.py"),
 ]
 
 

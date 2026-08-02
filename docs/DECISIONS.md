@@ -520,6 +520,36 @@ Phase 1 record and its Phase 2/3 deletion boundary stand unchanged. Basis:
 > when this entry was written. ADR-015 anchored the wall to the active data root and converged the
 > sibling-roots variable, so those four lines have moved. Nothing in this entry's reasoning changes:
 > the wall still cannot police a *misresolved* root, and validating the root is still Task 1.
+>
+> **Implementation notes from Phase 2 Task 1b (2026-08-02)** — where the shipped code deviates from
+> the wording below, recorded here rather than left for a reader to discover as a discrepancy. None
+> of them changes a decision; each is a decision this entry did not make.
+>
+> 1. **`PLAINKEEP_HOME` requires a MARKER, not registration.** D3 says a validated root is
+>    "structurally a vault (marker present), registered"; D4's steps 1 and 3 both go *through* the
+>    registry, so registration is inherent there. For step 2 it is not, and requiring it would make
+>    the canary this entry calls mandatory evidence — a full clone of the real vault at a scratch
+>    path, deliberately unregistered — impossible to run against the real wall. The marker is what
+>    keeps step 2 honest: `.plainkeep/` is gitignored, so pointing `PLAINKEEP_HOME` at a checkout of
+>    the template still refuses.
+> 2. **The engine-root disjointness check is NOT enforced yet.** D3 requires the data root to be
+>    outside the engine root and vice versa. In Phase 1 the engine still lives *inside* the vault
+>    (`$PLAINKEEP_HOME/bin`), which is what Phase 2's later tasks move — enforcing it now would refuse
+>    every existing vault including this repo. It arrives with the engine's relocation.
+> 3. **The core does not re-implement discovery; it runs the same Python module the bash floor runs**
+>    (`python3 <engine>/bin/lib/vaultroot.py --select`). Discovery refuses in roughly fifteen distinct
+>    ways, each with its own message, and two dispatchers whose refusal text must stay byte-equal is
+>    the drift this repo has already paid for once — the same reasoning that kept `classify()` out of
+>    `guardrail.ts`. It costs the core one process per invocation (~23 ms measured), which dents
+>    ADR-013's one-spawn headline and is stated there rather than hidden.
+> 4. **A verb invoked DIRECTLY (`python3 bin/<verb>/run.py`) still trusts the `PLAINKEEP_HOME` it is
+>    handed.** Validation belongs to the dispatcher and runs once per invocation; every product
+>    surface (the shim, the core, `job run`, MCP) goes through one. `active_root()` reads the
+>    variable and refuses when it is absent, but it does not re-validate — doing so would make every
+>    module import pay a registry read. The escape hatch is deliberate and ungated.
+> 5. **`resolver.py`'s `_ops_home()` was a FIFTH engine-relative fallback** (`ENGINE_BIN.parent`),
+>    beyond the four `parents[2]` sites this entry enumerates. It is deleted with them: a plugin scan
+>    is one of the things that must not happen before a root is validated.
 
 **Context — the thing nobody had written down.** Phase 2 has been discussed as a packaging exercise.
 The line that decides its real nature is `bin/lib/guardrail.py:42-49`:

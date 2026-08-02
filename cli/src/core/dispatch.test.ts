@@ -142,12 +142,15 @@ test("dispatch REFUSES a PLAINKEEP_HOME that is not a marked vault, and spawns n
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v", risk: "read" }));
   writeFileSync(path.join(d, "run.py"), "raise SystemExit(7)\n");
   try {
-    let code: number | null = null;
-    await withHomeAsync(home, async () => {
+    // The refusal is RETURNED out of the callback rather than assigned to a mutable local: TS narrows
+    // a `let x = null` to `null` and cannot follow an assignment made inside a closure, so the
+    // comparison below would not compile.
+    const code = await withHomeAsync(home, async (): Promise<number | null> => {
       try {
         await dispatch(["v"]);
+        return null;
       } catch (e) {
-        code = (e as VaultRefusal).code;
+        return (e as VaultRefusal).code;
       }
     });
     expect(code).toBe(2);

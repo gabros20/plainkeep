@@ -63,6 +63,35 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   says the same at the top.
 
 ### Changed
+- **BREAKING — plainkeep now operates on REGISTERED vaults, and no longer guesses one**
+  ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-014, Phase 2 Task 1b). A vault used to be "whatever
+  directory `PLAINKEEP_HOME` names, or failing that, wherever the engine happens to be installed."
+  The second half of that sentence was the problem: for an installed `~/.local/bin/plainkeep-core`
+  it resolved to `~`, and because not every write consults the path-wall, a wrong root looked like
+  success — a note filed into the wrong tree with exit 0. That fallback is deleted, in all six
+  places it lived, and a root is now VALIDATED before the gate runs, before the resolver scans
+  plugins, and before any verb is spawned.
+  **What you get.** A vault can live anywhere, you can have more than one, and you pick between them
+  explicitly: `plainkeep --vault <name|id|path> <verb> …` (global, and only *before* the verb —
+  `plainkeep capture --vault x` is still capture's own argument). With no selector, plainkeep looks
+  at `PLAINKEEP_HOME`, then walks up from the current directory for a vault marker, then falls back
+  to your default vault — and refuses, naming all four mechanisms and what each one saw, rather than
+  picking something. `plainkeep vault status` prints that whole chain, including when it refuses,
+  which is when you actually want it.
+  **What you must do once, per existing vault** — an unregistered vault now exits 2 on every verb:
+
+      PLAINKEEP_HOME=/path/to/vault python3 /path/to/vault/bin/vault/run.py register /path/to/vault --yes
+
+  (It is `bin/vault/run.py` and not `plainkeep vault register` on purpose: every `plainkeep <verb>`
+  validates a root first, and the vault you are registering does not have one yet. A fresh install
+  needs nothing — `script/setup` does this for you.)
+  **Also changed:** the path-wall's vault segment is now the ONE selected root instead of the
+  conventional `~/plainkeep` plus the active one, so selecting vault A no longer authorizes writes
+  into vault B; the dispatchers export the vault's *canonical* path (a vault reached through a
+  symlink is one vault, not two) plus a new `PLAINKEEP_VAULT_ID`; and a vault inside an iCloud or
+  Dropbox tree is refused outright (exit 5). Gated by `test/run_discovery.py` (117 checks), whose
+  centre is a two-vault test that walks the filesystem and proves the note landed in the vault you
+  selected and nothing moved in the other one.
 - **Renamed: `opskit` → `plainkeep`, full consistency** (ADR-012). `opskit` collided with 40+
   same-named GitHub repos, was squatted on npm and PyPI, and read as DevOps tooling on sight — not a
   cosmetic problem, so the rename goes all the way through rather than stopping at the brand: the

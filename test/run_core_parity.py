@@ -42,7 +42,6 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
-RESOLVER_SRC = REPO / "bin" / "lib" / "resolver.py"
 ENGINE_SRC = REPO / "bin"
 # The root shim (Task 4). Its `PLAINKEEP_CORE=off` path is the BASH FLOOR — the pre-core dispatcher,
 # preserved verbatim — and is the reference side of the dispatcher differential matrix.

@@ -452,6 +452,37 @@ def case_walkup_first_marker_decides() -> None:
               f"rc={r.returncode} {r.stdout}{r.stderr}")
         check("walk-up: ...and still writes nothing", not new_files(sandbox, before))
 
+        # A marker that is PRESENT but is not a regular file. Same rule again, and this is the shape
+        # that used to slip through: the presence test was `is_file()`, which answers False for a
+        # DIRECTORY and for a DANGLING SYMLINK alike — so the walk did not see a marker at `inner`
+        # at all, skipped it, and selected `outer` with exit 0. That is precisely "a broken inner
+        # vault silently hands your keystrokes to the outer one", the outcome _walk_up's own
+        # docstring says it exists to prevent, and it also made steps 2 and 3 disagree about what
+        # counts as a marker (PLAINKEEP_HOME=inner refused on both shapes, walk-up did not).
+        # A partially-restored backup, an interrupted rsync, or a `.plainkeep` whose contents were
+        # symlinked elsewhere reaches it.
+        for shape, build in (
+                ("a DIRECTORY", lambda p: p.mkdir()),
+                ("a DANGLING SYMLINK", lambda p: p.symlink_to(sandbox / "nothing-here.json"))):
+            shutil.rmtree(inner / ".plainkeep", ignore_errors=True)
+            (inner / ".plainkeep").mkdir(parents=True)
+            build(inner / ".plainkeep" / "vault.json")
+            before = snapshot(sandbox)
+            r = _run([str(REPO / "plainkeep"), "capture", "walkup"], sub,
+                     {**env, "PLAINKEEP_CORE": "off"})
+            out = r.stdout + r.stderr
+            check(f"walk-up: a marker that is {shape} refuses (2) — it is NOT invisible",
+                  r.returncode == EXIT_USAGE, f"rc={r.returncode} {out}")
+            check(f"walk-up: ...naming the INNER marker, so the outer vault was never selected",
+                  str(inner) in out and "not a regular file" in out, out)
+            check(f"walk-up: ...and writes nothing", not new_files(sandbox, before),
+                  str(sorted(new_files(sandbox, before))))
+            # Step 2 and step 3 must agree about what "a marker" is — they did not before.
+            r2 = _run([str(REPO / "plainkeep"), "capture", "walkup"], sandbox,
+                      {**env, "PLAINKEEP_CORE": "off", "PLAINKEEP_HOME": str(inner)})
+            check(f"walk-up and PLAINKEEP_HOME agree that {shape} is a broken marker, not an absent one",
+                  r2.returncode == r.returncode, f"walkup={r.returncode} home={r2.returncode}")
+
         # Registered and well-formed: the SAME cwd now resolves, so the two refusals above are about
         # registration and validity — not about walk-up being broken.
         shutil.rmtree(inner / ".plainkeep")

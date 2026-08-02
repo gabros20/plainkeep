@@ -83,8 +83,18 @@ def read_marker(vault) -> dict | None:
     """The marker at `vault`, or None if there is none. Raises VaultError if there is one and it is
     not usable — an unreadable marker is never the same as an absent one."""
     f = marker_path(vault)
-    if not f.is_file():
+    # PRESENCE, not usability — anything at that path counts, including a dangling symlink, whose
+    # target does not exist but whose LINK does. `is_file()` used to stand in for this and answered
+    # False for a directory and for a dangling symlink alike, i.e. "absent", which is the one answer
+    # a broken marker must never give: vaultroot's walk-up then skipped the inner vault and selected
+    # the OUTER one with exit 0. "An unreadable marker is never the same as an absent one" is this
+    # function's stated doctrine; this is the line that makes it true.
+    if not (f.exists() or f.is_symlink()):
         return None
+    if not f.is_file():
+        raise VaultError(f"vault marker is not a regular file: {f}",
+                         hint="a marker is a small JSON file; something replaced it with a "
+                              "directory, a dangling symlink or a device node — repair or remove it")
     try:
         data = json.loads(f.read_text(encoding="utf-8"))
     except Exception as e:

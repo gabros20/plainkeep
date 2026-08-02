@@ -194,7 +194,13 @@ def _walk_up(cwd: str | None, reg: dict, saw: dict) -> tuple[str, str] | None:
         return None
     d = Path(vaultreg.canonical(cwd))
     for cand in (d, *d.parents):
-        if vaultreg.marker_path(cand).is_file():
+        # PRESENCE, not usability, and deliberately the same predicate `read_marker` uses (see the
+        # note there): a marker that is a directory or a dangling symlink must DECIDE and then
+        # refuse in validate(), not be invisible here. `is_file()` made it invisible, so the walk
+        # skipped a broken inner vault and selected the outer ancestor with exit 0 — the outcome
+        # this function's docstring above says it exists to prevent.
+        m = vaultreg.marker_path(cand)
+        if m.exists() or m.is_symlink():
             saw[MECHANISMS[2]] = f"marker at {cand}"
             return validate(cand, how=f"the vault marker at {cand}", require_registered=True, reg=reg)
     saw[MECHANISMS[2]] = f"no marker in {d} or any ancestor"

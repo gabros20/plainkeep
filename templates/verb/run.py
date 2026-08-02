@@ -37,7 +37,13 @@ if not _ENGINE:
                      "verb\n")
     raise SystemExit(2)
 sys.path.insert(0, str(Path(_ENGINE) / "bin"))
-from lib import paths  # noqa: E402,F401  (most verbs need paths — keep or drop)
+# ONE module, and it is the frozen SDK — the rule docs/plugins.md states and this file used to
+# break by also importing `lib.paths`. Everything that import gave you is re-exported here
+# (`api.PLAINKEEP_HOME`, `api.WIKI`, `api.INBOX`, `api.slugify`, `api.today`, …), and everything
+# else in `bin/lib/` is private and may change without notice. `api` is frozen at
+# PLAINKEEP_API_VERSION and is where the engine hooks a plugin process (a missing dependency
+# becomes a refusal naming this pack, instead of a traceback).
+from lib import api  # noqa: E402,F401
 
 
 def main(argv):

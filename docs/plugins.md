@@ -44,11 +44,51 @@ Fill in `summary`, `usage`, `risk`, `reads`/`writes`, `output`, and `hints`. See
 
 A plugin imports **one** module: `lib.api`. It's frozen at `PLAINKEEP_API_VERSION = "1.0"`.
 
-Everything else in `bin/lib/` is private and may change without notice.
+Everything else in `bin/lib/` is private and may change without notice. The scaffold imports `lib.api`
+and nothing else — everything you'd have reached into `lib.paths` for is re-exported (`api.WIKI`,
+`api.INBOX`, `api.slugify`, `api.today`, …), and `test/run_pluginsdk.py` fails if the template and this
+sentence ever disagree again.
 
 `test/run_plugin.py` snapshots every exported signature, so the API can't drift silently under you.
 
 The [reference tables](#reference) below list every export and every command.
+
+### Declare your dependencies
+
+If your verb needs a package that isn't in the standard library, declare it — the engine never infers
+one from your imports:
+
+```json
+{
+  "name": "greeter",
+  "dependencies": ["httpx>=0.27", "pandas[excel]==2.0.1"]
+}
+```
+
+```sh
+plainkeep plugin sync greeter --yes      # installs them into <vault>/plugins/.deps/
+plainkeep plugin sync --yes              # every installed pack
+```
+
+The overlay lives in **your vault**, not in the engine. That is the point: the engine is a versioned,
+read-only tree that gets replaced wholesale by an update, and anything installed *into* it would be
+gone with it. Both dispatchers put `plugins/.deps/` on a plugin verb's `PYTHONPATH` at spawn time, so
+an engine update re-applies your dependencies by doing nothing at all. The one thing that invalidates
+the overlay is the **interpreter** changing underneath it (a `--target` install can carry compiled
+extensions); `plainkeep doctor` says so, and `plugin sync --yes` rebuilds it.
+
+If a module is missing at runtime you get a refusal naming your pack and the module — declared but
+not installed says *run sync*, undeclared says *declare it first* — rather than a traceback.
+
+Declarations are a grammar, not a passthrough: a plain name, optional extras, optional version
+specifiers. Anything that could steer pip (`--index-url=…`, `-r reqs.txt`, a URL, a local path, an
+environment marker) is refused at `plugin add`. And a new declaration on `plugin update` **revokes
+trust** — installing third-party code is a risk-surface change like any other.
+
+**Already `pip install`ed into `<vault>/.venv`?** It keeps working: the dispatcher still prefers that
+interpreter when it exists, so those packages are importable exactly as before. But nothing records
+them, so they do not travel with the vault and nothing rebuilds them. Declare them in `plugin.json`
+and run `plugin sync --yes` to move them onto the contract.
 
 ### Package a pack (distributable)
 
@@ -87,6 +127,7 @@ plainkeep plugin list                               # name · version · pinned 
 plainkeep plugin trust greeter --yes                # lift the ceiling to the pack's declared risks
 plainkeep plugin update greeter --yes               # explicit re-pin; refuses to cross min_ops_version
 plainkeep plugin remove greeter --yes               # delete dir + lock entry
+plainkeep plugin sync greeter --yes                 # install its declared dependencies into this vault
 ```
 
 Every install and trust decision is recorded in the committed `plugins/plugins.lock.json` (resolved commit sha + accepted risk ceiling). Your vault's plugin state stays reproducible and auditable.
@@ -127,6 +168,7 @@ Read this before installing anything.
 | `plainkeep plugin trust <name> --yes` | lift the ceiling to the pack's declared risks |
 | `plainkeep plugin update <name> --yes` | explicit re-pin; refuses to cross `min_ops_version` |
 | `plainkeep plugin remove <name> --yes` | delete the dir + lock entry |
+| `plainkeep plugin sync [<name>] --yes` | install declared `dependencies` into `plugins/.deps/` |
 
 ---
 
@@ -152,6 +194,21 @@ Read this before installing anything.
 
   There is deliberately no fallback: a plugin reached outside a dispatch has not been gated either,
   and guessing a path is how a verb ends up importing a `lib` nobody validated.
+
+  **Older plugins keep working untouched.** A plugin scaffolded before the engine moved does
+  `sys.path.insert(0, str(Path(os.environ["PLAINKEEP_HOME"]) / "bin"))`, which now names a directory
+  a vault does not have — Python skips a nonexistent path entry, and the dispatcher has already put
+  `<engine>/bin` on your `PYTHONPATH`, so `from lib import api` resolves anyway. Nothing to edit.
+- **Do not ship a top-level `lib` beside your `run.py`.** `sys.path[0]` is your verb's own directory
+  and it beats `PYTHONPATH`, so a `lib/` or `lib.py` next to your `run.py` shadows the SDK for that
+  verb — silently, and in the opposite direction from what pre-relocation plugins got.
+  `plainkeep doctor` and `plainkeep plugin add` both flag it. The same applies to your declared
+  dependencies: `plugin sync` refuses an overlay that installs a top-level `lib`.
+- **`PYTHONPATH` reaches your verb, not the world.** It is set for plugin verbs only (an engine verb
+  self-locates), and the engine entry is removed from your process's environment the moment you
+  import the SDK — so a subprocess you spawn after that import does not inherit the engine tree. Your
+  dependency overlay is kept, since that is code you declared. A child you spawn *before* importing
+  `lib.api` does inherit both.
 - **Re-enter, never import.** If your verb needs another verb, shell out to `plainkeep <verb> --json`. Don't import its code — the guardrail must see every call.
 - **Declare `output` and `hints`.** They're what agents and the MCP tool list see. A verb without them is invisible to half the ecosystem.
 - **One pack name = one directory** under `plugins/`. The resolver reads `plugins/<pack>/<verb>/`, so nesting deeper won't resolve.

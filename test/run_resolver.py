@@ -195,9 +195,16 @@ def _new_verb_scaffold():
         check("new verb scaffolds into plugins/local/<name>/",
               (d / "run.py").exists() and (d / "cmd.json").exists(), r.stdout + r.stderr)
         check("new verb prints the survives-update note", "script/update" in (r.stdout + r.stderr), r.stdout)
-        # the scaffolded stub bootstraps lib via PLAINKEEP_HOME, so it must run through the dispatcher pattern
+        # The scaffolded stub bootstraps lib via PLAINKEEP_ENGINE (Phase 2 Task 2), so it must run
+        # through the dispatcher pattern. This check used to assert `"PLAINKEEP_HOME" in stub` and
+        # was GREEN on the template's own COMMENT about the pre-Task-2 line — a stale assertion
+        # passing on prose. It now names the code line and the one module a plugin may import.
         stub = (d / "run.py").read_text() if (d / "run.py").exists() else ""
-        check("scaffolded stub bootstraps lib via PLAINKEEP_HOME (not parents[1])", "PLAINKEEP_HOME" in stub, stub[:120])
+        check("scaffolded stub bootstraps lib via PLAINKEEP_ENGINE (not PLAINKEEP_HOME, not parents[1])",
+              'sys.path.insert(0, str(Path(_ENGINE) / "bin"))' in stub, stub[:200])
+        check("scaffolded stub imports exactly one lib module, the frozen SDK",
+              [ln for ln in stub.splitlines() if ln.startswith("from lib import")] == ["from lib import api  # noqa: E402,F401"],
+              str([ln for ln in stub.splitlines() if ln.startswith("from lib import")]))
 
 
 def main() -> int:

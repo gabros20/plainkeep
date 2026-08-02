@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from lib import embed, enginetree, enrichlib, imagelib, paths, vaultio
+from lib import embed, enginetree, enrichlib, imagelib, paths, provision, vaultio
 
 # The ENGINE's bin/ (paths.BIN) — this module reads engine-owned files through it, `bin/ui/version.txt`
 # above all: the pin `plainkeep setup ui` downloads against and compares the installed binary to.
@@ -31,16 +31,42 @@ REQUIRED_DIRS = ["wiki", "tasks/inbox", "tasks/active", "tasks/waiting", "tasks/
 # advisory-only: it never fails `plainkeep doctor` and never causes a nonzero `--all` exit.
 STATUSES = {"ready", "partial", "absent", "blocked", "not_applicable"}
 
-# The SEARCH-ONLY dependency set (ADR-009): a strict subset of requirements.txt, isolated in
-# $PLAINKEEP_HOME/.venv so the retrieval planes never drag in the file-processing packages (Pillow /
-# trafilatura / mlx-vlm) that belong to the `models` layer. requirements-search.txt is the source of
-# truth when present (the committed, human-followable install story); this inline mirror is the
-# fallback for a lean vault that dropped the file. Env markers ride through pip on the command line.
-SEARCH_DEPS = [
-    'lancedb>=0.25,<0.26 ; platform_system == "Darwin" and platform_machine == "x86_64"',
-    'lancedb>=0.33 ; platform_system != "Darwin" or platform_machine != "x86_64"',
-    "fastembed>=0.4",
-]
+# THE DEPENDENCY MATRIX IS READ, NOT RESTATED (Phase 2 Task 4c).
+#
+# These two sets used to be hand-written Python lists here — `SEARCH_DEPS` inline, and the `models`
+# layer's `["Pillow", "trafilatura"]` + a platform test, spelled out in `advance()`. They agreed with
+# `requirements-search.txt` and `requirements.txt` because someone kept them agreeing. They now come
+# from `pyproject.toml`'s extras, which is the same file `uv sync --frozen` resolves, so the set the
+# setup verb installs and the set the lock governs are the same list read twice rather than two lists
+# maintained in parallel.
+#
+# Env markers ride through pip on the command line unchanged (`lancedb>=0.25 ; platform_system ==
+# "Darwin" …`), which is what they already did for search; the `models` layer's Python-side platform
+# test is gone for the same reason, and pip evaluates the marker instead. Same packages on every host
+# this ran on before — the difference is that `mlx-vlm` is now always PRESENT in the argv, carrying
+# the marker that excludes it, instead of being appended by an `if`.
+def search_deps() -> list[str]:
+    """The `[search]` extra, as delivered. ADR-009's isolated retrieval set: lancedb + fastembed and
+    nothing else, so the search venv never drags in the file-processing packages."""
+    return provision.extra_deps("search")
+
+
+def models_deps() -> list[str]:
+    """The `[models]` extra, as delivered — the pip HALF of `plainkeep setup models`. The other half
+    is `plainkeep models pull --all`, which downloads Ollama weights; see MODELS_HALVES below."""
+    return provision.extra_deps("models")
+
+
+# `plainkeep setup models` DOES TWO THINGS AND THE EXTRA COVERS ONE, said in the product rather than
+# only in a design note. The layer's confirm prompt and its `--json` payload both carry these two
+# lines, because the difference between them is the difference between ~40 MB of wheels and several
+# GB of model weights, and an operator answering `y` is entitled to know which one they are agreeing
+# to. Packaging must not silently become a downloader: widening the extra to cover the second half is
+# the move this text exists to make unnecessary.
+MODELS_HALVES = (
+    "1. Ollama model weights — `plainkeep models pull --all` (GIGABYTES, over the network; not pip)",
+    "2. file-processing packages — the [models] extra (Pillow, trafilatura, mlx-vlm on Apple Silicon)",
+)
 
 
 @dataclass(frozen=True)
@@ -181,12 +207,14 @@ def _index_built() -> bool:
 
 
 def _search_pip_args() -> list[str]:
-    """`pip install` args for the search-only set: `-r requirements-search.txt` when the committed
-    file is present, else the inline SEARCH_DEPS mirror (lean vault)."""
-    req = paths.PLAINKEEP_HOME / "requirements-search.txt"
-    if req.exists():
-        return ["-r", str(req)]
-    return list(SEARCH_DEPS)
+    """`pip install` args for the search-only set — the `[search]` extra, as delivered.
+
+    It used to prefer `$PLAINKEEP_HOME/requirements-search.txt` and fall back to an inline mirror.
+    Both halves of that were wrong after ADR-017: the requirements files are ENGINE-owned, so on a
+    data-only vault (the shape `init` produces) the preferred path never existed and every install
+    silently took the fallback — a mirror that nothing checked against the file it mirrored. The
+    engine's own `pyproject.toml` is the one copy now."""
+    return list(search_deps())
 
 
 def _platform_system() -> str:
@@ -620,12 +648,14 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             # packages install into the SAME venv the dispatcher prefers, so `plainkeep files`/`enrich`/
             # `doctor` see Pillow/trafilatura/mlx-vlm consistently instead of the old silent capability
             # regression (installed into bare python, then invisible once .venv exists).
+            # HALF 1 of the two this verb does (MODELS_HALVES): the weights. It is a verb call, not a
+            # package install, and it is first because it is the expensive one — an operator who
+            # interrupts here has downloaded nothing they did not agree to.
             res["ran"].append(_run_verb("models", "pull", "--all", "--yes", fake=fake))
+            # HALF 2: the pip packages, from the `[models]` extra as delivered. Markers ride through
+            # pip, so mlx-vlm excludes itself off Apple Silicon instead of being appended by an `if`.
             _ensure_venv(res, fake=fake)
-            pkgs = ["Pillow", "trafilatura"]
-            if _platform_system() == "Darwin" and _platform_machine().lower() in ("arm64", "aarch64"):
-                pkgs.append("mlx-vlm")
-            res["ran"].append(_venv_pip(*pkgs, fake=fake))
+            res["ran"].append(_venv_pip(*models_deps(), fake=fake))
         elif layer.id == "automation":
             res["ran"].append(_run_verb("job", "apply", fake=fake))
         elif layer.id == "ui":

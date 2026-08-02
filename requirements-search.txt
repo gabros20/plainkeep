@@ -1,5 +1,11 @@
 # plainkeep — SEARCH-ONLY optional dependencies (the stage-2 vectors + stage-3 rerank planes).
 #
+# NOT THE SOURCE OF TRUTH ANY MORE (Phase 2 Task 4c): this is a MIRROR of `pyproject.toml`'s
+# `[search]` extra, kept for the by-hand `pip install -r` story. `setuplib._search_pip_args()` used to
+# prefer this file when it existed under PLAINKEEP_HOME — an ENGINE-owned file looked for in a VAULT,
+# so on a data-only vault it never existed and the install silently took an inline mirror instead. It
+# now reads the extra. `test/run_provision.py` pins the two together.
+#
 # This is the isolated set `plainkeep setup search` installs into $PLAINKEEP_HOME/.venv (see ADR-009
 # and docs/agent-terminal-search.md). It is deliberately a STRICT SUBSET of requirements.txt: only
 # the packages the retrieval layer needs (lancedb + fastembed). The file-processing packages

@@ -18,6 +18,13 @@ python3 test/run_all.py                 # every OFFLINE suite (guardrail, jobs, 
 python3 test/run_simulation.py --model sonnet   # the LLM-operator half (needs the claude CLI)
 ```
 
+Either invocation is green from the repo root and from inside `test/` (`cd test && python3
+run_all.py`), which the rest of this file assumes when it writes `../bin/…`. That was not always
+true: one parity check spawned a Python that put the CALLER's directory ahead of the installed
+engine on `sys.path`, so from `test/` it imported this suite's own `lib/` and reported a failure
+about the engine that was not real. The spawn is isolated now, and pinned to the cwd that can prove
+it — see the comment on `[manifest] manifest.py reads <engine>/VERSION` in `run_core_parity.py`.
+
 ## Offline suites (no LLM, no cost) — `run_all.py`
 
 | Suite | Script | What it models | Status |

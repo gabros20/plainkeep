@@ -178,7 +178,7 @@ def main(argv):
     else:
         ok("engine: disjoint from the vault (data is data, code is code)")
 
-    # 1c. PROVISIONING (Phase 2 Task 4 / ADR-019). Three rows, and each of them exists because an
+    # 1c. PROVISIONING (Phase 2 Task 4 / ADR-020). Three rows, and each of them exists because an
     # operator has a different next move:
     #
     #   * the pinned uv — absent means `plainkeep setup` will try to download it, which needs network;
@@ -210,7 +210,7 @@ def main(argv):
         sysuv = provision.system_uv()
         if sysuv:
             ok(f"engine: a system uv at {sysuv} is IGNORED — the engine runs its own pinned uv "
-               "(ADR-019 D3), so your uv's version and config never steer this resolution")
+               "(ADR-020 D3), so your uv's version and config never steer this resolution")
     except Exception as exc:                 # a broken pin must not take doctor down with it
         warn(f"engine: cannot read the uv pin ({exc})")
 

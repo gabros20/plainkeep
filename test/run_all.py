@@ -45,7 +45,7 @@ SUITES = [
     ("backup family + share (5.1/5.2)", "run_backup_share.py"),
     ("setup/update flow (§2/§17)", "run_setup.py"),
     ("engine installer: enginetree (ADR-014 Phase 2 Task 2)", "run_enginetree.py"),
-    ("provisioning: uv bootstrap + delivered lock + frozen matrix (ADR-019 Phase 2 Task 4)",
+    ("provisioning: uv bootstrap + delivered lock + frozen matrix (ADR-020 Phase 2 Task 4)",
      "run_provision.py"),
     ("trust wave: exit codes + update merge + doctor (0.1/0.3/0.4)", "run_trust.py"),
     ("machine contract: --json + plainkeep.json/3 + dry-run (1.1/1.2/0.5)", "run_json.py"),

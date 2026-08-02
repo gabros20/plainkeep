@@ -157,7 +157,7 @@ Each layer installs its own dep subset into the same venv:
 - `plainkeep setup search --yes` creates `$PLAINKEEP_HOME/.venv` (if missing), installs the search deps (`lancedb` + `fastembed`), pulls the embedding model, and builds the index.
 - `plainkeep setup models --yes` does **two things**, and it says so before you confirm: it pulls the local Ollama model **weights** (gigabytes, over the network — not a pip install), and it installs the file-processing packages (Pillow, trafilatura, and — on Apple Silicon — mlx-vlm) into the **same** venv.
 
-**Where those package lists come from (ADR-019).** Both are read from the engine's own
+**Where those package lists come from (ADR-020).** Both are read from the engine's own
 `pyproject.toml` — the `[search]` and `[models]` extras — which is the same file the engine's
 `uv.lock` is resolved against. `requirements.txt` / `requirements-search.txt` are still there as the
 by-hand `pip install -r` story, but they are **mirrors**: when the two disagree the pyproject wins,
@@ -177,7 +177,7 @@ A broken or half-built venv is repaired automatically on the next `plainkeep set
 
 This is the single install story. See [ADR-009](DECISIONS.md) and [the agent-terminal guide](agent-terminal-search.md).
 
-## Provisioning the engine itself (ADR-019)
+## Provisioning the engine itself (ADR-020)
 
 The layers above provision a **vault's** `.venv`. The **engine** has one too, and it is what makes
 plainkeep work on a machine with no system Python at all:

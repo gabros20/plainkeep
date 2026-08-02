@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 run_provision.py — PROVISIONING: the uv bootstrap, the delivered lock, and the frozen matrix
-(ADR-019 / Phase 2 Task 4).
+(ADR-020 / Phase 2 Task 4).
 
 Three things are under test and they fail in different ways, so they are gated separately:
 
@@ -729,7 +729,7 @@ def main() -> int:
                 pass
 
     print(f"{BOLD}provisioning: uv bootstrap + delivered lock + frozen matrix "
-          f"(ADR-019 / Phase 2 Task 4) — {len(results)} checks{RESET}\n")
+          f"(ADR-020 / Phase 2 Task 4) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)
     for name, ok, detail in results:
         mark = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"

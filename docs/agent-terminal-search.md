@@ -23,7 +23,7 @@ plainkeep setup search --yes  # .venv + lancedb/fastembed + embed model + index 
 `plainkeep setup search --yes` does four things:
 
 1. Creates `$PLAINKEEP_HOME/.venv`.
-2. Installs *only* the search deps (`lancedb` + `fastembed`) into it — read from the engine's `pyproject.toml` `[search]` extra, which is also what `uv.lock` is resolved against (ADR-019).
+2. Installs *only* the search deps (`lancedb` + `fastembed`) into it — read from the engine's `pyproject.toml` `[search]` extra, which is also what `uv.lock` is resolved against (ADR-020).
 3. Pulls the embedding model.
 4. Builds the index.
 

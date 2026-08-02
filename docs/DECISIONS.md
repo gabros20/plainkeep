@@ -1216,7 +1216,7 @@ snapshot could not detect the break: the question is not what `lib.api` exports,
 
 ---
 
-## ADR-019 — uv is downloaded and pinned; the lock ships inside the engine; the matrix is frozen (2026-08-02)
+## ADR-020 — uv is downloaded and pinned; the lock ships inside the engine; the matrix is frozen (2026-08-02)
 
 **Status.** **Accepted** (2026-08-02). Basis: Phase 2 Task 4, implemented against a green suite. It
 answers the question ADR-017 and ADR-018 both left standing: an engine is now a versioned read-only

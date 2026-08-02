@@ -129,7 +129,7 @@ OWNED_FILES = (
     "uv.lock",                          # the exact transitive resolution, per platform
 )
 
-# The ONE writable directory in a sealed tree, and the whole of the exception (ADR-019 / Task 4a).
+# The ONE writable directory in a sealed tree, and the whole of the exception (ADR-020 / Task 4a).
 # `install()` creates it in staging, seals the tree with everything else, and then chmods THIS PATH
 # alone back to 0755 — chmod needs ownership, not a writable parent, so no other path is unsealed
 # even momentarily. What lands in it: the pinned `uv` binary (`tools/uv/<version>/uv`, itself sealed

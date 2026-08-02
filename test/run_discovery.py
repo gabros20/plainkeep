@@ -921,6 +921,19 @@ def case_canonical_export() -> None:
 # 5 (`EXIT_DENY`), the same code as the walled-off/cloud-sync location verdict it sits beside, never
 # exit 2: nothing failed to be selected, the selection is refused for WHERE it points.
 # --------------------------------------------------------------------------------------------
+def _case_variant(p: Path) -> Path | None:
+    """The same directory, spelled with its LAST segment case-flipped — or None when the filesystem
+    is case-sensitive and that spelling therefore names nothing.
+
+    Probed rather than assumed from `sys.platform`: a case-sensitive APFS volume on macOS and a
+    case-insensitive volume mounted on Linux both exist, and the question the test needs answered is
+    about the volume the fixture actually landed on."""
+    flipped = p.with_name(p.name.upper() if p.name != p.name.upper() else p.name.lower())
+    if flipped == p or not flipped.is_dir():
+        return None
+    return flipped
+
+
 def case_data_only_vault_and_disjointness() -> None:
     with tempfile.TemporaryDirectory() as td:
         sandbox = Path(os.path.realpath(td))
@@ -1034,6 +1047,50 @@ def case_data_only_vault_and_disjointness() -> None:
                 # because it is the verb whose write path does not consult the wall.
                 check(f"[{mode}] disjointness · {label} writes nothing",
                       not new_files(sandbox, before), str(sorted(new_files(sandbox, before))))
+
+        # THE CASE AXIS. `vaultreg.canonical()` is `realpath(abspath(expanduser(p)))`, which
+        # normalises symlinks and `..` and NEVER case — and the default macOS APFS volume is
+        # case-insensitive, so `<c>/container` and `<c>/CONTAINER` are ONE directory that a spelling
+        # comparison called disjoint. The engine tree then sat inside the selected vault, i.e. inside
+        # `VAULT_ROOTS`, i.e. inside the write wall, with only the 0555 seal left standing. This is
+        # the same three shapes through the same dispatcher, reached under a different spelling.
+        #
+        # Skipped rather than faked on a case-SENSITIVE volume, where the alternate spelling names a
+        # directory that genuinely does not exist and the correct refusal is a different one.
+        alt_container = _case_variant(container)
+        alt_engine = _case_variant(nested_engine)
+        if alt_container is None or alt_engine is None:
+            print("SUITE-NOTE: the case-folding half of the disjointness cases was SKIPPED — this "
+                  "filesystem is case-sensitive, so the alternate spellings name nothing. The "
+                  "case-insensitive default (macOS APFS, exFAT, NTFS) is where the bug lived.")
+        else:
+            for label, home, expect in (
+                    ("the engine tree is INSIDE the data root, spelled in another CASE",
+                     alt_container, "is inside it"),
+                    ("the data root IS the engine root, spelled in another CASE",
+                     alt_engine, "IS the engine tree")):
+                before = snapshot(sandbox)
+                r = _run([shim, "capture", "should-never-land"], sandbox,
+                         {**env, "PLAINKEEP_HOME": str(home), "PLAINKEEP_CORE": "off"})
+                out = r.stdout + r.stderr
+                check(f"[off] disjointness · {label} → EXIT_DENY (5)",
+                      r.returncode == EXIT_DENY and expect in out, f"rc={r.returncode} {out}")
+                check(f"[off] disjointness · {label} writes nothing",
+                      not new_files(sandbox, before), str(sorted(new_files(sandbox, before))))
+            # ...and the fold did not become a blanket "everything overlaps": a SIBLING whose name
+            # differs only in case is still a legal vault. Without this the two checks above would
+            # also pass against a build that refused every root.
+            sibling = sandbox / "CONTAINER-notes"
+            sibling.mkdir()
+            vaultfx.mark_vault(sibling)
+            register(sandbox, sibling, "siblingcase")
+            before = snapshot(sandbox)
+            r = _run([shim, "capture", "casefoldworks"], sandbox,
+                     {**env, "PLAINKEEP_HOME": str(sibling), "PLAINKEEP_CORE": "off"})
+            check("...and a sibling differing only in case is still ALLOWED",
+                  r.returncode == 0 and any(f.startswith("CONTAINER-notes" + os.sep + "inbox")
+                                            for f in new_files(sandbox, before)),
+                  f"rc={r.returncode} {r.stdout}{r.stderr}")
 
         # ...and the refusal is byte-identical across the two dispatchers, which is the whole reason
         # discovery is ONE shared module rather than a port kept in step by a differential.

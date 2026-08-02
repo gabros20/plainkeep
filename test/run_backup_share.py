@@ -163,8 +163,73 @@ const A = (cond, msg) => { if (!cond) fails.push(msg); };
 """
 
 
+def case_share_init_config_is_vault_owned() -> None:
+    """`share init`'s per-vault config must land in the VAULT, not beside its own source.
+
+    `bin/share/worker/` is engine-owned and an installed engine is sealed 0555, so anchoring
+    `wrangler.toml` at `Path(__file__).parent / "worker"` meant the only way to configure the share
+    worker was a write into a read-only tree — which the path-wall correctly refused, leaving the
+    verb dead and its printed instructions telling an operator to edit files they cannot edit.
+
+    Driven through a REAL sealed engine, because the checkout it was developed against is writable
+    and shows none of this."""
+    with tempfile.TemporaryDirectory(prefix="pk-share-sealed-") as td:
+        tmp = Path(os.path.realpath(td))
+        inst, vault = tmp / "install", tmp / "vault"
+        (vault / "wiki").mkdir(parents=True)
+        env = {**os.environ, "PLAINKEEP_ENGINE_HOME": str(inst)}
+        env.pop("PLAINKEEP_ENGINE", None)
+        r = subprocess.run([sys.executable, str(REPO / "bin" / "lib" / "enginetree.py"),
+                            "--install", str(REPO)], capture_output=True, text=True, env=env)
+        eng = Path(os.path.realpath(inst / "engine" / "current"))
+        check("fixture: a sealed engine, with the worker dir read-only",
+              r.returncode == 0 and not os.access(eng / "bin" / "share" / "worker", os.W_OK),
+              r.stdout + r.stderr)
+
+        venv = {**os.environ, "PLAINKEEP_HOME": str(vault)}
+        venv.pop("PLAINKEEP_TEST_HOME", None)
+        # In-process, because `share init --yes` (the only caller) is confirm-gated behind a real
+        # `wrangler deploy` and can never run in a suite. The function under test is the one that
+        # decides WHERE the config goes.
+        probe = ("import runpy, sys\n"
+                 "g = runpy.run_path(sys.argv[1])\n"
+                 "g['_ensure_wrangler_toml']()\n"
+                 "print(g['WRANGLER_TOML'])\n")
+        # `cwd` away from test/: `-c` puts the CWD on sys.path, and this suite's own `test/lib/`
+        # would otherwise shadow the engine's `bin/lib/`.
+        p = subprocess.run([sys.executable, "-c", probe, str(eng / "bin" / "share" / "run.py")],
+                           capture_output=True, text=True, env=venv, cwd=str(tmp))
+        out = (p.stdout + p.stderr).strip()
+        toml = vault / ".share" / "wrangler.toml"
+        check("_ensure_wrangler_toml() succeeds against a SEALED engine",
+              p.returncode == 0 and "DENY" not in out, out[-400:])
+        check("...and the config landed in the VAULT, not in the engine",
+              toml.is_file() and str(eng) not in p.stdout, f"{p.stdout.strip()} exists={toml.is_file()}")
+        check("...and nothing was written into the engine's worker dir",
+              not (eng / "bin" / "share" / "worker" / "wrangler.toml").exists())
+
+        # ...and the human instructions name the same path. A verb that writes to the right place
+        # while telling the operator to edit the wrong one is the same bug, one layer up.
+        r = subprocess.run([sys.executable, str(eng / "bin" / "share" / "run.py"), "init"],
+                           capture_output=True, text=True, env=venv)
+        steps = r.stdout + r.stderr
+        check("`share init` prints steps that name the vault-side config",
+              str(toml) in steps, steps[-400:])
+        check("...and never tells the operator to write inside the engine tree",
+              f"cp wrangler.toml.example wrangler.toml" not in steps
+              and f"cd {eng / 'bin' / 'share' / 'worker'}\n" not in steps, steps[-400:])
+
+        for p2 in tmp.rglob("*"):                # the sealed tree cannot be removed as-is
+            try:
+                if p2.is_dir() and not p2.is_symlink():
+                    p2.chmod(0o755)
+            except OSError:
+                pass
+
+
 def main() -> int:
     sl = _load_sharelib()
+    case_share_init_config_is_vault_owned()
 
     # ---------- worker route contract (Node): the JS half of the capability-URL model ----------
     # Replaces the old Web-Crypto KAT as the JS-side coverage. Needs only `node`; skips gracefully

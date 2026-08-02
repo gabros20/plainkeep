@@ -31,6 +31,75 @@ def run(opshome, roots, *args):
                           capture_output=True, text=True, env=env)
 
 
+def case_scaffold_through_a_sealed_engine() -> None:
+    """`new verb`, run out of an INSTALLED engine rather than out of this checkout.
+
+    This is the gap that let a BLOCKING bug ship. Every case above invokes `REPO/bin/new/run.py` —
+    the repository, which is a writable engine that is never sealed. `enginetree.install()` seals an
+    installed tree at 0444/0555, `shutil.copytree` PRESERVES source modes, and `templates/verb` is
+    engine-owned: so through any normally-installed engine the scaffold landed read-only and `_fill`
+    could not substitute a single placeholder. It failed halfway and left an unwritable
+    `plugins/local/<name>/` still full of `{{name}}` — which the resolver then dispatched, exit 0,
+    printing the raw template text.
+
+    So the fixture here is the SEALED tree, and both halves are asserted: that the scaffold works,
+    and that a scaffold which cannot complete leaves nothing behind."""
+    with tempfile.TemporaryDirectory(prefix="pk-new-sealed-") as td:
+        tmp = Path(os.path.realpath(td))
+        inst, ops, roots = tmp / "install", tmp / "vault", tmp / "home"
+        for d in ((ops / "wiki"), (ops / "journal"), roots):
+            d.mkdir(parents=True)
+        env = {**os.environ, "PLAINKEEP_ENGINE_HOME": str(inst)}
+        env.pop("PLAINKEEP_ENGINE", None)
+        r = subprocess.run([sys.executable, str(REPO / "bin" / "lib" / "enginetree.py"),
+                            "--install", str(REPO)], capture_output=True, text=True, env=env)
+        eng = Path(os.path.realpath(inst / "engine" / "current"))
+        check("fixture: the engine installs and is SEALED",
+              r.returncode == 0 and not os.access(eng / "templates" / "verb" / "run.py", os.W_OK),
+              r.stdout + r.stderr)
+
+        venv = {**os.environ, "PLAINKEEP_HOME": str(ops), "PLAINKEEP_ROOTS_HOME": str(roots)}
+        venv.pop("PLAINKEEP_TEST_HOME", None)
+        r = subprocess.run([sys.executable, str(eng / "bin" / "new" / "run.py"),
+                            "verb", "sealedscaffold", "--risk", "read", "--summary", "from a seal"],
+                           capture_output=True, text=True, env=venv)
+        d = ops / "plugins" / "local" / "sealedscaffold"
+        out = r.stdout + r.stderr
+        check("new verb through a SEALED engine succeeds", r.returncode == 0 and "Traceback" not in out,
+              out[-400:])
+        check("...and the scaffolded files exist", (d / "run.py").is_file() and (d / "cmd.json").is_file())
+        if (d / "run.py").is_file():
+            check("...and they are WRITABLE — the engine's 0444 seal did not travel with the copy",
+                  os.access(d / "run.py", os.W_OK) and os.access(d, os.W_OK),
+                  oct((d / "run.py").stat().st_mode))
+            check("...and every placeholder was substituted",
+                  "{{" not in (d / "run.py").read_text() and "{{" not in (d / "cmd.json").read_text(),
+                  (d / "run.py").read_text()[:120])
+
+        # THE OTHER HALF: a scaffold that cannot finish leaves NOTHING under the verb's name, rather
+        # than a half-written verb the resolver will happily serve. Forced by making the destination
+        # parent's own leaf name unavailable — `plugins/local/halfway` already exists as a FILE, so
+        # the rename into place is the step that fails.
+        (ops / "plugins" / "local").mkdir(parents=True, exist_ok=True)
+        blocker = ops / "plugins" / "local" / "halfway"
+        blocker.write_text("not a directory", encoding="utf-8")
+        r = subprocess.run([sys.executable, str(eng / "bin" / "new" / "run.py"),
+                            "verb", "halfway"], capture_output=True, text=True, env=venv)
+        check("a scaffold that cannot complete REFUSES", r.returncode != 0, (r.stdout + r.stderr)[-300:])
+        check("...and leaves no `.pk-scaffolding-*` debris behind",
+              not list((ops / "plugins" / "local").glob(".pk-scaffolding-*")),
+              str(list((ops / "plugins" / "local").glob("*"))))
+        check("...and never turned the blocker into a half-written verb",
+              blocker.is_file() and blocker.read_text() == "not a directory")
+
+        for p in tmp.rglob("*"):                 # the sealed tree cannot be removed as-is
+            try:
+                if p.is_dir() and not p.is_symlink():
+                    p.chmod(0o755)
+            except OSError:
+                pass
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         ops, roots = Path(td) / "ops", Path(td) / "home"
@@ -88,6 +157,8 @@ def main() -> int:
         check("new verb rejects an invalid name", r.returncode == 2, r.stderr)
         r = run(ops, roots, "verb", "wiki")
         check("new verb refuses a reserved engine verb", r.returncode == 1, r.stderr)
+
+    case_scaffold_through_a_sealed_engine()
 
     print(f"{BOLD}new verb (scaffold project/client/verb) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

@@ -54,7 +54,6 @@ except Exception:
 PLAINKEEP_HOME = vaultroot.active_root()
 BIN = Path(__file__).resolve().parents[1]
 
-VAULT = f"{HOME}/plainkeep"
 WORK = f"{HOME}/work"
 FILES = f"{HOME}/files"
 DOTFILES = f"{HOME}/dotfiles"
@@ -72,17 +71,23 @@ def _with_real(*roots: str) -> list[str]:
     return out
 
 
-# Every path that counts as "inside the vault" for the write-wall.
+# Every path that counts as "inside the vault" for the write-wall: the SELECTED root and its
+# realpath, and NOTHING ELSE (ADR-014 D5).
 #
-# `VAULT` alone is the CONVENTIONAL location, built from `$HOME` — it does not move with
-# `PLAINKEEP_HOME`, so a vault anywhere else had every guarded write denied. That was invisible
-# while nothing called `classify()` on a write path (see lib/vaultio.py); the moment the seam is
-# live it would deny the vault's own verbs, so the wall follows the ACTIVE data root as well.
+# ADR-015 shipped this list carrying the conventional `$HOME/plainkeep` AND the active root. That was
+# the right interim — it kept the 51 validated cases resolving unchanged while the write seam went in
+# — but two roots in the wall means selecting vault A still AUTHORIZES writes into vault B, which is
+# precisely the accident the two-vault identity test hunts for (test/run_discovery.py). One
+# invocation, one authorized vault.
 #
-# NARROWING TO ONE ROOT is the next commit (ADR-014 D5): the root is validated as of this commit,
-# but the wall still carries the conventional location too, so the 51 validated cases and their
-# harnesses can move together rather than half a change at a time.
-VAULT_ROOTS = _with_real(VAULT, str(PLAINKEEP_HOME))
+# The wall can only be this narrow because the root is now VALIDATED before anything reads it
+# (lib/vaultroot.py). Anchoring the only wall segment to an unvalidated value would have made it a
+# suggestion; anchoring it to a validated one is what makes it a wall.
+#
+# The realpath is carried alongside because `classify()` re-runs the verdict on the resolved path and
+# takes the stricter one — on macOS a root under `/tmp` or `/var/folders` resolves through
+# `/private/…` and would otherwise read as an escape.
+VAULT_ROOTS = _with_real(str(PLAINKEEP_HOME))
 FILES_ROOTS = _with_real(FILES)
 WORK_ROOTS = _with_real(WORK)
 WORKTREE_ROOTS = _with_real(f"{WORK}/.worktrees")
@@ -151,7 +156,7 @@ def _write_verdict(path, action):
     if _in_originals(path):
         return Decision(DENY, "~/files/**/in/ originals are read-only evidence", "deny")
     if _under_any(path, VAULT_ROOTS):
-        return Decision(ALLOW, "write inside ~/plainkeep is a revertible git diff", "safe_write")
+        return Decision(ALLOW, "write inside the selected vault is a revertible git diff", "safe_write")
     if _under_any(path, FILES_ROOTS):
         return Decision(ALLOW, "write inside ~/files (out/work/research)", "safe_write")
     if _under_any(path, WORKTREE_ROOTS):

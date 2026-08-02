@@ -8,8 +8,20 @@ Offline, stdlib only.
 from __future__ import annotations
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
+
+# Since ADR-014 Task 1b the enforcement guardrail's wall is anchored to the SELECTED root and to
+# nothing else, and it refuses outright when no root is selected — so this harness has to select one
+# BEFORE loading it. Pinned to the CONVENTIONAL location, which is what every validated case spells
+# (`~/plainkeep/...`), so all 51 keep their recorded verdict for the recorded reason. Unconditional
+# rather than setdefault: an inherited value would silently repoint the wall and turn the recorded
+# verdicts into a different question. The expression mirrors bin/lib/wall.py's HOME rule exactly.
+os.environ["PLAINKEEP_HOME"] = (os.environ.get("PLAINKEEP_TEST_HOME")
+                                or os.environ.get("PLAINKEEP_ROOTS_HOME")
+                                or os.environ.get("HOME")
+                                or "/Users/tamas") + "/plainkeep"
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent

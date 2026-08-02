@@ -23,7 +23,17 @@ from dataclasses import dataclass
 
 HOME = os.environ.get("PLAINKEEP_TEST_HOME", "/Users/tamas")
 
-PLAINKEEP = f"{HOME}/plainkeep"
+# The wall's vault segment is the SELECTED data root (ADR-014 D5, Phase 2 Task 1b), not a directory
+# whose NAME is part of the safety model. It used to be the constant `f"{HOME}/plainkeep"`, which is
+# what made "a vault at any other path has every guarded write denied" true, and what made "selecting
+# vault A still authorizes writes into vault B" true after ADR-015 added the active root beside it.
+#
+# There is deliberately no fallback in the engine (`bin/lib/guardrail.py` refuses when
+# PLAINKEEP_HOME is unset). The default kept here is the CONVENTIONAL location and exists only so
+# `python3 test/lib/guardrail.py` still demos: both harnesses that fire the validated cases at this
+# model set PLAINKEEP_HOME explicitly, to exactly this value, so all 51 keep their recorded verdict
+# for the recorded reason.
+PLAINKEEP = os.environ.get("PLAINKEEP_HOME") or f"{HOME}/plainkeep"
 WORK = f"{HOME}/work"
 FILES = f"{HOME}/files"
 DOTFILES = f"{HOME}/dotfiles"
@@ -111,7 +121,7 @@ def _write_verdict(path: str, action: dict) -> Decision:
     if _in_originals(path):
         return Decision(DENY, "~/files/**/in/ originals are read-only evidence", "deny")
     if _under(path, PLAINKEEP):
-        return Decision(ALLOW, "write inside ~/plainkeep is a revertible git diff", "safe_write")
+        return Decision(ALLOW, "write inside the selected vault is a revertible git diff", "safe_write")
     if _under(path, FILES):
         return Decision(ALLOW, "write inside ~/files (out/work/research)", "safe_write")
     if _under(path, f"{WORK}/.worktrees"):

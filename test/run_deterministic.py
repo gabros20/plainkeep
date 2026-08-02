@@ -12,8 +12,20 @@ Usage:  python3 test/run_deterministic.py
 """
 from __future__ import annotations
 import json
+import os
 import sys
 from pathlib import Path
+
+# The wall's vault segment is the SELECTED root since ADR-014 Task 1b, so the model has to be told
+# which root is selected — BEFORE it is imported, since it reads the value once at module scope.
+# Pinned to the CONVENTIONAL location, which is what every one of the validated cases below spells
+# (`~/plainkeep/...`), so each keeps its recorded verdict for the recorded reason. Before Task 1b
+# this line was unnecessary because the model hard-coded that same path; the constant became
+# configuration, and this is where the configuration is stated.
+# Unconditional, not setdefault: the cases below are fixed and so are their expected verdicts, so an
+# inherited PLAINKEEP_HOME must not silently repoint the wall and turn 51 recorded verdicts into a
+# different question. The expression mirrors lib/guardrail.py's own HOME rule exactly.
+os.environ["PLAINKEEP_HOME"] = (os.environ.get("PLAINKEEP_TEST_HOME") or "/Users/tamas") + "/plainkeep"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.guardrail import classify  # noqa: E402

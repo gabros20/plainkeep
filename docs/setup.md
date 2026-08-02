@@ -154,8 +154,14 @@ The optional `$PLAINKEEP_HOME/.venv` holds **all** optional deps. The `plainkeep
 
 Each layer installs its own dep subset into the same venv:
 
-- `plainkeep setup search --yes` creates `$PLAINKEEP_HOME/.venv` (if missing), installs the search deps (`lancedb` + `fastembed`, from `requirements-search.txt`), pulls the embedding model, and builds the index.
-- `plainkeep setup models --yes` installs the file-processing deps (Pillow, trafilatura, and — on Apple Silicon — mlx-vlm) into the **same** venv, then pulls the local models.
+- `plainkeep setup search --yes` creates `$PLAINKEEP_HOME/.venv` (if missing), installs the search deps (`lancedb` + `fastembed`), pulls the embedding model, and builds the index.
+- `plainkeep setup models --yes` does **two things**, and it says so before you confirm: it pulls the local Ollama model **weights** (gigabytes, over the network — not a pip install), and it installs the file-processing packages (Pillow, trafilatura, and — on Apple Silicon — mlx-vlm) into the **same** venv.
+
+**Where those package lists come from (ADR-019).** Both are read from the engine's own
+`pyproject.toml` — the `[search]` and `[models]` extras — which is the same file the engine's
+`uv.lock` is resolved against. `requirements.txt` / `requirements-search.txt` are still there as the
+by-hand `pip install -r` story, but they are **mirrors**: when the two disagree the pyproject wins,
+and the suite reddens rather than letting them drift.
 
 The venv is just the shared, dispatcher-visible environment they land in. So `plainkeep doctor`'s optional probes (Pillow / mlx_vlm / lancedb) run under the same interpreter and report consistently.
 
@@ -170,6 +176,38 @@ rm -rf .venv && plainkeep setup search --yes && plainkeep setup models --yes
 A broken or half-built venv is repaired automatically on the next `plainkeep setup search`/`models`.
 
 This is the single install story. See [ADR-009](DECISIONS.md) and [the agent-terminal guide](agent-terminal-search.md).
+
+## Provisioning the engine itself (ADR-019)
+
+The layers above provision a **vault's** `.venv`. The **engine** has one too, and it is what makes
+plainkeep work on a machine with no system Python at all:
+
+```sh
+python3 bin/lib/provision.py --ensure-uv     # download + verify the pinned uv
+python3 bin/lib/provision.py --sync           # uv sync --frozen against the delivered lock
+```
+
+…or, on a machine that has no `python3` to run that with, the same two steps from the compiled core:
+
+```sh
+plainkeep-core --core-provision ensure-uv
+plainkeep-core --core-provision sync
+```
+
+Four things about it are worth knowing before you run it:
+
+- **uv is downloaded, not vendored, and pinned by exact version + sha256** (`bin/lib/uvpin.json`).
+  The download is verified before it is made executable; a mismatch deletes it and refuses.
+- **A uv already on your machine is ignored.** Not preferred, not fallen back to. The pin is the
+  point: your uv is some version, with some config, and the engine's lock was resolved by neither.
+- **It lands inside the engine version** (`<engine>/tools/`), so it is replaced with the engine and
+  rolls back with it. That directory is the one writable path in an otherwise read-only tree.
+- **Offline, it refuses and prints the exact manual command** — URL, expected sha256, destination —
+  and leaves nothing half-installed. Air-gapped installs are a documented two-step, not a dead end.
+
+`python3 bin/lib/enginetree.py --verify --digests` answers the question the seal cannot: is this
+still the code that was installed? (The checksums live *outside* the tree, beside the versioned
+directories, so an edit inside it cannot rewrite them.)
 
 ## The terminal UI layer
 

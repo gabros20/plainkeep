@@ -23,7 +23,7 @@ plainkeep setup search --yes  # .venv + lancedb/fastembed + embed model + index 
 `plainkeep setup search --yes` does four things:
 
 1. Creates `$PLAINKEEP_HOME/.venv`.
-2. Installs *only* the search deps (`lancedb` + `fastembed`, from `requirements-search.txt`) into it.
+2. Installs *only* the search deps (`lancedb` + `fastembed`) into it — read from the engine's `pyproject.toml` `[search]` extra, which is also what `uv.lock` is resolved against (ADR-019).
 3. Pulls the embedding model.
 4. Builds the index.
 
@@ -65,7 +65,7 @@ interpreter with no per-agent PATH ordering.
 
 > [!NOTE]
 > On **macOS Intel (x86_64)**, `pip` resolves `lancedb` to 0.25.x. That is expected and works.
-> `requirements-search.txt` carries platform-aware markers, so it installs cleanly on every host.
+> The `[search]` extra carries platform-aware markers, so it installs cleanly on every host. `requirements-search.txt` is a mirror of it for by-hand installs.
 
 ## What the agent terminal still needs: `PLAINKEEP_HOME` and the `PLAINKEEP_*` flags
 

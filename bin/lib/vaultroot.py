@@ -133,10 +133,18 @@ def _policy_verdict(root: str) -> str | None:
 
     The markers live in `wall.py` rather than `guardrail.py` precisely so this question can be asked
     HERE: guardrail resolves `PLAINKEEP_HOME` at import and has no fallback left, so the module whose
-    job is to PRODUCE that value cannot import it."""
-    if wall.is_walled(root):
+    job is to PRODUCE that value cannot import it.
+
+    It asks `wall.vault_*` and not `wall.is_walled` / `wall.under_sync_dir`, which match a marker as
+    a bare substring: under those, `~/notes/dropbox-export`, `~/notes/my.sync-notes` and
+    `~/notes/OneDrive-old` were all denied as "inside a cloud-sync tree", which is untrue of every
+    one of them. It fails closed either way, so it was never a safety hole — but this is exit 5, the
+    strictest code in the protocol, aimed at the root itself, and unlike a refused WRITE there is
+    nothing the operator can re-path. See wall.py's header for why the write path keeps the older
+    semantics."""
+    if wall.vault_is_walled(root):
         return "it is inside a walled-off tree (iCloud/Photos) — propose, never write"
-    if wall.under_sync_dir(root):
+    if wall.vault_under_sync_dir(root):
         return "it is inside a cloud-sync tree — a vault's .git must never live under one"
     return None
 
@@ -160,7 +168,12 @@ def validate(candidate, *, how: str, require_registered: bool = False,
     # whether or not it is a well-formed vault.
     denied = _policy_verdict(root)
     if denied is not None:
-        raise VaultError(f"{how} names {root}, and {denied}", code=output.EXIT_DENY)
+        # A DENY with no remediation is a refusal an operator can only work around. This one carried
+        # none at all, which on the strictest code in the protocol is the worst place to omit it.
+        raise VaultError(f"{how} names {root}, and {denied}", code=output.EXIT_DENY,
+                         hint="move the vault to a local path outside that tree, then point "
+                              "plainkeep at where it went:\n"
+                              "    plainkeep vault rebind <name> <new-path> --yes")
 
     marker = vaultreg.read_marker(root)          # raises on a present-but-unusable marker
     if marker is None:

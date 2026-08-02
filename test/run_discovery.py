@@ -618,6 +618,67 @@ def case_policy_denied_location() -> None:
               r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stdout}{r.stderr}")
         check("...and writes nothing either", not new_files(sandbox, before))
 
+        # A policy DENY is the strictest code in the protocol, so it has to carry a way to act on
+        # it. It carried none: `_policy_verdict`'s VaultError had no hint at all.
+        out = r.stdout + r.stderr
+        check("a policy refusal says what to DO about it, not only what is wrong",
+              "rebind" in out or "move the vault" in out, out)
+
+        # THE FALSE POSITIVES. The markers were matched as bare SUBSTRINGS anywhere in the path, so
+        # an ordinary directory whose name merely CONTAINS one was denied — with exit 5, the
+        # strictest code there is, and a stated reason that is simply untrue. None of these is in a
+        # sync tree or a walled-off tree. It failed closed, so it was never a safety hole; it was a
+        # deny an operator could not argue with and could not act on. Selection has a much lower
+        # tolerance for this than the write path does: a write can be re-pathed, a vault cannot.
+        #
+        # Asserted at the layer the finding names — SELECTION, i.e. `vaultroot.py --select` — for
+        # every shape, and then end-to-end for the four the guardrail's separate WRITE wall does not
+        # also reject. That split is not a dodge, it is the residue: guardrail's `_walled` keeps the
+        # substring semantics (its 51 recorded verdicts were taken against them, and changing them
+        # is not this fix), so a path containing "icloud" is now selectable but still not writable.
+        # Recorded as a SUITE-NOTE rather than quietly asserted away.
+        for name in ("dropbox-export", "my.sync-notes", "OneDrive-old", "icloud-archive",
+                     "Pictures-notes", "not-iCloudy"):
+            v = sandbox / "home" / "notes" / name
+            make_vault(v)
+            env = base_env(sandbox, PLAINKEEP_HOME=v)
+            sel = _run([sys.executable, str(REPO / "bin" / "lib" / "vaultroot.py"), "--select"],
+                       sandbox, env)
+            check(f"SELECTION accepts a vault at ~/notes/{name} — the marker is a substring there, "
+                  f"not a path component", sel.returncode == 0,
+                  f"rc={sel.returncode} {sel.stdout}{sel.stderr}")
+
+            if "cloud" in name.lower():
+                continue          # still walled by guardrail's write wall — see the note above
+            before = snapshot(sandbox)
+            r = _run([str(REPO / "plainkeep"), "capture", "falsepos"], sandbox,
+                     {**env, "PLAINKEEP_CORE": "off"})
+            check(f"...and ~/notes/{name} is usable end to end, not denied with exit 5",
+                  r.returncode == 0, f"rc={r.returncode} {r.stdout}{r.stderr}")
+            check(f"...and ~/notes/{name} actually got the note",
+                  any(f.startswith(os.path.join("home", "notes", name, "inbox"))
+                      for f in new_files(sandbox, before)),
+                  str(sorted(new_files(sandbox, before))))
+
+        # ...and the true positives stay denied, on the COMPONENT that really is a sync/walled tree.
+        # Without this pair the case above would also pass against a policy that denies nothing.
+        for rel, why in ((("home", "Dropbox", "notes", "vault"), "a Dropbox component"),
+                         (("home", "x", "Syncthing", "vault"), "a Syncthing component"),
+                         (("home", "x", ".sync", "vault"), "a literal .sync component"),
+                         (("home", "x", "Google Drive", "vault"), "a Google Drive component"),
+                         (("home", "iCloud Drive", "vault"), "the $HOME-anchored iCloud Drive"),
+                         (("home", "Pictures", "vault"), "the $HOME-anchored Pictures")):
+            v = sandbox.joinpath(*rel)
+            make_vault(v)
+            env = base_env(sandbox, PLAINKEEP_HOME=v)
+            before = snapshot(sandbox)
+            r = _run([str(REPO / "plainkeep"), "capture", "truepos"], sandbox,
+                     {**env, "PLAINKEEP_CORE": "off"})
+            check(f"still denied (5): {why}", r.returncode == EXIT_DENY,
+                  f"rc={r.returncode} {r.stdout}{r.stderr}")
+            check(f"...and writes nothing: {why}", not new_files(sandbox, before),
+                  str(sorted(new_files(sandbox, before))))
+
 
 # --------------------------------------------------------------------------------------------
 # H. The selector is PRE-VERB ONLY, and the two dispatchers agree byte-for-byte.
@@ -886,6 +947,11 @@ def main() -> int:
         print(f"\nSUITE-NOTE: no live core binary at {CORE_BIN} — the `core` and `direct` invocation "
               f"paths were NOT exercised, so this run gates the bash floor only. Build it with "
               f"(cd cli && bun run build).")
+    print("SUITE-NOTE: section G fixes the LOCATION policy for vault SELECTION only. guardrail.py's "
+          "write wall still matches its markers as bare substrings — the semantics its 51 recorded "
+          "verdicts were taken against — so a vault at a path merely CONTAINING 'icloud' is now "
+          "selectable but every write into it is still denied with the same untrue reason. "
+          "Converging the two matchers means re-recording those cases and is not this fix.")
     print("SUITE-NOTE: the deleted-$PWD case (C2) does NOT gate the compiled core. The bun runtime "
           "refuses to start in a deleted cwd before any plainkeep code runs, so `plainkeep-core` "
           "exits 1 with bun's own message no matter what discovery does. Measured; the default "

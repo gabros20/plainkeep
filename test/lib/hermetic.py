@@ -58,13 +58,22 @@ _sealed: str | None = None
 
 
 def seal() -> str:
-    """Point `PLAINKEEP_CONFIG_HOME` at an empty throwaway registry. Returns the directory."""
+    """Point `PLAINKEEP_CONFIG_HOME` at an empty throwaway registry. Returns the directory.
+
+    The memo caches WHICH directory, never the fact that the variable is set: every return path
+    re-asserts `os.environ[ENV_CONFIG_HOME]`. Memoizing the assignment away is how a suite could
+    permanently unseal the process — a `finally` that POPS the variable instead of restoring it
+    (run_vault.py did) removes the seal, and a later `seal()` returning the memo unchanged could
+    not put it back. The gate in run_all.py cannot see that: it proves seal() is CALLED, never that
+    the seal is still held."""
     global _sealed
     if _sealed is not None:
+        os.environ[ENV_CONFIG_HOME] = _sealed
         return _sealed
     chosen = os.environ.get(ENV_CONFIG_HOME)
     if chosen:                                  # inherited from run_all.py, or set by the suite
         _sealed = chosen
+        os.environ[ENV_CONFIG_HOME] = chosen
         return _sealed
     d = tempfile.mkdtemp(prefix="pk-hermetic-")
     os.environ[ENV_CONFIG_HOME] = d

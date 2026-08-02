@@ -191,6 +191,11 @@ def case_atomic() -> None:
     vr = load_vaultreg()
     with tempfile.TemporaryDirectory() as td:
         t = Path(td)
+        # RESTORE, never pop (see the finally below). Popping removed the process-wide seal
+        # `hermetic.seal()` established at import, and every later invocation in this file survived
+        # only because each happens to set the variable explicitly — one that forgot would have
+        # dispatched against the developer's real registry with nothing in the output to say so.
+        sealed = os.environ.get("PLAINKEEP_CONFIG_HOME")
         os.environ["PLAINKEEP_CONFIG_HOME"] = str(t / "cfg")
         try:
             reg = vr.empty_registry()
@@ -229,7 +234,30 @@ def case_atomic() -> None:
                   locked and lock.is_file())
             lock.unlink()
         finally:
-            os.environ.pop("PLAINKEEP_CONFIG_HOME", None)
+            if sealed is None:
+                os.environ.pop("PLAINKEEP_CONFIG_HOME", None)
+            else:
+                os.environ["PLAINKEEP_CONFIG_HOME"] = sealed
+
+    # The seal SURVIVES this case. It is asserted rather than assumed because the static gate in
+    # run_all.py structurally cannot see it: that gate proves seal() is CALLED, never that the seal
+    # is still HELD, and this case is the only place in the suite that ever moves the variable. It
+    # used to pop it, permanently unsealing the process — every later invocation here survived only
+    # because each happens to set PLAINKEEP_CONFIG_HOME explicitly.
+    check("the hermetic seal survives a case that repoints PLAINKEEP_CONFIG_HOME",
+          os.environ.get("PLAINKEEP_CONFIG_HOME") == seal(),
+          f"{os.environ.get('PLAINKEEP_CONFIG_HOME')!r} != {seal()!r}")
+
+    # ...and seal() can RE-establish it, which is the other half and needs its own assertion: the
+    # check above passes as long as EITHER the finally restores or seal() re-asserts, so on its own
+    # it would gate neither. seal() was memoized on the directory AND on the assignment, so once the
+    # variable was gone nothing could put it back.
+    held = seal()
+    os.environ.pop("PLAINKEEP_CONFIG_HOME", None)
+    check("seal() RE-ASSERTS the seal — a memo of the directory, never of the assignment",
+          seal() == held and os.environ.get("PLAINKEEP_CONFIG_HOME") == held,
+          f"after re-seal: {os.environ.get('PLAINKEEP_CONFIG_HOME')!r}, want {held!r}")
+    os.environ["PLAINKEEP_CONFIG_HOME"] = held
 
 
 # --------------------------------------------------------------------------------------------

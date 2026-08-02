@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from lib.hermetic import seal
+from lib.hermetic import scratch_root, seal
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -248,9 +248,12 @@ def _api_snapshot():
     )
     # PLAINKEEP_HOME is set because the SDK's import graph reaches lib/paths.py, which resolves the
     # data root at import and has no engine-relative fallback since ADR-014 Task 1b. The snapshot is
-    # about SIGNATURES, not about any path, so the repo itself is the cheapest valid root.
+    # about SIGNATURES, not about any path — but "nothing here writes" is a claim about today's
+    # code, not about the variable, which every child inherits. `scratch_root()` is the lever that
+    # replaced this exact `str(REPO)` pattern in run_notetypes/run_trust after guardrail.py, run as
+    # a subprocess by them, was measured appending to the real vault's audit log on every green run.
     r = subprocess.run([PY, "-c", code], capture_output=True, text=True, cwd=str(REPO),
-                       env={**os.environ, "PLAINKEEP_HOME": str(REPO)})
+                       env={**os.environ, "PLAINKEEP_HOME": scratch_root()})
     check("lib.api imports cleanly", r.returncode == 0, r.stderr)
     try:
         live = json.loads(r.stdout)
@@ -267,7 +270,7 @@ def _api_snapshot():
 def _api_version() -> str:
     r = subprocess.run([PY, "-c", "import sys; sys.path.insert(0,'bin'); from lib import api; print(api.PLAINKEEP_API_VERSION)"],
                        capture_output=True, text=True, cwd=str(REPO),
-                       env={**os.environ, "PLAINKEEP_HOME": str(REPO)})  # same reason as _api_snapshot
+                       env={**os.environ, "PLAINKEEP_HOME": scratch_root()})  # same reason as _api_snapshot
     return r.stdout.strip()
 
 
@@ -277,9 +280,16 @@ def _api_runs_a_verb():
         home = Path(td) / "vault"; home.mkdir()
         plugin(["add", str(FIX), "--yes"], home)
         run = home / "plugins" / "greeter" / "hello" / "run.py"
-        # the stub bootstraps lib via PLAINKEEP_HOME/bin, so point it at the real engine bin
+        # The stub bootstraps lib via `$PLAINKEEP_HOME/bin`, so this root has to CARRY the engine —
+        # which is why it is not `scratch_root()` like the two sites above. It used to be `REPO`,
+        # i.e. the developer's own registered vault: nothing here writes today, but the variable is
+        # inherited by every child, and the first write added would have landed in real notes with
+        # exit 0 and a green run. Symlinking the engine into the throwaway root answers the
+        # bootstrap without being anybody's notes, and everything the stub could write is under
+        # `home` and thrown away with it.
+        os.symlink(REPO / "bin", home / "bin")
         r = subprocess.run([PY, str(run), "ada", "--json"], capture_output=True, text=True,
-                           env={**os.environ, "PLAINKEEP_HOME": str(REPO)}, cwd=str(REPO))
+                           env={**os.environ, "PLAINKEEP_HOME": str(home)}, cwd=str(REPO))
         try:
             env_obj = json.loads(r.stdout.strip())
         except Exception:

@@ -108,13 +108,22 @@ SEAL_CALL_RE = re.compile(r"^seal\(\)", re.M)
 
 
 def _unsealed() -> list[str]:
+    """The suites in SUITES that do not carry the seal.
+
+    Iterates the list that actually RUNS, not `HERE.glob("run_*.py")`. The glob answered a
+    neighbouring question and got both directions wrong: a suite registered in SUITES under any
+    other name was never checked (so the gate could pass while the batch ran an unsealed suite), and
+    a `run_*.py` helper that is not a suite would have failed the whole batch for not being one.
+    Neither case exists today; the point of a gate is the case that does not exist yet."""
     out = []
-    for f in sorted(HERE.glob("run_*.py")):
-        if f.name == Path(__file__).name:
+    for _, script in SUITES:
+        f = HERE / script
+        if not f.is_file():
+            out.append(f"{script} (listed in SUITES but not on disk)")
             continue
         src = f.read_text(encoding="utf-8")
         if not SEAL_IMPORT_RE.search(src) or not SEAL_CALL_RE.search(src):
-            out.append(f.name)
+            out.append(script)
     return out
 
 

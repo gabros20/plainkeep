@@ -839,11 +839,32 @@ is now DENY outright, on the path and on its realpath.
 
 The wall admits exactly one write SHAPE there: an action carrying `create_only`, which is a claim
 about a syscall that fails EEXIST — `os.link`, `open(O_CREAT|O_EXCL)`, `mkdir(2)` — and **never**
-about a prior `exists()` test. `bin/lib/vaultio.py` gains `move_create_only()` (link + unlink on one
-device, `O_EXCL` + copy across devices, neither falling back to a racy path) and `mkdir(exist_ok=
+about a prior `exists()` test. `bin/lib/vaultio.py` gains `move_create_only()` and `mkdir(exist_ok=
 False)` carries the same claim. The public `guard()` STRIPS `create_only`: only the primitives that
 make the syscall may assert it. `files._arrive()` therefore contains no `exists()` call at all — it
 ATTEMPTS each candidate name and lets `FileExistsError` advance to the next.
+
+**The arrived leaf must be the vault's OWN inode, and the seam is not destination-only.** Two
+corrections from the quality review, both reproduced end to end before they were fixed, and both
+about the half of the rule that says an existing original is never mutated or removed:
+
+  * `link(2)` grants a second NAME for an inode and on macOS it FOLLOWS a symlink, so linking a
+    symlinked or already-hard-linked source filed a file the vault did not own: the other name
+    stayed outside `in/`, stayed writable by anything, and one `printf` afterwards edited the
+    "original" with no verb, no wall and no trace, leaving the shadow note's `sha256` a lie. Such a
+    source is now COPIED into a private inode rather than linked — refusing it would be sound but
+    would break the ordinary drop-folder case with no remedy the user could apply — and the copy is
+    still create-only (`O_EXCL`), verified byte for byte before the source is unlinked. The link
+    branch does not pre-stat the source (that would be a check-then-act on a path outside the
+    vault); it verifies AFTERWARDS that the destination names the very file the source named and
+    that the two are its only names, and backs out if not.
+  * the wall classified only the DESTINATION, so `kind: "delete"`'s DENY under `in/` — a validated
+    case since this ADR — had no caller on any verb's path, and `move_create_only`'s unconditional
+    `os.unlink(src)` renamed an existing original to `-2` (exit 0, "filed") or moved it out of the
+    hub entirely when the ingested path was already under `in/`. `vaultio._guard_delete()` is that
+    seam: the source is classified before anything is created, and again at the syscall.
+    `run_pathwall.py` pins every raw removal and rename in `bin/`, because `_is_raw_write` had no
+    pattern for either and that is why nothing caught it.
 
 **Why not "deny an existing path, allow a new one".** It is the obvious fix and it is TOCTOU-prone:
 the wall would answer "this path is free" and another arrival would take it before the write. The
@@ -851,15 +872,17 @@ advisor gate rejected it, and the numbers above are what it looks like in practi
 shipped consults **no mutable state at all**, so the wall has no window of its own; the guarantee
 lives one layer down, in the syscall.
 
-**Consequences.** Four exemptions LEAVE `run_pathwall.py`'s `EXEMPT` map (18 sites -> 15) rather than
+**Consequences.** Three exemptions LEAVE `run_pathwall.py`'s `EXEMPT` map (18 sites -> 15) rather than
 being reworded, and its stale-exemption ratchet is what proves the sites are really fixed. The
 validated case is SPLIT, not deleted: `originals-in-mutate-denied` keeps the old action and verdict,
-`originals-in-create-allowed` is the new half, and six further cases pin that `create_only` launders
-nothing (not iCloud through a symlink, not a path outside the three roots, not another task's `~/work`
-repo). 51 cases -> 59. `paths.ROOTS_HOME` now mirrors `wall.HOME`'s precedence, because from this
-change the two anchor the same tree from opposite sides and disagreeing produces a DENY on a correct
-path. `test/run_originals.py` (54 checks) keeps the BASE loop alive inside the test and ASSERTS THAT
-IT STILL LOSES FILES, so the concurrency gate cannot quietly stop racing.
+`originals-in-create-allowed` is the new half, and seven further cases follow it — three of them
+pinning that `create_only` launders nothing (not iCloud through a symlink, not a path outside the
+three roots, not another task's `~/work` repo), the rest covering the `in/` container, a case-folded
+`IN/`, and delete under `in/` by path and by realpath. 51 cases -> 59. `paths.ROOTS_HOME` now mirrors
+`wall.HOME`'s precedence, because from this change the two anchor the same tree from opposite sides
+and disagreeing produces a DENY on a correct path. `test/run_originals.py` (91 checks) keeps the BASE
+loop alive inside the test and ASSERTS THAT IT STILL LOSES FILES, so the concurrency gate cannot
+quietly stop racing.
 
 **What this does NOT do.** The shadow note `files._shadow()` writes beside each original picks its
 slug with an `exists()`-scan of the wiki and then writes — the same shape, one tree over, and it is
@@ -867,3 +890,12 @@ NOT race-free. It lives inside the vault (a revertible git diff, not evidence), 
 here and stated by `run_originals.py` as a SUITE-NOTE on every run. The cross-device branch is
 exercised by forcing `link(2)` to report EXDEV; no second volume is mounted, so what is proved is
 that the fallback's guarantee is `O_EXCL`'s.
+
+It also does not make the copy crash-safe on a filesystem with **no hard links at all** (exFAT, some
+FUSE mounts). Everywhere else the copy is STAGED — filled under a `.pk-arriving-*` name beside the
+destination, verified, then `link`ed onto it — so the destination name never exists in a partial
+state. Where no second name can be minted, `O_EXCL` is applied straight to the destination and there
+is a window between the create and the last byte in which the leaf is SHORT. An exception unwinds and
+removes it; a `SIGKILL` or a power loss does not, and append-only means that truncated leaf can never
+afterwards be replaced. There is no atomic create-only rename to fix this with; the residue is stated
+in `_direct_create_only_copy`'s docstring, which is where a reader meets it.

@@ -70,7 +70,6 @@ import platform
 import re
 import shutil
 import ssl
-import stat
 import subprocess
 import sys
 import tarfile

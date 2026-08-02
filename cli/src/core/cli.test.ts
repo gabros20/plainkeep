@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { markVault } from "./vault-fixture.js";
+import { addVerb, markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runCore, CORE_IDENTITY } from "./cli.js";
@@ -31,13 +31,19 @@ test("--core-selftest identifies the core binary and exits 0", async () => {
 // That placeholder IS what Task 4 removes: every non-flag argv is now a verb dispatch. The contract
 // asserted here is strictly stronger — the argv still does not run anything, but because the GATE
 // refused it by name (not-found, 4, with the guardrail's own stderr), which is what the bash floor
-// does for the same input. PLAINKEEP_HOME is pinned to an empty temp vault so the verb set is empty
-// by construction: the assertion can never depend on the developer's real vault, and dispatch can
-// never reach a spawn.
+// does for the same input. PLAINKEEP_HOME is pinned to a temp vault carrying exactly ONE verb, and
+// none of the argv below names it: the verb set is known by construction, so the assertion can never
+// depend on the developer's real vault and dispatch can never reach a spawn.
+//
+// That one verb is load-bearing, not scenery. Before the r3 fix wave this fixture had NO verb, and a
+// verb-less root is not "a vault where every verb is unknown" — it is a root that cannot be
+// dispatched for at all, which `require_engine` now refuses with exit 2 before the gate is consulted.
+// Asserting not-found (4) needs a root that really could have found something.
 test("a non-flag argv dispatches: an unknown verb is the gate's not-found (4)", async () => {
   const prev = process.env.PLAINKEEP_HOME;
   const home = mkdtempSync(path.join(tmpdir(), "pk-core-cli-"));
   markVault(home);  // Task 1b: an unmarked directory is no longer a root any dispatch accepts
+  addVerb(home, "aprobe");  // ...and Task 1b r3: a root with no verb at all is not dispatchable
   process.env.PLAINKEEP_HOME = home;
   try {
     for (const argv of [[], ["help"], ["capture", "hi"], ["--version", "extra"], ["--nope"]]) {

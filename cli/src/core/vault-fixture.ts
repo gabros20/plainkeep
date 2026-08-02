@@ -28,11 +28,11 @@ export function markVault(home: string): string {
     `${JSON.stringify({ schema: MARKER_SCHEMA, id, created: new Date().toISOString() }, null, 2)}\n`,
     "utf-8",
   );
-  // ...and the ENGINE, by symlinking only `bin/lib` in. Phase 1 runs the engine from inside the
-  // vault it acts on, and since the r2 fix wave discovery says so out loud: a selected root with no
-  // `bin/lib/guardrail.py` is refused with exit 2 rather than being left to fail at the far end of
-  // the dispatch (the floor's raw CPython "can't open file", the core's false "unknown verb").
-  // A fixture that could not pass that probe was standing in for something that has to.
+  // ...and the ENGINE. Phase 1 runs the engine from inside the vault it acts on, and since the r2
+  // fix wave discovery says so out loud: a selected root that cannot be dispatched for is refused
+  // with exit 2 rather than being left to fail at the far end of the dispatch (the floor's raw
+  // CPython "can't open file", the core's false "unknown verb"). A fixture that could not pass that
+  // probe was standing in for something that has to.
   //
   // `bin/lib` and not `bin`: several tests write their own `bin/<verb>/` into the fixture, and a
   // symlinked `bin` would put those inside the real checkout. `lib` carries no cmd.json, so the
@@ -43,4 +43,23 @@ export function markVault(home: string): string {
     symlinkSync(path.join(REPO, "bin", "lib"), path.join(bin, "lib"));
   }
   return id;
+}
+
+// A marker plus `bin/lib` is NOT a dispatchable root, and since the r3 fix wave it is refused as
+// such: `require_engine` probes for a verb directory too. That second half exists because `bin/lib`
+// alone split the two dispatchers — `resolver.py` finds verbs through its own `__file__`, which
+// follows this symlink back into the real checkout, so the FLOOR saw every verb and captured notes
+// into the fixture, while `resolver.ts` looks under the selected data root and saw none. Same argv:
+// floor exit 0 WITH A WRITE, core exit 4.
+//
+// So a test that actually dispatches has to give its fixture a verb, and most already do (they write
+// the `bin/<verb>/` whose behaviour they are asserting). This is for the ones that need a
+// dispatchable root without caring what is in it. It is NOT folded into `markVault` on purpose: the
+// completion tests assert the exact engine verb LIST, and a verb injected into every fixture would
+// silently rewrite what they are checking.
+export function addVerb(home: string, name: string): string {
+  const d = path.join(home, "bin", name);
+  mkdirSync(d, { recursive: true });
+  writeFileSync(path.join(d, "run.py"), "raise SystemExit('fixture verb: never meant to run')\n", "utf-8");
+  return d;
 }

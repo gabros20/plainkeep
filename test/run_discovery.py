@@ -833,6 +833,58 @@ def case_vault_without_engine() -> None:
               r.returncode == 0 and any(f.startswith("mynotes" + os.sep + "inbox") for f in created),
               f"rc={r.returncode} {r.stdout}{r.stderr} {sorted(created)}")
 
+        # THE PARTIAL ENGINE — a vault carrying `bin/lib` and no verb directory. Total absence (all
+        # of the above) was the only shape gated before, and the gap was not academic: this is the
+        # shape `cli/src/core/vault-fixture.ts` builds, so it was the sanctioned bun fixture.
+        #
+        # It is the shape that breaks the byte-for-byte claim, because the two resolvers disagree
+        # about where verbs live. `resolver.py`'s ENGINE_BIN is `__file__`-relative, so it follows
+        # the `bin/lib` symlink back into the real checkout and finds EVERY verb; `resolver.ts`'s
+        # `engineBin()` is data-relative and finds none. A one-file probe certified this root as
+        # dispatchable and then the floor captured a note at exit 0 while the core refused at exit 4
+        # — one argv, two dispatchers, different answers to "did a write happen", which is the single
+        # thing `--select` exists to make impossible.
+        partial = sandbox / "libonly"
+        (partial / "bin").mkdir(parents=True)
+        os.symlink(REPO / "bin" / "lib", partial / "bin" / "lib")
+        shutil.copy2(REPO / "plainkeep", partial / "plainkeep")
+        os.chmod(partial / "plainkeep", 0o755)
+        vaultfx.mark_vault(partial)
+        register(sandbox, partial, "libonly")
+
+        runs = {}
+        for path in PATHS:
+            if path != "floor" and not core_live():
+                continue
+            before = snapshot(sandbox)
+            r = invoke(path, ["--vault", "libonly", "capture", "partial"], cwd=sandbox, env=env)
+            runs[path] = r
+            out = r.stdout + r.stderr
+            check(f"[{path}] a PARTIAL engine (bin/lib, no verb dir) refuses with EXIT_USAGE (2)",
+                  r.returncode == EXIT_USAGE, f"rc={r.returncode} {out}")
+            check(f"[{path}] ...naming the missing VERB DIRECTORY, not the gate file that is present",
+                  "carries no verb directory" in out and "does not carry the plainkeep engine" in out,
+                  out)
+            # The half that actually caught the divergence: the floor USED to write here.
+            check(f"[{path}] ...and a partial engine writes nothing", not new_files(sandbox, before),
+                  str(sorted(new_files(sandbox, before))))
+        if len(runs) == len(PATHS):
+            sigs = {p: (r.returncode, r.stdout, r.stderr) for p, r in runs.items()}
+            check("floor, core and direct refuse a PARTIAL engine identically",
+                  len(set(sigs.values())) == 1,
+                  "; ".join(f"{p}={s[0]}/{s[2]!r}" for p, s in sigs.items()))
+
+        # ...and the probe still says YES to a root that really can dispatch — one verb is enough,
+        # which is what keeps the widened probe from being "refuse anything unusual".
+        os.symlink(REPO / "bin" / "capture", partial / "bin" / "capture")
+        before = snapshot(sandbox)
+        r = _run([str(REPO / "plainkeep"), "--vault", "libonly", "capture", "nowdispatchable"],
+                 sandbox, {**env, "PLAINKEEP_CORE": "off"})
+        created = new_files(sandbox, before)
+        check("...and ONE verb directory is enough to make that same root dispatchable again",
+              r.returncode == 0 and any(f.startswith("libonly" + os.sep + "inbox") for f in created),
+              f"rc={r.returncode} {r.stdout}{r.stderr} {sorted(created)}")
+
 
 # --------------------------------------------------------------------------------------------
 # K. `vault status` reports the REAL mechanism (brief scope item 6).

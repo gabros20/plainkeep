@@ -95,13 +95,28 @@ MECHANISMS = ("--vault", "PLAINKEEP_HOME", "marker walk-up from $PWD", "registry
 # distinction on the same line number for the same reason.
 ENGINE_BIN = Path(__file__).resolve().parents[1]
 
-# The file whose presence makes a selected root DISPATCHABLE, relative to that root. Phase 1 still
-# runs the engine from INSIDE the vault it acts on — the floor spawns `$PLAINKEEP_HOME/bin/lib/
-# guardrail.py` (plainkeep:98) and the core's resolver looks under the same root (resolver.ts's
-# `engineBin()`) — so an ordinary notes vault, which is a directory with a marker and nothing else,
-# cannot be dispatched for. Relocating the engine is Phase 2 Task 2's job (`PLAINKEEP_ENGINE`); this
-# constant does not lift the constraint, it makes the constraint SAY SO.
+# What makes a selected root DISPATCHABLE, relative to that root. Phase 1 still runs the engine from
+# INSIDE the vault it acts on — the floor spawns `$PLAINKEEP_HOME/bin/lib/guardrail.py`
+# (plainkeep:98) and the core's resolver looks under the same root (resolver.ts's `engineBin()`) — so
+# an ordinary notes vault, which is a directory with a marker and nothing else, cannot be dispatched
+# for. Relocating the engine is Phase 2 Task 2's job (`PLAINKEEP_ENGINE`); these constants do not
+# lift the constraint, they make the constraint SAY SO.
+#
+# TWO probes, not one, and the second is what makes the first honest. The gate file alone certifies
+# only the floor's FIRST spawn. The floor then resolves verbs through `resolver.py`, whose
+# `ENGINE_BIN` is `__file__`-relative — so if `bin/lib` is a symlink into another checkout, the floor
+# finds that checkout's verbs — while `resolver.ts` looks for them under the selected DATA root. A
+# root carrying `bin/lib` and no verb directories therefore passed a one-file probe and then split
+# the dispatchers: the floor captured a note at exit 0, the core answered `unknown verb 'capture'` at
+# exit 4. Two dispatchers, one argv, different answers to "did a write happen" — which is exactly the
+# divergence `--select` exists to make impossible. So dispatchability is probed as BOTH: the gate the
+# floor spawns, and at least one verb the resolvers can agree on.
 ENGINE_PROBE = ("bin", "lib", "guardrail.py")
+ENGINE_VERB_DIR = "bin"
+# A directory is a verb when it carries `run.py` or `cmd.json` — the same test as `resolver.ts`'s
+# `isVerbDir` and `resolver.py`'s, spelled here so the probe cannot certify a shape the resolvers
+# would then disagree about.
+ENGINE_VERB_FILES = ("run.py", "cmd.json")
 
 
 def bootstrap_hint(path) -> str:
@@ -353,6 +368,27 @@ def active_mechanism() -> str | None:
 
 
 # --- the dispatcher entry point -------------------------------------------------------------------
+def _has_verb_dir(root: str) -> bool:
+    """Does `<root>/bin` hold at least one VERB the resolvers would find?
+
+    Deliberately the cheap half of the question: it stops at the first hit and never reads a file, so
+    a dispatchable vault pays one `listdir` and a couple of `stat`s on the happy path. It does not
+    validate the verb — a malformed `cmd.json` is the resolver's problem and has its own refusal —
+    it only establishes that the root has something to dispatch TO, which is the claim
+    `require_engine` makes and could not previously support."""
+    bin_dir = Path(root) / ENGINE_VERB_DIR
+    try:
+        children = sorted(bin_dir.iterdir())
+    except OSError:                 # no bin/ at all, or unreadable — either way, nothing to dispatch
+        return False
+    for child in children:
+        if not child.is_dir():
+            continue
+        if any((child / f).is_file() for f in ENGINE_VERB_FILES):
+            return True
+    return False
+
+
 def require_engine(sel: Selection) -> None:
     """Refuse a SELECTED root that carries no copy of the engine, before either dispatcher tries to
     run one out of it.
@@ -368,9 +404,23 @@ def require_engine(sel: Selection) -> None:
 
     It lives HERE, in the one function both dispatchers run, rather than as a check in each of them:
     two spellings of one refusal is exactly the drift `--select` exists to prevent, and the brief
-    requires the two to agree byte-for-byte."""
+    requires the two to agree byte-for-byte.
+
+    It probes TWO things because one was not enough to support that byte-for-byte claim — see
+    ENGINE_PROBE. A root with `bin/lib/guardrail.py` but no verb directory under `bin/` passed the
+    single-file probe and then diverged: the floor dispatched and WROTE, the core refused. Both
+    halves are required, and the refusal names whichever is missing."""
     p = Path(sel.root).joinpath(*ENGINE_PROBE)
-    if p.is_file():
+    missing = None
+    if not p.is_file():
+        missing = f"no {p}"
+    elif not _has_verb_dir(sel.root):
+        # The gate is there but nothing to dispatch TO. Reported separately because the remediation
+        # is the same but the diagnosis is not, and a message naming a file that exists is a message
+        # that sends the operator looking in the wrong place.
+        missing = (f"{p} is there, but {Path(sel.root) / ENGINE_VERB_DIR} carries no verb directory "
+                   f"(a directory holding {' or '.join(ENGINE_VERB_FILES)})")
+    if missing is None:
         return
     name = None
     try:
@@ -380,7 +430,7 @@ def require_engine(sel: Selection) -> None:
         pass          # a registry we cannot read must not turn THIS refusal into a different one
     who = f"vault '{name}'" if name else "the selected vault"
     raise VaultError(
-        f"{who} at {sel.root} does not carry the plainkeep engine (no {p}) — selection itself "
+        f"{who} at {sel.root} does not carry the plainkeep engine ({missing}) — selection itself "
         f"SUCCEEDED, via {sel.mechanism}; Phase 1 still runs the engine from inside the vault it "
         f"acts on, so a vault holding only notes cannot be dispatched for",
         hint="put the engine in that vault (script/setup), or select one that already carries it:"

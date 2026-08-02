@@ -151,12 +151,19 @@ def _policy_verdict(root: str) -> str | None:
     job is to PRODUCE that value cannot import it.
 
     It asks `wall.vault_*` and not `wall.is_walled` / `wall.under_sync_dir`, which match a marker as
-    a bare substring: under those, `~/notes/dropbox-export`, `~/notes/my.sync-notes` and
-    `~/notes/OneDrive-old` were all denied as "inside a cloud-sync tree", which is untrue of every
-    one of them. It fails closed either way, so it was never a safety hole — but this is exit 5, the
-    strictest code in the protocol, aimed at the root itself, and unlike a refused WRITE there is
-    nothing the operator can re-path. See wall.py's header for why the write path keeps the older
-    semantics."""
+    a bare substring: under those, `~/notes/my.sync-notes` and `~/notes/not-iCloudy` were denied as
+    "inside a cloud-sync tree", which is untrue of both. It fails closed either way, so it was never
+    a safety hole — but this is exit 5, the strictest code in the protocol, aimed at the root itself,
+    and unlike a refused WRITE there is nothing the operator can re-path.
+
+    The component matcher does NOT require equality, and three names that once selected are refused
+    again because of it (`~/notes/dropbox-export`, `~/notes/OneDrive-old`, `~/notes/icloud-archive`).
+    That is a deliberate trade, not an oversight: the real macOS sync mount points are spelled
+    `OneDrive-Personal`, `GoogleDrive-<account>`, `Dropbox (Team)` and `Dropbox.nosync`, and no rule
+    can accept those as sync trees while still accepting `dropbox-export`. Where the two cannot be
+    separated by spelling, the refusal wins — it is visible and carries a `vault rebind` hint, while
+    the miss is silent and leaves a `.git` inside a sync client. See wall.py's header for the full
+    statement of the trade and for why the write path keeps the older semantics."""
     if wall.vault_is_walled(root):
         return "it is inside a walled-off tree (iCloud/Photos) — propose, never write"
     if wall.vault_under_sync_dir(root):

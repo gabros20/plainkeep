@@ -632,13 +632,12 @@ def case_policy_denied_location() -> None:
         # tolerance for this than the write path does: a write can be re-pathed, a vault cannot.
         #
         # Asserted at the layer the finding names — SELECTION, i.e. `vaultroot.py --select` — for
-        # every shape, and then end-to-end for the four the guardrail's separate WRITE wall does not
+        # every shape, and then end-to-end for the ones the guardrail's separate WRITE wall does not
         # also reject. That split is not a dodge, it is the residue: guardrail's `_walled` keeps the
         # substring semantics (its 51 recorded verdicts were taken against them, and changing them
         # is not this fix), so a path containing "icloud" is now selectable but still not writable.
         # Recorded as a SUITE-NOTE rather than quietly asserted away.
-        for name in ("dropbox-export", "my.sync-notes", "OneDrive-old", "icloud-archive",
-                     "Pictures-notes", "not-iCloudy"):
+        for name in ("my.sync-notes", "Pictures-notes", "not-iCloudy"):
             v = sandbox / "home" / "notes" / name
             make_vault(v)
             env = base_env(sandbox, PLAINKEEP_HOME=v)
@@ -660,14 +659,69 @@ def case_policy_denied_location() -> None:
                       for f in new_files(sandbox, before)),
                   str(sorted(new_files(sandbox, before))))
 
+        # Two more shapes that must stay selectable, and they are the ones that pin the BOUNDARIES of
+        # the two matchers rather than their middles: `Pictures-notes` is `$HOME/Pictures` plus
+        # characters (the anchored prefix must stop at a path boundary), `Picturesque` is a component
+        # that merely starts with the anchor's basename.
+        for rel in (("home", "Pictures-notes"), ("home", "Picturesque", "notes")):
+            v = sandbox.joinpath(*rel)
+            make_vault(v)
+            sel = _run([sys.executable, str(REPO / "bin" / "lib" / "vaultroot.py"), "--select"],
+                       sandbox, base_env(sandbox, PLAINKEEP_HOME=v))
+            check(f"SELECTION accepts ~/{os.path.join(*rel[1:])} — an anchored marker stops at a "
+                  f"path boundary", sel.returncode == 0, f"rc={sel.returncode} {sel.stdout}{sel.stderr}")
+
+        # THE DOCUMENTED FALSE POSITIVES — the price of the r3 widening, asserted rather than
+        # discovered later. The component matcher accepts a component that BEGINS with a marker plus
+        # a separator, because that is how the real macOS sync mounts are spelled
+        # (`OneDrive-Personal`, `Dropbox (Team)`, `Dropbox.nosync`). These three are indistinguishable
+        # from those by spelling, so they are refused too. They are pinned HERE, in the suite, with
+        # the exit code and the remediation the operator gets — a trade that is only recorded in a
+        # comment is a trade that gets silently reverted by the next person who trips over it.
+        for name, why in (("dropbox-export", "'Dropbox' + '-'"),
+                          ("OneDrive-old", "'OneDrive' + '-'"),
+                          ("icloud-archive", "'iCloud' + '-'")):
+            v = sandbox / "home" / "notes" / name
+            make_vault(v)
+            env = base_env(sandbox, PLAINKEEP_HOME=v)
+            before = snapshot(sandbox)
+            r = _run([str(REPO / "plainkeep"), "capture", "trade"], sandbox,
+                     {**env, "PLAINKEEP_CORE": "off"})
+            out = r.stdout + r.stderr
+            check(f"ACCEPTED FALSE POSITIVE: ~/notes/{name} is refused (5) — {why} cannot be told "
+                  f"from a real sync mount", r.returncode == EXIT_DENY,
+                  f"rc={r.returncode} {out}")
+            check(f"...and the refusal for ~/notes/{name} is ACTIONABLE (vault rebind), which is "
+                  f"what makes the trade payable", "vault rebind" in out, out)
+            check(f"...and ~/notes/{name} writes nothing", not new_files(sandbox, before),
+                  str(sorted(new_files(sandbox, before))))
+
         # ...and the true positives stay denied, on the COMPONENT that really is a sync/walled tree.
         # Without this pair the case above would also pass against a policy that denies nothing.
+        #
+        # The last five are the r3 additions and they are the whole point of the widening: every one
+        # of them SELECTED cleanly under the equality-only matcher, which is a git tree handed to a
+        # live sync client. `~/Library/CloudStorage/<Provider>-<Account>` is THE macOS mount point
+        # for OneDrive and Google Drive since Ventura, and `Dropbox (Team)` / `Dropbox Personal` /
+        # `Dropbox.nosync` are Dropbox's own folder names. A suite that could not see this class was
+        # the actual defect the r2 wave shipped.
         for rel, why in ((("home", "Dropbox", "notes", "vault"), "a Dropbox component"),
                          (("home", "x", "Syncthing", "vault"), "a Syncthing component"),
                          (("home", "x", ".sync", "vault"), "a literal .sync component"),
                          (("home", "x", "Google Drive", "vault"), "a Google Drive component"),
                          (("home", "iCloud Drive", "vault"), "the $HOME-anchored iCloud Drive"),
-                         (("home", "Pictures", "vault"), "the $HOME-anchored Pictures")):
+                         (("home", "Pictures", "vault"), "the $HOME-anchored Pictures"),
+                         (("home", "Library", "Mobile Documents", "com~apple~CloudDocs", "vault"),
+                          "the nested Mobile Documents component"),
+                         (("home", "Library", "CloudStorage", "OneDrive-Personal", "vault"),
+                          "OneDrive's REAL Ventura+ mount point"),
+                         (("home", "Library", "CloudStorage", "GoogleDrive-me@gmail.com", "vault"),
+                          "Google Drive's REAL Ventura+ mount point"),
+                         (("home", "Dropbox (Acme Inc)", "vault"),
+                          "Dropbox Business's own folder name"),
+                         (("home", "Dropbox Personal", "vault"),
+                          "Dropbox's combined-account folder name"),
+                         (("home", "Dropbox.nosync", "vault"), "Dropbox's .nosync spelling")):
             v = sandbox.joinpath(*rel)
             make_vault(v)
             env = base_env(sandbox, PLAINKEEP_HOME=v)
@@ -678,6 +732,61 @@ def case_policy_denied_location() -> None:
                   f"rc={r.returncode} {r.stdout}{r.stderr}")
             check(f"...and writes nothing: {why}", not new_files(sandbox, before),
                   str(sorted(new_files(sandbox, before))))
+
+
+# --------------------------------------------------------------------------------------------
+# G2. The $HOME-ANCHORED markers must survive a symlinked $HOME.
+#
+# `_under_prefix` compares the anchored markers against `vaultreg.canonical(root)`. If $HOME itself
+# is a symlink — a network-mounted or relocated home, and every macOS temp dir — the two live in
+# different spellings of one directory and the comparison silently answers "no". Every $HOME-anchored
+# marker then stops existing, which is fail-OPEN on exactly the strictest rule in the file. The bare
+# component markers are unaffected, which is why the equality half of this case is what proves the
+# anchored half is really being exercised.
+# --------------------------------------------------------------------------------------------
+def case_anchored_markers_under_symlinked_home() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        # NOT realpath'ed, deliberately: on macOS $TMPDIR is /var/… whose realpath is /private/var/…,
+        # so this is a genuinely symlinked $HOME rather than a simulated one.
+        raw = Path(td)
+        if os.path.realpath(raw) == str(raw):        # a canonical $TMPDIR (most Linux): build one
+            (raw / "real").mkdir()
+            os.symlink(raw / "real", raw / "link")
+            sandbox = raw / "link"
+        else:
+            sandbox = raw
+        (sandbox / "home").mkdir()
+        check("fixture: $HOME really is non-canonical, so this case tests what it says",
+              os.path.realpath(sandbox / "home") != str(sandbox / "home"),
+              f"{sandbox / 'home'} -> {os.path.realpath(sandbox / 'home')}")
+
+        for rel, why in ((("home", "iCloud Drive", "vault"), "$HOME-anchored iCloud Drive"),
+                         (("home", "Pictures", "vault"), "$HOME-anchored Pictures"),
+                         (("home", "Library", "CloudStorage", "OneDrive-Personal", "vault"),
+                          "$HOME-anchored Library/CloudStorage"),
+                         (("home", "Dropbox", "vault"), "a BARE component (the control)")):
+            v = sandbox.joinpath(*rel)
+            make_vault(v)
+            env = base_env(sandbox, PLAINKEEP_HOME=v)
+
+            # SELECTION is asserted directly, and it has to be: guardrail's separate substring write
+            # wall denies a write into `iCloud Drive` / `Pictures` anyway, so an end-to-end exit 5
+            # would be satisfied by the WRONG layer and this case would pass against the bug it
+            # exists for. `--select` is the layer the finding names.
+            sel = _run([sys.executable, str(REPO / "bin" / "lib" / "vaultroot.py"), "--select"],
+                       sandbox, env)
+            check(f"a symlinked $HOME does not disable SELECTION's wall: {why}",
+                  sel.returncode == EXIT_DENY, f"rc={sel.returncode} {sel.stdout}{sel.stderr}")
+
+            before = snapshot(sandbox)
+            r = _run([str(REPO / "plainkeep"), "capture", "symhome"], sandbox,
+                     {**env, "PLAINKEEP_CORE": "off"})
+            check(f"a symlinked $HOME does not disable the wall end to end: {why}",
+                  r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stdout}{r.stderr}")
+            # Not even the audit log: a refusal at SELECTION happens before the vault is touched at
+            # all, where a refusal at the write wall has already opened `.logs/plainkeep.log`.
+            check(f"...and writes nothing under a symlinked $HOME: {why}",
+                  not new_files(sandbox, before), str(sorted(new_files(sandbox, before))))
 
 
 # --------------------------------------------------------------------------------------------
@@ -1041,6 +1150,7 @@ def main() -> int:
     case_moved_vault()
     case_many_vaults_one_wall()
     case_policy_denied_location()
+    case_anchored_markers_under_symlinked_home()
     case_selector_position_and_parity()
     case_canonical_export()
     case_vault_without_engine()
@@ -1059,9 +1169,20 @@ def main() -> int:
               f"(cd cli && bun run build).")
     print("SUITE-NOTE: section G fixes the LOCATION policy for vault SELECTION only. guardrail.py's "
           "write wall still matches its markers as bare substrings — the semantics its 51 recorded "
-          "verdicts were taken against — so a vault at a path merely CONTAINING 'icloud' is now "
-          "selectable but every write into it is still denied with the same untrue reason. "
-          "Converging the two matchers means re-recording those cases and is not this fix.")
+          "verdicts were taken against — so a vault at a path merely CONTAINING 'icloud' can be "
+          "selectable while every write into it is denied with an untrue reason. Converging the two "
+          "matchers means re-recording those cases and is not this fix; it is registered in "
+          "docs/followups.md.")
+    print("SUITE-NOTE: section G's selection matcher accepts a path component that BEGINS with a "
+          "sync marker plus a separator, not only one that equals it, because that is how the real "
+          "mounts are spelled (~/Library/CloudStorage/OneDrive-Personal, 'Dropbox (Team)', "
+          "'Dropbox.nosync'). Requiring equality made all of those SELECTABLE. The price is three "
+          "names that are refused despite being innocent — ~/notes/dropbox-export, "
+          "~/notes/OneDrive-old, ~/notes/icloud-archive — and they are asserted above rather than "
+          "left to be rediscovered. Where a real sync mount and an innocent name cannot be told "
+          "apart by spelling, this suite pins the REFUSAL: it is visible and carries a "
+          "`vault rebind` remediation, where the miss is silent and leaves a .git inside a sync "
+          "client. Section G2 pins the same wall against a symlinked $HOME.")
     print("SUITE-NOTE: the deleted-$PWD case (C2) does NOT gate the compiled core. The bun runtime "
           "refuses to start in a deleted cwd before any plainkeep code runs, so `plainkeep-core` "
           "exits 1 with bun's own message no matter what discovery does. Measured; the default "

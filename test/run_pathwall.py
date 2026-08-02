@@ -332,7 +332,13 @@ PINNED_DELETES: dict[str, set[str]] = {
     # it is `paths.PLAINKEEP_HOME / "plugins" / "local" / ".pk-scaffolding-*"`, which cannot resolve
     # under `~/files/**/in/` — plugins/ is a vault-owned code tree, not an originals tree. The move
     # INTO place goes through the seam (`vaultio.replace`), which classifies both ends.
-    "bin/new/run.py": {"shutil.rmtree(staging, ignore_errors=True)"},
+    # The second removal is the SWEEP of leaves an earlier run was killed before it could rename: same
+    # glob, same directory, and it is age-gated (older than the installer's `STALE_STAGING_SECONDS`)
+    # so it can never take a leaf a concurrent scaffold is still filling. `p` comes from
+    # `parent.glob(".pk-scaffolding-*")` where `parent` is that same `plugins/local/`, so the target
+    # set is the dot-prefixed staging namespace and nothing else — a user's verb has no leading dot.
+    "bin/new/run.py": {"shutil.rmtree(staging, ignore_errors=True)",
+                       "shutil.rmtree(p, ignore_errors=True)"},
     "bin/plugin/run.py": {"shutil.rmtree(staging, ignore_errors=True)",
                           "shutil.rmtree(dest, ignore_errors=True)"},
     "bin/repo/run.py": {"shutil.rmtree(nm); freed += 1"},

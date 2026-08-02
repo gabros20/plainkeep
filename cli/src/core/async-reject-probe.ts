@@ -7,10 +7,16 @@
 // from inside a test would take the test runner down with it. `main.async.test.ts` spawns this file
 // and asserts the exit code and the audit line it left behind.
 //
-// Run directly with: cd cli && PLAINKEEP_HOME=<vault> bun run src/core/async-reject-probe.ts v_reject
+// Run directly with: cd cli && PLAINKEEP_HOME=<vault> bun run src/core/async-reject-probe.ts help
+// The verb intercepted is a REAL engine verb (`help`, read-class, and per run.md D6
+// deliberately NOT intercepted in production). It has to be: this file reaches main.ts,
+// which reaches runCore(), which ACTIVATES the engine from the binary's own location before
+// anything else runs (Phase 2 Task 2) — so a synthetic verb planted in a temp tree would not
+// be on the surface the gate consults, and the gate would answer not-found before the
+// interception this probe exists to drive was ever reached.
 import { INTERCEPTS } from "./dispatch.js";
 
-INTERCEPTS.v_reject = {
+INTERCEPTS.help = {
   comparable: false,
   run: async () => {
     // An async interception that fails the way a real one would: not by returning an error result,

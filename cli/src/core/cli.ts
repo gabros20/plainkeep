@@ -13,7 +13,7 @@ import {
   sourceOf,
 } from "./resolver.js";
 import { mainCli } from "./guardrail.js";
-import { takeVaultSelector, VaultRefusal } from "./vaultroot.js";
+import { activateEngine, takeVaultSelector, VaultRefusal } from "./vaultroot.js";
 
 export interface CoreResult {
   stdout?: string;
@@ -101,6 +101,13 @@ export const INTERCEPTED_FLAGS_BARE = ["--version", "-v", "--core-selftest"] as 
 export const INTERCEPTED_FLAGS_ALWAYS = ["--core-resolve", "--core-api", "--core-gate"] as const;
 
 export function runCore(rawArgv: string[]): CoreResult | Promise<CoreResult> {
+  // ACTIVATE THE ENGINE FIRST — before the selector, before the identity probes, before the hidden
+  // introspection flags, before dispatch. It overwrites PLAINKEEP_ENGINE with this binary's own
+  // code-relative tree, which is ADR-014 D2's "caller input must not control where code is loaded
+  // from" made true for EVERY entry point rather than only for the dispatching one: `--core-resolve`
+  // and `--core-api` reach the resolver without dispatching, and a replacement that lived in
+  // dispatch() would have left them reading whatever the caller exported. Nothing above this line.
+  activateEngine();
   // The global `--vault` selector comes off FIRST, before the identity probes, before the hidden
   // introspection flags and before dispatch() ever sees an argv. Pre-verb only, and gone by the time
   // anything downstream — the gate, completion, the TUI/MCP interceptions, the child's argv — could

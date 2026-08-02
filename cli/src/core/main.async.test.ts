@@ -7,7 +7,7 @@
 // main.ts calls process.exit() at top level, so it cannot be imported here; ./async-reject-probe.ts
 // registers a rejecting interception and imports it in a CHILD process, and this asserts that child.
 import { test, expect } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync, realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync, existsSync, realpathSync } from "node:fs";
 import { markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -15,13 +15,14 @@ import path from "node:path";
 // A vault with one read-class verb the gate will allow, so the INTERCEPTION decides the outcome. Its
 // run.py prints a marker: if the interception were somehow skipped, the spawn would print it and the
 // exit code would be 0, which is a different failure than the one under test.
+// A vault the probe can dispatch against. It carries NO verbs, and since Phase 2 Task 2 it could
+// not usefully carry any: the probes reach main.ts, which reaches runCore(), which activates the
+// engine from the binary's own location — so the verb surface they see is the real engine's, and the
+// verb they intercept is the real read-class `help`. What the fixture still supplies is the thing a
+// dispatch genuinely needs from a vault: a marker, and somewhere for the audit line to land.
 function rejectVault(): string {
   const home = realpathSync(mkdtempSync(path.join(tmpdir(), "pk-async-reject-")));
   markVault(home);  // Task 1b: dispatch validates the root before anything else runs
-  const d = path.join(home, "bin", "v_reject");
-  mkdirSync(d, { recursive: true });
-  writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v_reject", risk: "read" }));
-  writeFileSync(path.join(d, "run.py"), "print('SPAWNED PYTHON')\n");
   return home;
 }
 
@@ -29,7 +30,7 @@ test("a REJECTING async interception exits 5 with a named cause — never bun's 
   const home = rejectVault();
   try {
     const probe = path.join(import.meta.dir, "async-reject-probe.ts");
-    const r = Bun.spawnSync(["bun", "run", probe, "v_reject"], {
+    const r = Bun.spawnSync(["bun", "run", probe, "help"], {
       cwd: path.join(import.meta.dir, "..", ".."),
       env: { ...process.env, PLAINKEEP_HOME: home, PLAINKEEP_PATH: "" },
     });
@@ -42,14 +43,16 @@ test("a REJECTING async interception exits 5 with a named cause — never bun's 
       "plainkeep-core: internal error (TypeError)",
     ]);
     // The interception really ran (and really rejected) instead of falling through to the spawn.
-    expect(stdout).not.toContain("SPAWNED PYTHON");
+    // The interception really ran instead of falling through to the real `help` verb, whose
+    // first line is this.
+    expect(stdout).not.toContain("the personal OS command surface");
     // ...and the gate's audit line was still written, because the interception is post-gate. A
     // rejection must not be able to suppress the record that the verb was allowed to run.
     const logFile = path.join(home, ".logs", "plainkeep.log");
     const log = existsSync(logFile) ? readFileSync(logFile, "utf-8") : "";
     // The trailing space is the audit format's naive `${verb} ${args.join(" ")}` with no args —
     // asserted as-is rather than trimmed, since that join is frozen by the Global Constraints.
-    expect(log).toContain("\tv_reject \tallow\tread");
+    expect(log).toContain("\thelp \tallow\tread");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -61,7 +64,7 @@ test("a RESOLVING async interception is awaited, and its result is used verbatim
   const home = rejectVault();
   try {
     const probe = path.join(import.meta.dir, "async-resolve-probe.ts");
-    const r = Bun.spawnSync(["bun", "run", probe, "v_reject"], {
+    const r = Bun.spawnSync(["bun", "run", probe, "help"], {
       cwd: path.join(import.meta.dir, "..", ".."),
       env: { ...process.env, PLAINKEEP_HOME: home, PLAINKEEP_PATH: "" },
     });

@@ -12,7 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { EXIT_DENY } from "./guardrail.js";
-import { markVault } from "./vault-fixture.js";
+import { makeEngine, markVault } from "./vault-fixture.js";
 import { VaultRefusal } from "./vaultroot.js";
 import {
   blockingRestoreFailure,
@@ -56,10 +56,21 @@ async function withHomeAsync<T>(home: string, fn: () => Promise<T>): Promise<T> 
 // A throwaway vault that is actually a VAULT. Since Task 1b dispatch() validates the root before
 // it does anything else, so a bare mkdtemp is no longer a root any dispatch will accept — it refuses
 // with exit 2 and nothing downstream runs.
+//
+// It also activates a throwaway ENGINE beside it (Phase 2 Task 2). Verbs go in the engine now, not
+// in the vault — `engineDir()` is where — and the two trees must be disjoint or discovery refuses
+// with exit 5 before the gate.
 function vaultDir(prefix: string): string {
   const home = mkdtempSync(path.join(tmpdir(), prefix));
   markVault(home);
+  makeEngine(mkdtempSync(path.join(tmpdir(), `${prefix}engine-`)));
   return home;
+}
+
+// The engine `vaultDir()` (or a test's own `makeEngine`) activated. Verbs written here are what both
+// resolvers see; a `bin/` inside the vault is inert data.
+function engineDir(): string {
+  return process.env.PLAINKEEP_ENGINE ?? "";
 }
 
 test("verbFromArgv: no argv is the default verb `help` with no args", () => {
@@ -97,7 +108,8 @@ test("dispatch EXPORTS the canonical root, not the caller's spelling of it", asy
   const alias = path.join(holder, "vault");
   symlinkSync(real, alias);
   markVault(real);
-  const d = path.join(real, "bin", "v");
+  makeEngine(mkdtempSync(path.join(tmpdir(), "pk-home-engine-")));
+  const d = path.join(engineDir(), "bin", "v");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v", risk: "read" }));
   writeFileSync(path.join(d, "run.py"), "raise SystemExit(0)\n");
@@ -124,7 +136,7 @@ test("dispatch EXPORTS the canonical root, not the caller's spelling of it", asy
 // in the CORE that has to match the floor's `pk_discover` export.
 test("dispatch exports WHICH mechanism chose, not just the root it chose", async () => {
   const home = vaultDir("pk-home-mech-");
-  const d = path.join(home, "bin", "v");
+  const d = path.join(engineDir(), "bin", "v");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v", risk: "read" }));
   writeFileSync(path.join(d, "run.py"), "raise SystemExit(0)\n");
@@ -165,7 +177,7 @@ test("dispatch REFUSES a PLAINKEEP_HOME that is not a marked vault, and spawns n
   // A bare directory carrying a whole verb surface — everything except the one thing that makes it
   // a vault. The verb would exit 7 if it ran; the refusal is exit 2 and run.py is never reached.
   const home = mkdtempSync(path.join(tmpdir(), "pk-unmarked-"));
-  const d = path.join(home, "bin", "v");
+  const d = path.join(engineDir(), "bin", "v");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v", risk: "read" }));
   writeFileSync(path.join(d, "run.py"), "raise SystemExit(7)\n");
@@ -199,7 +211,7 @@ test("dispatch REFUSES a PLAINKEEP_HOME that is not a marked vault, and spawns n
 // A vault with one read-class verb `help`, so the gate allows and INTERCEPTS decides the outcome.
 function helpVault(): string {
   const home = vaultDir("pk-intercept-");
-  const d = path.join(home, "bin", "help");
+  const d = path.join(engineDir(), "bin", "help");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "help", risk: "read" }));
   writeFileSync(path.join(d, "run.py"), "print('SPAWNED PYTHON')\n");
@@ -264,7 +276,7 @@ test("dispatch: a verb named after an Object.prototype member RUNS, it is not sw
   const home = vaultDir("pk-proto-verb-");
   try {
     for (const name of PROTOTYPE_NAMES) {
-      const d = path.join(home, "bin", name);
+      const d = path.join(engineDir(), "bin", name);
       mkdirSync(d, { recursive: true });
       writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: name, risk: "read" }));
       // Exit 7 is the discriminator: it can only come from the verb having actually run. The old
@@ -282,7 +294,7 @@ test("dispatch: a verb named after an Object.prototype member RUNS, it is not sw
 
 test("INTERCEPTS does not fire for a verb the gate refused — the gate still decides first", async () => {
   const home = vaultDir("pk-intercept-deny-");
-  const d = path.join(home, "bin", "danger");
+  const d = path.join(engineDir(), "bin", "danger");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "danger", risk: "deny" }));
   let fired = false;

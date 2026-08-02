@@ -9,20 +9,20 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths, render  # noqa: E402
+from lib import enginetree, output, paths, render  # noqa: E402
 from lib.indexlib import search, snippets  # noqa: E402
 
 DIM, RESET = "\033[2m", "\033[0m"
 
 
 def _open(slug: str) -> int:
-    return subprocess.run([str(paths.PLAINKEEP_HOME / "plainkeep"), "open", slug]).returncode
+    return subprocess.run([str(enginetree.launcher()), "open", slug]).returncode
 
 
 def _live_session() -> int:
     """fzf live-reload search: each keystroke re-runs `plainkeep search`; enter opens the hit via `plainkeep open`.
     Re-enters through the dispatcher (guardrail applies); no verb/lib import shortcut (anti-roadmap #2)."""
-    pk = str(paths.PLAINKEEP_HOME / "plainkeep")
+    pk = str(enginetree.launcher())   # the engine's launcher, not a vault-local shim
     reload_cmd = f'PLAINKEEP_RENDER=raw "{pk}" search {{q}} 2>/dev/null'
     preview = f'PLAINKEEP_RENDER=plain "{pk}" open {{2}} 2>/dev/null'
     argv = ["fzf", "--ansi", "--reverse", "--disabled", "--height", "80%", "--nth", "2..",

@@ -201,6 +201,29 @@ EXEMPT: dict[str, dict[str, str]] = {
             "the REGISTRY's config directory ($XDG_CONFIG_HOME/plainkeep) — it lives outside every "
             "vault by design, since it is the thing that knows which vaults exist",
     },
+    # The ENGINE INSTALLER (Phase 2 Task 2). Every line below writes into
+    # `${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/`, which is CODE and is outside
+    # every vault by construction — the disjointness check in `vaultroot.validate()` refuses any
+    # data root that overlaps it, so an installer write can never land in a vault. It is the same
+    # class as `vaultreg`'s config-directory write directly above: this is the machinery that
+    # establishes where the wall goes, so it cannot be subject to a wall that has not been
+    # positioned yet. Routing it through `vaultio` would mean classifying an engine path against
+    # the active DATA root, which answers DENY for every install.
+    #
+    # It is also not agent-reachable: `enginetree.install()` has no verb, is not in the frozen SDK
+    # (`lib/api.py`), and is invoked by `script/setup` and the test harness only.
+    "bin/lib/enginetree.py": {
+        'd.parent.mkdir(parents=True, exist_ok=True)':
+            "the installed engine tree's parent directories — engine code, outside every vault",
+        'shutil.copytree(s, d, ignore=ignore, symlinks=True)':
+            "copying an OWNED_TREES subtree into the staged engine",
+        'shutil.copy2(s, d)': "copying an OWNED_FILES file into the staged engine",
+        'shutil.copy2(core, d)': "the optional compiled core, if the source checkout has one",
+        'root.mkdir(parents=True, exist_ok=True)': "the versions directory itself",
+        'staging.mkdir()':
+            "the `.incoming-<version>` staging directory — an engine is verified there and only "
+            "then renamed into its version name, so a half-copied tree is never reachable",
+    },
     "bin/vault/run.py": {
         'vaultreg.marker_path(target).write_text(vaultreg.marker_bytes(marker), encoding="utf-8")':
             "the vault MARKER — the one write that establishes where the wall goes. The target is "
@@ -276,6 +299,21 @@ PINNED_DELETES: dict[str, set[str]] = {
                             # the atomic write of the registry file itself, which lives outside every
                             # vault by design — so it can never resolve under `~/files/**/in/`
                             "os.replace(tmp, f)"},
+    # The ENGINE INSTALLER (Phase 2 Task 2). Every removal below targets a path under
+    # `${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/`, and the question this ratchet exists to
+    # ask — "can this path resolve under `~/files/**/in/`?" — is answered NO structurally rather
+    # than by inspection: the destination is derived from `enginetree.versions_dir()` alone, never
+    # from an argument, and a data root that overlaps that tree is refused by
+    # `vaultroot.validate()`. Nothing an agent can reach calls any of them.
+    "bin/lib/enginetree.py": {"shutil.rmtree(d, ignore_errors=True)",
+                              "shutil.rmtree(staging, ignore_errors=True)",
+                              # the staged tree becomes the version directory; the version
+                              # directory it would overwrite was removed by remove_version() first
+                              "os.rename(staging, dst)",
+                              # replacing the `current` symlink, atomically: a uniquely named link
+                              # is created beside it and renamed over the old one
+                              "tmp.unlink()",
+                              "os.replace(tmp, link)"},
     "bin/plugin/run.py": {"shutil.rmtree(staging, ignore_errors=True)",
                           "shutil.rmtree(dest, ignore_errors=True)"},
     "bin/repo/run.py": {"shutil.rmtree(nm); freed += 1"},

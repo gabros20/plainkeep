@@ -6,11 +6,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync } from "nod
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { resolve, sourceOf, pluginNames, iterCmds, shadowed, knownVerbs } from "./resolver.js";
+import { makeEngine } from "./vault-fixture.js";
 
 let vault = "";
+let engine = "";
+// The two trees Phase 2 Task 2 separates: the ENGINE holds the reserved verb surface (which is what
+// `engineBin()` now resolves against), the VAULT holds plugin packs and $PLAINKEEP_PATH roots.
 function makeVault(): string {
   vault = realpathSync(mkdtempSync(path.join(tmpdir(), "pk-resolver-")));
-  mkdirSync(path.join(vault, "bin"), { recursive: true });
+  engine = makeEngine(realpathSync(mkdtempSync(path.join(tmpdir(), "pk-resolver-engine-"))));
   return vault;
 }
 function verb(base: string, name: string, files: string[] = ["run.py", "cmd.json"]): void {
@@ -21,14 +25,17 @@ function verb(base: string, name: string, files: string[] = ["run.py", "cmd.json
 
 afterEach(() => {
   if (vault) rmSync(vault, { recursive: true, force: true });
+  if (engine) rmSync(engine, { recursive: true, force: true });
   vault = "";
+  engine = "";
   delete process.env.PLAINKEEP_HOME;
   delete process.env.PLAINKEEP_PATH;
+  delete process.env.PLAINKEEP_ENGINE;
 });
 
 test("engine bin/ wins over a plugin of the same name; the plugin is shadowed()", () => {
   const v = makeVault();
-  verb(path.join(v, "bin"), "search");
+  verb(path.join(engine, "bin"), "search");
   verb(path.join(v, "plugins", "packA"), "search", ["cmd.json"]);
   verb(path.join(v, "plugins", "packA"), "pfoo");
   process.env.PLAINKEEP_HOME = v;

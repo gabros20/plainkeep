@@ -10,10 +10,15 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import * as realResolver from "./resolver.js";
+import { makeEngine } from "./vault-fixture.js";
 
 test("an injected library throw becomes a deterministic deny, and the audit line is still written", async () => {
   const vault = realpathSync(mkdtempSync(path.join(tmpdir(), "pk-guardrail-ie-")));
-  const d = path.join(vault, "bin", "v_boom");
+  // The verb lives in the ENGINE (Phase 2 Task 2), which is a separate tree from the vault. This
+  // probe calls mainCli() directly rather than going through runCore(), so nothing activates an
+  // engine for it and PLAINKEEP_ENGINE is set here — the same way PLAINKEEP_HOME is.
+  const engine = makeEngine(realpathSync(mkdtempSync(path.join(tmpdir(), "pk-guardrail-ie-engine-"))));
+  const d = path.join(engine, "bin", "v_boom");
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "run.py"), "def main(argv):\n    return 0\n");
   writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v_boom", risk: "read" }));
@@ -43,4 +48,5 @@ test("an injected library throw becomes a deterministic deny, and the audit line
   expect(line).toContain("\tv_boom --yes\tdeny\tinternal gate error (TypeError) — refusing");
 
   rmSync(vault, { recursive: true, force: true });
+  rmSync(engine, { recursive: true, force: true });
 });

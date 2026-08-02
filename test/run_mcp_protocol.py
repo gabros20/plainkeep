@@ -352,14 +352,22 @@ def clear_audit(vault: Path) -> None:
 
 
 class Mode:
-    def __init__(self, name: str, vault: Path, tmp: Path, env: dict):
+    """One dispatcher mode, pointed at an ENGINE and a VAULT (Phase 2 Task 2 separated the two).
+
+    `launcher` is the engine's `plainkeep`, not the vault's: the vault is data and has no launcher
+    of its own. Before the split this suite copied the whole repository into the vault and ran the
+    copy's shim out of it — which is precisely the layout the engine/data disjointness check now
+    refuses."""
+
+    def __init__(self, name: str, engine: Path, vault: Path, tmp: Path, env: dict):
         self.name = name
+        self.engine = engine
         self.vault = vault
         self.tmp = tmp
         self.env = env
 
     def session(self, label: str) -> Session:
-        return Session(f"{label} [{self.name}]", self.vault / "plainkeep", self.env, self.tmp)
+        return Session(f"{label} [{self.name}]", self.engine / "plainkeep", self.env, self.tmp)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -1145,13 +1153,29 @@ def main() -> int:
         (vault / "wiki" / "notes" / "unicode-probe.md").write_text(
             f"---\ntype: note\ntitle: {UNI_NOTE_TITLE}\nstatus: active\ntags: [demo]\n---\n"
             f"# {UNI_NOTE_TITLE}\n\nunicodeprobe — {UNI_BLOB}\n", encoding="utf-8")
+        # THE ENGINE, beside the vault and never inside it (Task 2). Installed through the real
+        # installer from the real repository, so this suite drives the shipped artifact rather than
+        # a hand-assembled approximation of one — and so both dispatchers here are reached the way a
+        # user reaches them, through `<install>/engine/current/`.
+        engine_home = tmp / "engine-install"
+        inst = subprocess.run(
+            [sys.executable, str(REPO / "bin" / "lib" / "enginetree.py"), "--install", str(REPO)],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAINKEEP_ENGINE_HOME": str(engine_home)})
+        if inst.returncode != 0:
+            print(f"{RED}engine install failed: {inst.returncode} {inst.stdout}{inst.stderr}{RESET}",
+                  file=sys.stderr)
+            return 1
+        engine = engine_home / "engine" / "current"
+        engine_core = engine / ".local" / "bin" / "plainkeep-core"
         base = {**os.environ, "PLAINKEEP_HOME": str(vault)}
         base.pop("PLAINKEEP_PATH", None)
-        core = Mode("core", vault, tmp, {**base, "PLAINKEEP_CORE": "require",
-                                         "PLAINKEEP_CORE_BIN": binary})
-        floor = Mode("floor", vault, tmp, {**base, "PLAINKEEP_CORE": "off",
-                                           "PLAINKEEP_CORE_BIN": ""})
-        subprocess.run([str(vault / "plainkeep"), "index"], capture_output=True, env=core.env)
+        base.pop("PLAINKEEP_ENGINE", None)
+        core = Mode("core", engine, vault, tmp, {**base, "PLAINKEEP_CORE": "require",
+                                                 "PLAINKEEP_CORE_BIN": str(engine_core)})
+        floor = Mode("floor", engine, vault, tmp, {**base, "PLAINKEEP_CORE": "off",
+                                                   "PLAINKEEP_CORE_BIN": ""})
+        subprocess.run([str(engine / "plainkeep"), "index"], capture_output=True, env=core.env)
 
         for label, fn in DIFFERENTIAL:
             try:

@@ -41,6 +41,14 @@ pk_engine_dir() {
   cd -P "$(dirname "$src")" && pwd
 }
 ENGINE="$(pk_engine_dir "$0")"
+# ...and EXPORT it, replacing whatever the caller had in PLAINKEEP_ENGINE. Unconditionally, before
+# anything else, and without inspecting the inherited value: ADR-014 D2 states the rule as "caller
+# input must not control it", and the way to make that true is not to validate the variable but to
+# overwrite it from a source the caller cannot reach. Nothing in the engine's own Python reads
+# PLAINKEEP_ENGINE to decide where to load code from (bin/lib resolves through `__file__`); the
+# variable is an OUTPUT, for the processes that genuinely cannot self-locate — a plugin verb under
+# `<vault>/plugins/<pack>/<verb>/`, a raycast frontend, a launchd job.
+export PLAINKEEP_ENGINE="$ENGINE"
 
 # --------------------------------------------------------------------------------------------------
 # The global `--vault` selector: PRE-VERB ONLY (Task 1b). `plainkeep --vault work capture x` selects;
@@ -85,15 +93,7 @@ pk_discover() {
   # line above destroys the evidence: a verb re-running the chain would find step 2 already
   # satisfied and could only ever answer "PLAINKEEP_HOME". `plainkeep vault status` reads it.
   PLAINKEEP_VAULT_MECHANISM="$(printf '%s\n' "$out" | sed -n '3p')"
-  # Line 4 is the ENGINE root, and exporting it REPLACES whatever the caller had in
-  # PLAINKEEP_ENGINE — unconditionally, with no inspection of the inherited value. ADR-014 D2 states
-  # the rule as "caller input must not control it", and the way to make that true is not to validate
-  # the variable but to never read it: nothing in the engine's own Python consults PLAINKEEP_ENGINE
-  # to decide where to load code from (bin/lib resolves code-relative through `__file__`). The
-  # variable is an OUTPUT, for the processes that genuinely cannot self-locate — a plugin verb under
-  # `<vault>/plugins/<pack>/<verb>/`, a raycast frontend, a launchd job.
-  PLAINKEEP_ENGINE="$(printf '%s\n' "$out" | sed -n '4p')"
-  export PLAINKEEP_HOME PLAINKEEP_VAULT_ID PLAINKEEP_VAULT_MECHANISM PLAINKEEP_ENGINE
+  export PLAINKEEP_HOME PLAINKEEP_VAULT_ID PLAINKEEP_VAULT_MECHANISM
 }
 
 # --------------------------------------------------------------------------------------------------

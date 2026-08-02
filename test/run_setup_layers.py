@@ -379,11 +379,25 @@ def main() -> int:
         finally:
             restore(mod, old)
 
-        # Ready once an executable binary sits where the shim looks first (.local/bin/plainkeep-ui).
+        # Ready once an executable binary sits where the shim looks first (.local/bin/plainkeep-ui)
+        # AND it reports the version the ENGINE pins.
+        #
+        # The stub used to be `#!/bin/sh` and nothing else, and it passed for a reason that stopped
+        # being true in Phase 2 Task 2: `_ui_expected_version()` read the pin as
+        # `$PLAINKEEP_HOME/bin/ui/version.txt`, which this fixture vault does not have, so the engine
+        # read as "pre-version" and update detection was switched off entirely. The pin is
+        # engine-owned (`<engine>/bin/ui/version.txt`) and is now found wherever the vault is, so a
+        # binary that answers `--version` with nothing is correctly `partial` — "update available".
+        # The stub therefore answers with the real pin, which is what a matching install looks like.
+        expected_ui = (REPO / "bin" / "ui" / "version.txt").read_text(encoding="utf-8").strip()
         ui_bin = home / ".local" / "bin" / "plainkeep-ui"
         ui_bin.parent.mkdir(parents=True, exist_ok=True)
-        ui_bin.write_text("#!/bin/sh\n")
+        ui_bin.write_text(f"#!/bin/sh\necho {expected_ui}\n")
         ui_bin.chmod(0o755)
+        check("the ui pin is ENGINE-owned and found with no copy of it in the vault",
+              mod._ui_expected_version() == expected_ui
+              and not (home / "bin" / "ui" / "version.txt").exists(),
+              f"expected={mod._ui_expected_version()!r} pin={expected_ui!r}")
         u_rdy = mod.status("ui")[0]
         check("ui ready once .local/bin/plainkeep-ui is installed+executable", u_rdy["status"] == "ready", str(u_rdy))
         u_skip = mod.advance("ui", yes=True, fake=True)

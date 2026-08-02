@@ -25,7 +25,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { engineRoot, requireHome } from "./vaultroot.js";
+import { requireEngine, requireHome } from "./vaultroot.js";
 
 export type Source = "engine" | `plugin:${string}`;
 
@@ -76,9 +76,11 @@ function opsHome(): string {
   return requireHome();
 }
 
-// The ENGINE's bin/ — code-relative, never derived from the data root. See the header.
+// The ENGINE's bin/ — the tree runCore() activated from the executable's own location, never
+// derived from the data root. Read through requireEngine() for the same reason opsHome() reads
+// requireHome(): one place holds the answer, so one place could ever grow a fallback.
 function engineBin(): string {
-  return path.join(engineRoot(), "bin");
+  return path.join(requireEngine(), "bin");
 }
 
 function isVerbDir(d: string): boolean {

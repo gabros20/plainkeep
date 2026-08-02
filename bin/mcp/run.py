@@ -25,14 +25,20 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import manifest, output, paths  # noqa: E402
+from lib import enginetree, manifest, output, paths  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"          # echoed back to the client if it doesn't pin its own
 SERVER_NAME = "plainkeep"
 
 
 def _dispatcher_bin() -> str:
-    return str(paths.PLAINKEEP_HOME / "plainkeep")
+    """The dispatcher a tool call re-enters through — the ENGINE's launcher (Task 2).
+
+    It was `$PLAINKEEP_HOME/plainkeep`, i.e. the vault-local shim. A data vault has no
+    launcher of its own, and deriving one from the data root would mean an MCP client's
+    tool call re-enters through whatever executable happens to sit in the notes it is
+    acting on."""
+    return str(enginetree.launcher())
 
 
 # ── tool generation (from the plainkeep surface = plainkeep.json/3) ────────────────────────────

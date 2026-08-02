@@ -398,21 +398,20 @@ def require_engine() -> None:
 
 def _select_cli(argv: list[str]) -> int:
     """`vaultroot.py --select [--vault X]` — run the chain and print the answer for a DISPATCHER to
-    export. FOUR lines on stdout: the canonical data root, the vault id, the mechanism that chose it,
-    then the canonical ENGINE root. Any refusal goes to stderr with the frozen exit code.
+    export. THREE lines on stdout: the canonical data root, the vault id, then the mechanism that
+    chose it. Any refusal goes to stderr with the frozen exit code.
 
     The third line exists because the mechanism is the one part of the answer that cannot be
     recovered downstream: exporting PLAINKEEP_HOME (which the dispatcher must do) destroys the
     evidence of which step won, so a verb re-running the chain can only ever answer "PLAINKEEP_HOME".
 
-    The FOURTH line (Task 2) is the engine root, and it is not redundant with each dispatcher's own
-    derivation. Both dispatchers self-locate to FIND this module — the floor from `$0`, the core from
-    its execPath — and both must then export `PLAINKEEP_ENGINE`. Taking the value from here rather
-    than from their own arithmetic means the exported path is the same canonical, symlink-resolved
-    spelling the disjointness check compares against, in both dispatchers, by construction: reached
-    through `<install>/engine/current/plainkeep`, `$0`'s directory is the SYMLINK's name and
-    `__file__`'s resolution is the version's. Two spellings of one tree is how a disjointness check
-    silently answers "no".
+    The ENGINE root is deliberately NOT a fourth line. Each dispatcher already self-located to FIND
+    this module — the floor through a `$0` symlink chain ending in `cd -P`, the core through
+    `realpath(execPath)` — and both of those are canonical, so a value carried from here would be a
+    third spelling of a directory two other derivations already agree on. What keeps them honest is
+    an assertion rather than a channel: the parity suite's `v_engine` check compares the exported
+    `PLAINKEEP_ENGINE` against the running verb's OWN `Path(__file__).resolve().parents[2]`, so all
+    three derivations are pinned equal by a test that fails if any one of them drifts.
 
     Both dispatchers call exactly this, which is what makes them agree: the bash floor and the
     compiled core share ONE implementation of the safety-critical decision rather than a port and a
@@ -437,8 +436,7 @@ def _select_cli(argv: list[str]) -> int:
     except VaultError as e:
         sys.stderr.write("plainkeep: " + e.message + (f"\n  {e.hint}" if e.hint else "") + "\n")
         return e.code
-    sys.stdout.write(sel.root + "\n" + sel.id + "\n" + sel.mechanism + "\n"
-                     + str(ENGINE_ROOT) + "\n")
+    sys.stdout.write(sel.root + "\n" + sel.id + "\n" + sel.mechanism + "\n")
     return output.EXIT_OK
 
 

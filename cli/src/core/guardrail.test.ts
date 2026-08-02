@@ -7,17 +7,20 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync, realpathSync, readFileSy
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { gate, mainCli, getCloseMatches, decisionStr, EXIT_CONFIRM, EXIT_DENY, EXIT_NOT_FOUND } from "./guardrail.js";
+import { makeEngine } from "./vault-fixture.js";
 
 let vault = "";
+let engine = "";
 function makeVault(): string {
   vault = realpathSync(mkdtempSync(path.join(tmpdir(), "pk-guardrail-")));
-  mkdirSync(path.join(vault, "bin"), { recursive: true });
+  // The ENGINE is a SEPARATE tree since Phase 2 Task 2 — verbs are the engine's, the vault is data.
+  engine = makeEngine(realpathSync(mkdtempSync(path.join(tmpdir(), "pk-guardrail-engine-"))));
   process.env.PLAINKEEP_HOME = vault;
   process.env.PLAINKEEP_PATH = "";
   return vault;
 }
 function engineVerb(name: string, cmd?: Record<string, unknown>, files: string[] = ["run.py", "cmd.json"]): void {
-  const d = path.join(vault, "bin", name);
+  const d = path.join(engine, "bin", name);
   mkdirSync(d, { recursive: true });
   for (const f of files) {
     if (f === "cmd.json") writeFileSync(path.join(d, f), JSON.stringify(cmd ?? {}));
@@ -32,7 +35,7 @@ function pack(name: string, verb: string, cmd: Record<string, unknown>): void {
 // Writes a verb's cmd.json as RAW text — needed for a pathologically deep document, where
 // JSON.stringify would itself recurse per nesting level.
 function engineVerbRaw(name: string, cmdText: string): void {
-  const d = path.join(vault, "bin", name);
+  const d = path.join(engine, "bin", name);
   mkdirSync(d, { recursive: true });
   writeFileSync(path.join(d, "run.py"), "def main(argv):\n    return 0\n");
   writeFileSync(path.join(d, "cmd.json"), cmdText);
@@ -56,9 +59,12 @@ function lock(obj: unknown): void {
 
 afterEach(() => {
   if (vault) rmSync(vault, { recursive: true, force: true });
+  if (engine) rmSync(engine, { recursive: true, force: true });
   vault = "";
+  engine = "";
   delete process.env.PLAINKEEP_HOME;
   delete process.env.PLAINKEEP_PATH;
+  delete process.env.PLAINKEEP_ENGINE;
 });
 
 test("gate enforces declared risk classes", () => {

@@ -8,7 +8,7 @@
 //     run.py would have printed something else entirely had the spawn happened.
 import { test, expect } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { markVault } from "./vault-fixture.js";
+import { makeEngine, markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { completeIntercept } from "./complete.js";
@@ -38,17 +38,26 @@ function withHome<T>(home: string, fn: () => T): T {
   }
 }
 
-// A vault whose engine bin/ holds the given cmd.json sidecars, keyed by directory name.
+// A vault, plus an ENGINE beside it whose bin/ holds the given cmd.json sidecars, keyed by
+// directory name. Two trees since Phase 2 Task 2: the sidecars are the ENGINE's verb surface (which
+// is where both resolvers now look), the vault is data, and the two must not overlap.
 function vault(cmds: Record<string, unknown>): string {
   const home = mkdtempSync(path.join(tmpdir(), "pk-complete-"));
   markVault(home);  // Task 1b: dispatch validates the root before anything else runs
+  const engine = makeEngine(mkdtempSync(path.join(tmpdir(), "pk-complete-engine-")));
   for (const [dir, cmd] of Object.entries(cmds)) {
-    const d = path.join(home, "bin", dir);
+    const d = path.join(engine, "bin", dir);
     mkdirSync(d, { recursive: true });
     writeFileSync(path.join(d, "cmd.json"), JSON.stringify(cmd));
     writeFileSync(path.join(d, "run.py"), "print('SPAWNED PYTHON')\n");
   }
   return home;
+}
+
+// The engine tree `vault()` just made — it is the one `makeEngine` activated, and a test that adds
+// a verb after the fact has to put it there rather than in the vault.
+function engineOf(): string {
+  return process.env.PLAINKEEP_ENGINE ?? "";
 }
 
 // Run the interception and report BOTH the answer and whether the fall-through was taken, so no
@@ -251,8 +260,9 @@ test("descriptions are colon-cleaned and Python-stripped", () => {
 test("a malformed sidecar falls through rather than guessing what Python made of it", () => {
   const home = mkdtempSync(path.join(tmpdir(), "pk-complete-bad-"));
   markVault(home);  // Task 1b: dispatch validates the root before anything else runs
+  const engine = makeEngine(mkdtempSync(path.join(tmpdir(), "pk-complete-bad-engine-")));
   try {
-    const d = path.join(home, "bin", "x");
+    const d = path.join(engine, "bin", "x");
     mkdirSync(d, { recursive: true });
     // No `verb` key: Python's `{c["verb"]: c for c in load_cmds()}` raises KeyError, which is an
     // answer this port cannot reproduce, so the Python verb gets to give it.
@@ -269,7 +279,7 @@ test("a malformed sidecar falls through rather than guessing what Python made of
 test("a non-object sidecar is DROPPED (as Python drops it), not a reason to fall through", () => {
   const home = vault({ ok: { verb: "ok", summary: "s" } });
   try {
-    const d = path.join(home, "bin", "arr");
+    const d = path.join(engineOf(), "bin", "arr");
     mkdirSync(d, { recursive: true });
     writeFileSync(path.join(d, "cmd.json"), "[1,2,3]");
     const { out, fellThrough } = complete(home, []);
@@ -282,7 +292,7 @@ test("a non-object sidecar is DROPPED (as Python drops it), not a reason to fall
 test("a HIDDEN verb's malformed grammar is never inspected — hidden is filtered first", () => {
   const home = vault({ ok: { verb: "ok", summary: "s" } });
   try {
-    const d = path.join(home, "bin", "h");
+    const d = path.join(engineOf(), "bin", "h");
     mkdirSync(d, { recursive: true });
     // `actions` truthy but not a list would bail on a VISIBLE verb; hidden drops it before that,
     // exactly as manifest.load_cmds() `continue`s before anything reads the grammar.

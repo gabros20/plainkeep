@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import notetype, output, paths, render, vaultio  # noqa: E402
+from lib import enginetree, notetype, output, paths, render, vaultio  # noqa: E402
 
 CANVAS_DIR = "canvas"  # emitted under wiki/canvas/
 
@@ -106,7 +106,7 @@ def _choose(notes, label):
     items = sorted(notes)
     if not items:
         print("no notes yet — capture and triage, or: plainkeep wiki new note \"…\""); return None
-    pk_bin = paths.PLAINKEEP_HOME / "plainkeep"
+    pk_bin = enginetree.launcher()   # engine-owned launcher, not a vault-local shim (Task 2)
     preview = f'PLAINKEEP_RENDER=plain "{pk_bin}" wiki open {{}}'
     sel = render.fzf_pick(items, preview=preview, prompt=f"{label} note> ")
     if sel and sel in notes:

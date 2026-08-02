@@ -544,15 +544,14 @@ export function dispatch(argv: string[], selector: string | null = null): CoreRe
   // the spawned verb sees PLAINKEEP_HOME set and can no longer tell whether that is what selected
   // the root or merely what carried it. Matches the floor's `pk_discover` export exactly.
   process.env.PLAINKEEP_VAULT_MECHANISM = sel.mechanism;
-  // ...and the ENGINE root (Task 2). This assignment REPLACES whatever the caller had in
-  // PLAINKEEP_ENGINE, unconditionally and without inspecting it, which is how ADR-014 D2's "caller
-  // input must not control it" is made true: the core never READS the variable to decide where to
-  // load code from (resolver.ts asks engineRoot(), which is execPath-relative), so there is nothing
-  // for a hostile value to steer. It is set for the processes that genuinely cannot self-locate —
-  // a plugin verb under `<vault>/plugins/<pack>/<verb>/`, a frontend script, a scheduled job — and
-  // the value comes from the discovery module rather than from engineRoot() so the floor and the
-  // core export the same canonical spelling.
-  process.env.PLAINKEEP_ENGINE = sel.engine;
+  // PLAINKEEP_ENGINE is NOT assigned here, and the absence is deliberate. `runCore()` activates the
+  // engine as its very first act — before the selector, before the identity probes, before this
+  // function exists — so by the time a dispatch begins the variable already holds this binary's own
+  // code-relative tree and whatever the caller exported is gone. Assigning it a second time here
+  // would put the replacement on the dispatching path only, leaving `--core-resolve` and
+  // `--core-api` (which reach the resolver without dispatching) reading the caller's value; and it
+  // would make this function, rather than the entry point, the thing a future entry point has to
+  // remember to copy.
 
   // Bare `plainkeep` ON A TERMINAL is the TUI; bare `plainkeep` anywhere else is still the default
   // verb. The rewrite happens HERE, before verbFromArgv and therefore before the gate, so the whole

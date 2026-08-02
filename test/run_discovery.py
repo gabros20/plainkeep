@@ -106,12 +106,15 @@ def base_env(sandbox: Path, **over) -> dict:
 # Fixture: a sandbox holding two REAL vaults, a registry, and an engine each can dispatch through.
 # --------------------------------------------------------------------------------------------
 def make_vault(root: Path) -> str:
-    """A vault the dispatcher can actually run in: the engine tree (Phase 1 still spawns
-    `$PLAINKEEP_HOME/bin/lib/*.py`), the shim, and a marker."""
+    """A vault the dispatcher can actually run in: a marker, and NOTHING ELSE.
+
+    It used to symlink `REPO/bin` in and copy the shim, because Phase 1 spawned
+    `$PLAINKEEP_HOME/bin/lib/*.py` and a vault without a copy of the engine could not be dispatched
+    for. Phase 2 Task 2 moves the engine out, so those two lines are gone and every fixture in this
+    file is now a DATA-ONLY vault — which is also what every real user's second vault looks like, and
+    what Task 5's `init` will produce. That makes the whole suite, not one case, the evidence that a
+    vault holding only notes dispatches: 117 checks that would each have failed before this task."""
     root.mkdir(parents=True, exist_ok=True)
-    os.symlink(REPO / "bin", root / "bin")
-    shutil.copy2(REPO / "plainkeep", root / "plainkeep")
-    os.chmod(root / "plainkeep", 0o755)
     return vaultfx.mark_vault(root)
 
 
@@ -129,10 +132,20 @@ def register(sandbox: Path, root: Path, name: str, *, default: bool = False) -> 
 
 def snapshot(root: Path) -> set[str]:
     """Every file under `root`, as paths relative to it. Symlinked directories are NOT followed —
-    the fixtures symlink the engine in, and following that would walk the whole repo."""
+    a fixture may symlink a tree in, and following that would walk the whole repo.
+
+    `__pycache__` is excluded, and the exclusion is narrow on purpose. Since Task 2 some fixtures
+    hold a WRITABLE copy of an engine tree, and CPython drops a `.pyc` beside every module it
+    imports — so a refusal that wrote nothing of its own still grew four files, and every
+    "writes nothing" assertion in this file became unsatisfiable for a reason that has nothing to do
+    with plainkeep. It cannot mask a real write: bytecode caches are the interpreter's, they only
+    ever appear inside an engine tree, and a REAL installed engine is read-only so they do not
+    appear there at all. Nothing this suite asserts about — a note, a journal line, an audit-log
+    append, a marker, a registry — is ever inside a `__pycache__`."""
     out: set[str] = set()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
-        dirnames[:] = [d for d in dirnames if not os.path.islink(os.path.join(dirpath, d))]
+        dirnames[:] = [d for d in dirnames
+                       if d != "__pycache__" and not os.path.islink(os.path.join(dirpath, d))]
         for f in filenames:
             out.add(os.path.relpath(os.path.join(dirpath, f), root))
     return out
@@ -140,6 +153,23 @@ def snapshot(root: Path) -> set[str]:
 
 def new_files(root: Path, before: set[str]) -> set[str]:
     return snapshot(root) - before
+
+
+def _install_core(engine: Path) -> str:
+    """Put the core binary INSIDE an engine tree and return its path.
+
+    Since Task 2 the binary self-locates its engine from `process.execPath`, so a check that asks
+    "does THIS engine refuse" has to run THIS engine's core. Hardlinked where the filesystem allows
+    it — the binary is ~64 MB."""
+    dst = engine / ".local" / "bin" / "plainkeep-core"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if not dst.exists():
+        try:
+            os.link(CORE_BIN, dst)
+        except OSError:
+            shutil.copy2(CORE_BIN, dst)
+        os.chmod(dst, 0o755)
+    return str(dst)
 
 
 # --------------------------------------------------------------------------------------------
@@ -870,38 +900,44 @@ def case_canonical_export() -> None:
 
 
 # --------------------------------------------------------------------------------------------
-# J. A registered vault that does NOT carry a copy of the engine.
+# J. A registered vault that carries NO copy of the engine — and the engine/data disjointness rule.
 #
-# Every other fixture in this file is handed the engine by `make_vault` (it symlinks `bin/` and the
-# shim in), which is what makes the two-vault identity test above dispatchable at all — and it is
-# also what hid this: an ORDINARY second vault, which is what every real user's second vault looks
-# like, is a directory with a marker and nothing else.
+# THIS CASE IS THE INVERSE OF WHAT IT WAS. Through Task 1b it asserted that a data-only vault
+# REFUSES, because Phase 1 ran the engine from inside the selected root: the floor spawned
+# `$PLAINKEEP_HOME/bin/lib/guardrail.py` and the core's resolver looked for verbs under the same
+# root, so an ordinary notes vault — a directory with a marker and nothing else, which is what every
+# real user's second vault looks like — could not be dispatched for. `require_engine(sel)` existed to
+# turn that into one truthful refusal instead of two untruthful failures at the far end of the
+# dispatch.
 #
-# Phase 1 still runs the engine from INSIDE the selected root (the floor spawns
-# `$PLAINKEEP_HOME/bin/lib/guardrail.py`; the core's resolver looks under the same root), so such a
-# vault cannot be dispatched for. That constraint is Phase 2 Task 2's to remove. What is gated HERE
-# is the DIAGNOSIS: before this case both dispatchers failed at the far end of the dispatch, in two
-# different ways and both untruthfully — the floor let CPython say "can't open file
-# '<vault>/bin/lib/guardrail.py'" (exit 2, no plainkeep in the message), and the core's resolver,
-# finding no verb under the root, said "unknown verb 'capture'" (exit 4) and sent the operator to
-# `plainkeep help`, which fails identically. Neither mentioned the engine.
+# Phase 2 Task 2 removes the reason. The engine is its own versioned tree outside every vault, so a
+# data-only vault is now the NORMAL shape and dispatching for it must simply work. Keeping the old
+# probe would have refused every vault Task 5's `init` produces.
+#
+# What replaces it is the rule that was written down in Task 1b and deliberately not enforced
+# (ADR-014 D3): the data root and the engine root must be DISJOINT, in both directions. That rule was
+# unsatisfiable while the engine was `<vault>/bin` — it would have refused every existing vault,
+# including this repository — and it becomes true in this task, so it is enforced in this task. Exit
+# 5 (`EXIT_DENY`), the same code as the walled-off/cloud-sync location verdict it sits beside, never
+# exit 2: nothing failed to be selected, the selection is refused for WHERE it points.
 # --------------------------------------------------------------------------------------------
-def case_vault_without_engine() -> None:
+def case_data_only_vault_and_disjointness() -> None:
     with tempfile.TemporaryDirectory() as td:
         sandbox = Path(os.path.realpath(td))
         (sandbox / "home").mkdir()
-        # A dispatchable vault (the default) and an ordinary notes vault beside it: marker, no engine.
         home_vault = sandbox / "vault-engine"
         make_vault(home_vault)
         register(sandbox, home_vault, "alpha", default=True)
+        # An ordinary notes vault: marker, no bin/, no shim, no engine of any kind.
         notes = sandbox / "mynotes"
         notes.mkdir()
         vaultfx.mark_vault(notes)
         register(sandbox, notes, "mynotes")
 
         env = base_env(sandbox)
-        for argv, label in ((["--vault", "mynotes", "capture", "hello"], "capture"),
-                            (["--vault", "mynotes", "help"], "help")):
+        for argv, label, want_file in (
+                (["--vault", "mynotes", "capture", "hello"], "capture", "inbox"),
+                (["--vault", "mynotes", "help"], "help", None)):
             runs = {}
             for path in PATHS:
                 if path != "floor" and not core_live():
@@ -910,89 +946,140 @@ def case_vault_without_engine() -> None:
                 r = invoke(path, argv, cwd=sandbox, env=env)
                 runs[path] = r
                 out = r.stdout + r.stderr
-                check(f"[{path}] --vault a vault with no engine ({label}): refuses with EXIT_USAGE (2)",
-                      r.returncode == EXIT_USAGE, f"rc={r.returncode} {out}")
-                # The message has to be TRUE. "unknown verb 'capture'" was false (capture exists) and
-                # the CPython traceback was not a plainkeep refusal at all.
-                check(f"[{path}] ...naming the engine as the reason, not the verb ({label})",
-                      "does not carry the plainkeep engine" in out and "unknown verb" not in out, out)
-                check(f"[{path}] ...naming the vault and the missing file ({label})",
-                      "mynotes" in out and str(notes / "bin" / "lib" / "guardrail.py") in out, out)
-                check(f"[{path}] ...and writes nothing ({label})", not new_files(sandbox, before),
-                      str(sorted(new_files(sandbox, before))))
+                check(f"[{path}] --vault a DATA-ONLY vault ({label}): dispatches, exit 0",
+                      r.returncode == 0, f"rc={r.returncode} {out}")
+                # The refusal that used to live here must be GONE, not merely reworded: a build that
+                # kept the old probe under a new message would still say this.
+                check(f"[{path}] ...with no engine-in-the-vault refusal anywhere ({label})",
+                      "does not carry the plainkeep engine" not in out and "unknown verb" not in out,
+                      out)
+                created = new_files(sandbox, before)
+                if want_file:
+                    check(f"[{path}] ...and the write lands in THAT vault ({label})",
+                          any(f.startswith("mynotes" + os.sep + want_file) for f in created),
+                          str(sorted(created)))
             # The brief's "both dispatchers must agree byte-for-byte" — this invocation shape was
             # the one place they disagreed on BOTH text and exit code.
-            if len(runs) == len(PATHS):
+            if len(runs) == len(PATHS) and label == "help":
                 sigs = {p: (r.returncode, r.stdout, r.stderr) for p, r in runs.items()}
-                check(f"floor, core and direct refuse a no-engine vault identically ({label})",
+                check(f"floor, core and direct answer a data-only vault identically ({label})",
                       len(set(sigs.values())) == 1,
                       "; ".join(f"{p}={s[0]}/{s[2]!r}" for p, s in sigs.items()))
 
-        # The constraint is REAL, not an artefact of the probe: the same vault, once it carries the
-        # engine, dispatches. Without this the case above would also pass against a build that
-        # refused every --vault outright.
-        os.symlink(REPO / "bin", notes / "bin")
-        shutil.copy2(REPO / "plainkeep", notes / "plainkeep")
-        os.chmod(notes / "plainkeep", 0o755)
+        # ...and the verbs came from the ENGINE, which here is the repository checkout the three
+        # paths are invoked out of. Asserted through `vault status --json`, so it is the DISPATCHED
+        # process reporting where its own code sits — not this suite computing a path and comparing
+        # it to itself.
+        r = invoke("floor", ["--vault", "mynotes", "vault", "status", "--json"],
+                   cwd=sandbox, env=env)
+        try:
+            d = json.loads(r.stdout)["data"]
+        except Exception:
+            d = {}
+        check("a data-only vault reports the ENGINE it ran on, disjoint from itself",
+              d.get("engine_root") == str(REPO) and d.get("active_root") == str(notes)
+              and d.get("engine_env_matches") is True and d.get("engine_intact") is True,
+              f"engine_root={d.get('engine_root')!r} active_root={d.get('active_root')!r} "
+              f"matches={d.get('engine_env_matches')!r} intact={d.get('engine_intact')!r}")
+
+        # ------------------------------------------------------------------------------------
+        # DISJOINTNESS, all three shapes × all three invocation paths. The third shape is the
+        # Phase 1 layout itself — a vault that still has the engine inside it — which is exactly
+        # why Task 1b could not turn this on and why it is the shape most likely to be met in the
+        # field by anyone upgrading.
+        # ------------------------------------------------------------------------------------
+        # One engine tree NESTED inside a directory, so all three overlap shapes are reachable at
+        # once: the engine itself, a directory under it, and the directory that contains it.
+        container = sandbox / "container"
+        nested_engine = container / "engine"
+        shutil.copytree(REPO / "bin", nested_engine / "bin",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy2(REPO / "VERSION", nested_engine / "VERSION")
+        shutil.copy2(REPO / "plainkeep", nested_engine / "plainkeep")
+        os.chmod(nested_engine / "plainkeep", 0o755)
+        # Every one of the three is a valid, registered, marked vault, so the refusal each gets
+        # cannot be about a missing marker or an unregistered id — only about the overlap.
+        inside = nested_engine / "bin" / "share"         # a real directory under the engine
+        for root, name in ((nested_engine, "selfengine"), (inside, "insideengine"),
+                           (container, "container")):
+            vaultfx.mark_vault(root)
+            register(sandbox, root, name)
+        # THE CORE MUST BE THIS ENGINE'S CORE. Since Task 2 the binary derives its engine root from
+        # its own execPath, so handing `require` mode the REPOSITORY's binary would test the
+        # repository's engine against these fixtures' vaults — a different question, and one that
+        # answers "disjoint, carry on". Every check below that runs in `require` mode points
+        # PLAINKEEP_CORE_BIN at the core installed INSIDE the tree it is asking about.
+        nested_core = _install_core(nested_engine)
+
+        shim = str(nested_engine / "plainkeep")
+        overlaps = (
+            ("the data root IS the engine root", nested_engine, "IS the engine tree"),
+            ("the data root is INSIDE the engine tree", nested_engine / "bin" / "share",
+             "is inside the engine tree"),
+            ("the engine tree is INSIDE the data root", container, "is inside it"),
+        )
+        for label, home, expect in overlaps:
+            for mode in ("off", "require"):
+                if mode == "require" and not core_live():
+                    continue
+                before = snapshot(sandbox)
+                e = {**env, "PLAINKEEP_HOME": str(home), "PLAINKEEP_CORE": mode,
+                     "PLAINKEEP_CORE_BIN": nested_core}
+                r = _run([shim, "capture", "should-never-land"], sandbox, e)
+                out = r.stdout + r.stderr
+                check(f"[{mode}] disjointness · {label} → EXIT_DENY (5)",
+                      r.returncode == EXIT_DENY and expect in out, f"rc={r.returncode} {out}")
+                # The half an exit code cannot show: a refused location leaves NOTHING behind — no
+                # inbox note, no journal entry, no audit line. `capture` is used deliberately
+                # because it is the verb whose write path does not consult the wall.
+                check(f"[{mode}] disjointness · {label} writes nothing",
+                      not new_files(sandbox, before), str(sorted(new_files(sandbox, before))))
+
+        # ...and the refusal is byte-identical across the two dispatchers, which is the whole reason
+        # discovery is ONE shared module rather than a port kept in step by a differential.
+        if core_live():
+            e = {**env, "PLAINKEEP_HOME": str(nested_engine)}
+            f_out = _run([shim, "capture", "x"], sandbox, {**e, "PLAINKEEP_CORE": "off"})
+            c_out = _run([nested_core, "capture", "x"], sandbox, e)
+            check("disjointness · floor and core refuse byte-identically",
+                  (f_out.returncode, f_out.stdout, f_out.stderr)
+                  == (c_out.returncode, c_out.stdout, c_out.stderr),
+                  f"floor=({f_out.returncode},{f_out.stderr!r}) core=({c_out.returncode},{c_out.stderr!r})")
+
+        # THE CONSTRAINT IS REAL, not an artefact of the check: the same engine tree, pointed at a
+        # vault OUTSIDE it, dispatches and writes. Without this the six refusals above would also
+        # pass against a build that refused every invocation through that shim.
         before = snapshot(sandbox)
-        r = _run([str(REPO / "plainkeep"), "--vault", "mynotes", "capture", "nowitworks"], sandbox,
-                 {**env, "PLAINKEEP_CORE": "off"})
+        r = _run([shim, "capture", "disjointworks"], sandbox,
+                 {**env, "PLAINKEEP_HOME": str(notes), "PLAINKEEP_CORE": "off"})
         created = new_files(sandbox, before)
-        check("...and once that vault DOES carry the engine, the same invocation succeeds into it",
+        check("...and the SAME engine dispatches normally for a vault outside it",
               r.returncode == 0 and any(f.startswith("mynotes" + os.sep + "inbox") for f in created),
               f"rc={r.returncode} {r.stdout}{r.stderr} {sorted(created)}")
 
-        # THE PARTIAL ENGINE — a vault carrying `bin/lib` and no verb directory. Total absence (all
-        # of the above) was the only shape gated before, and the gap was not academic: this is the
-        # shape `cli/src/core/vault-fixture.ts` builds, so it was the sanctioned bun fixture.
-        #
-        # It is the shape that breaks the byte-for-byte claim, because the two resolvers disagree
-        # about where verbs live. `resolver.py`'s ENGINE_BIN is `__file__`-relative, so it follows
-        # the `bin/lib` symlink back into the real checkout and finds EVERY verb; `resolver.ts`'s
-        # `engineBin()` is data-relative and finds none. A one-file probe certified this root as
-        # dispatchable and then the floor captured a note at exit 0 while the core refused at exit 4
-        # — one argv, two dispatchers, different answers to "did a write happen", which is the single
-        # thing `--select` exists to make impossible.
-        partial = sandbox / "libonly"
-        (partial / "bin").mkdir(parents=True)
-        os.symlink(REPO / "bin" / "lib", partial / "bin" / "lib")
-        shutil.copy2(REPO / "plainkeep", partial / "plainkeep")
-        os.chmod(partial / "plainkeep", 0o755)
-        vaultfx.mark_vault(partial)
-        register(sandbox, partial, "libonly")
-
-        runs = {}
-        for path in PATHS:
-            if path != "floor" and not core_live():
-                continue
-            before = snapshot(sandbox)
-            r = invoke(path, ["--vault", "libonly", "capture", "partial"], cwd=sandbox, env=env)
-            runs[path] = r
-            out = r.stdout + r.stderr
-            check(f"[{path}] a PARTIAL engine (bin/lib, no verb dir) refuses with EXIT_USAGE (2)",
-                  r.returncode == EXIT_USAGE, f"rc={r.returncode} {out}")
-            check(f"[{path}] ...naming the missing VERB DIRECTORY, not the gate file that is present",
-                  "carries no verb directory" in out and "does not carry the plainkeep engine" in out,
-                  out)
-            # The half that actually caught the divergence: the floor USED to write here.
-            check(f"[{path}] ...and a partial engine writes nothing", not new_files(sandbox, before),
-                  str(sorted(new_files(sandbox, before))))
-        if len(runs) == len(PATHS):
-            sigs = {p: (r.returncode, r.stdout, r.stderr) for p, r in runs.items()}
-            check("floor, core and direct refuse a PARTIAL engine identically",
-                  len(set(sigs.values())) == 1,
-                  "; ".join(f"{p}={s[0]}/{s[2]!r}" for p, s in sigs.items()))
-
-        # ...and the probe still says YES to a root that really can dispatch — one verb is enough,
-        # which is what keeps the widened probe from being "refuse anything unusual".
-        os.symlink(REPO / "bin" / "capture", partial / "bin" / "capture")
-        before = snapshot(sandbox)
-        r = _run([str(REPO / "plainkeep"), "--vault", "libonly", "capture", "nowdispatchable"],
-                 sandbox, {**env, "PLAINKEEP_CORE": "off"})
-        created = new_files(sandbox, before)
-        check("...and ONE verb directory is enough to make that same root dispatchable again",
-              r.returncode == 0 and any(f.startswith("libonly" + os.sep + "inbox") for f in created),
-              f"rc={r.returncode} {r.stdout}{r.stderr} {sorted(created)}")
+        # ------------------------------------------------------------------------------------
+        # THE INVERTED PROBE — `require_engine` now asks about the ENGINE, and refuses a tree that
+        # is missing a file the dispatch depends on. Driven by REMOVING that file: a guard never
+        # exercised against the failure it describes is a green test of nothing.
+        # ------------------------------------------------------------------------------------
+        for missing in ("bin/lib/resolver.py", "VERSION"):
+            hurt = sandbox / ("hurt-" + missing.replace("/", "-"))
+            shutil.copytree(nested_engine, hurt, ignore=shutil.ignore_patterns("__pycache__"))
+            (hurt / missing).unlink()
+            hurt_core = _install_core(hurt)
+            for mode in ("off", "require"):
+                if mode == "require" and not core_live():
+                    continue
+                before = snapshot(sandbox)
+                r = _run([str(hurt / "plainkeep"), "capture", "brokenengine"], sandbox,
+                         {**env, "PLAINKEEP_HOME": str(notes), "PLAINKEEP_CORE": mode,
+                          "PLAINKEEP_CORE_BIN": hurt_core})
+                out = r.stdout + r.stderr
+                check(f"[{mode}] an engine missing {missing} REFUSES with EXIT_USAGE (2)",
+                      r.returncode == EXIT_USAGE and "is incomplete" in out and missing in out,
+                      f"rc={r.returncode} {out}")
+                check(f"[{mode}] ...and a broken engine writes nothing ({missing})",
+                      not new_files(sandbox, before), str(sorted(new_files(sandbox, before))))
 
 
 # --------------------------------------------------------------------------------------------
@@ -1153,7 +1240,7 @@ def main() -> int:
     case_anchored_markers_under_symlinked_home()
     case_selector_position_and_parity()
     case_canonical_export()
-    case_vault_without_engine()
+    case_data_only_vault_and_disjointness()
     case_status_reports_the_real_mechanism()
     case_noncanonical_registry_path()
 

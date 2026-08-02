@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from lib import embed, enrichlib, imagelib, paths, vaultio
+from lib import embed, enginetree, enrichlib, imagelib, paths, vaultio
 
 # The ENGINE's bin/ (paths.BIN) — this module reads engine-owned files through it, `bin/ui/version.txt`
 # above all: the pin `plainkeep setup ui` downloads against and compares the installed binary to.
@@ -211,7 +211,7 @@ def _run_verb(verb: str, *args: str, fake: bool = False) -> str:
     caller. Non-recursive (none of these verbs call setup). PLAINKEEP_SETUP_FAKE keeps a dry-run inert
     (the display string is recorded, nothing runs). The dispatcher itself prefers the .venv python
     (ADR-009), so a re-entered `plainkeep index` sees the vector deps with no PATH surgery here."""
-    return _run([str(paths.PLAINKEEP_HOME / "plainkeep"), verb, *args], fake=fake)
+    return _run([str(enginetree.launcher()), verb, *args], fake=fake)
 
 
 def _venv_pip(*pkgs_or_reqs: str, fake: bool = False) -> str:
@@ -388,12 +388,17 @@ def _gh_present() -> bool:
 
 
 def _ui_repo() -> str | None:
-    """The template repo (owner/repo) hosting the plainkeep-ui releases: a derived vault's fetch-only
-    `upstream` remote when present, else `origin` (the template checkout itself). Never hardcoded —
-    the same remote script/update trusts for engine files is the one trusted for binaries."""
+    """The repo (owner/repo) hosting the plainkeep-ui releases: the ENGINE's fetch-only `upstream`
+    remote when present, else `origin`. Never hardcoded — the same remote script/update trusts for
+    engine files is the one trusted for binaries.
+
+    It asked the DATA root's git remote through Phase 1, when the two were one directory. They are
+    not, and the engine is the right one of the two: which UI release this install wants is a
+    property of the code, not of somebody's notes. A vault that happens to be a git repo of its own
+    (most are) would otherwise have named ITS remote as the source of engine binaries."""
     for remote in ("upstream", "origin"):
         try:
-            r = subprocess.run(["git", "-C", str(paths.PLAINKEEP_HOME), "remote", "get-url", remote],
+            r = subprocess.run(["git", "-C", str(paths.ENGINE), "remote", "get-url", remote],
                                capture_output=True, text=True, timeout=10)
         except Exception:
             return None
@@ -406,8 +411,14 @@ def _ui_repo() -> str | None:
 
 
 def _ui_source_buildable() -> bool:
-    """Contributor fallback: a full template checkout carries cli/ source, compilable with bun."""
-    return (paths.PLAINKEEP_HOME / "cli" / "package.json").is_file() and shutil.which("bun") is not None
+    """Contributor fallback: a full SOURCE CHECKOUT carries cli/ source, compilable with bun.
+
+    `cli/` is build input, not a shipped engine path — it is deliberately NOT in the ownership
+    manifest (`enginetree.OWNED_TREES`), because what ships is the compiled binary. So this is true
+    when the engine root is a checkout (a contributor running `./plainkeep`) and false for an
+    installed tree, which falls back to the `gh release download` path. It read the DATA root
+    through Phase 1, which since Task 2 would look for a build system inside somebody's notes."""
+    return (paths.ENGINE / "cli" / "package.json").is_file() and shutil.which("bun") is not None
 
 
 def _ui_expected_version() -> str | None:
@@ -515,7 +526,7 @@ def _install_ui(res: dict, *, fake: bool) -> None:
         res["ran"].append(f"verified sha256 + installed {target}")
         return
     if _ui_source_buildable():
-        src = paths.PLAINKEEP_HOME / "cli"
+        src = paths.ENGINE / "cli"
         if not _fake(fake):
             vaultio.mkdir(bindir)
         res["ran"].append(_run(["bun", "install", "--cwd", str(src)], fake=fake))

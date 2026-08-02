@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths, render  # noqa: E402
+from lib import enginetree, output, paths, render  # noqa: E402
 from lib.indexlib import search  # noqa: E402
 
 FLAGS = ("--edit", "--reveal", "--obsidian")
@@ -75,7 +75,7 @@ def _pick() -> str | None:
     items = _addressable()
     if not items:
         return None
-    pk = paths.PLAINKEEP_HOME / "plainkeep"
+    pk = enginetree.launcher()   # engine-owned launcher, not a vault-local shim (Task 2)
     preview = (f'p="$("{pk}" open {{}} 2>/dev/null)"; [ -f "$p" ] && '
                f'(command -v glow >/dev/null && PLAINKEEP_RENDER=plain glow -p "$p" || cat "$p") || echo "$p"')
     return render.fzf_pick(items, preview=preview, prompt="open> ")
@@ -103,7 +103,7 @@ def main(argv):
         if not res["wiki_slug"]:
             output.fail(output.EXIT_USAGE,
                         f"--obsidian opens a note; '{target}' resolved to a {res['kind']}", verb="open")
-        cmd = [str(paths.PLAINKEEP_HOME / "plainkeep"), "wiki", "open", res["wiki_slug"], "--obsidian"]
+        cmd = [str(enginetree.launcher()), "wiki", "open", res["wiki_slug"], "--obsidian"]
         if output.json_mode():
             cmd.append("--json")
         return subprocess.run(cmd).returncode

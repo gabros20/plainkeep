@@ -1,6 +1,6 @@
 import { test, expect } from "bun:test";
 import { mkdtempSync, rmSync } from "node:fs";
-import { addVerb, markVault } from "./vault-fixture.js";
+import { markVault } from "./vault-fixture.js";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { runCore, CORE_IDENTITY } from "./cli.js";
@@ -35,18 +35,22 @@ test("--core-selftest identifies the core binary and exits 0", async () => {
 // none of the argv below names it: the verb set is known by construction, so the assertion can never
 // depend on the developer's real vault and dispatch can never reach a spawn.
 //
-// That one verb is load-bearing, not scenery. Before the r3 fix wave this fixture had NO verb, and a
-// verb-less root is not "a vault where every verb is unknown" — it is a root that cannot be
-// dispatched for at all, which `require_engine` now refuses with exit 2 before the gate is consulted.
-// Asserting not-found (4) needs a root that really could have found something.
+// THE ARGV SHAPES CHANGED IN PHASE 2 TASK 2, and the reason is the point of the task. `runCore()`
+// now ACTIVATES the engine from the binary's own location as its first act, so the verb surface it
+// gates against is the real engine's — a synthetic one planted in a temp tree is not consulted, by
+// design. `[]`, `["help"]` and `["capture","hi"]` are therefore real verbs here and would DISPATCH,
+// which is a different assertion. What this test is actually about — that a non-flag argv reaches
+// dispatch instead of being answered by a `--core-*` short-circuit — is unchanged, and is now pinned
+// with shapes that are genuinely not verbs, including the two-token forms of the identity flags
+// (`--version extra` is not the bare `--version` the short-circuit answers).
 test("a non-flag argv dispatches: an unknown verb is the gate's not-found (4)", async () => {
   const prev = process.env.PLAINKEEP_HOME;
   const home = mkdtempSync(path.join(tmpdir(), "pk-core-cli-"));
   markVault(home);  // Task 1b: an unmarked directory is no longer a root any dispatch accepts
-  addVerb(home, "aprobe");  // ...and Task 1b r3: a root with no verb at all is not dispatchable
   process.env.PLAINKEEP_HOME = home;
   try {
-    for (const argv of [[], ["help"], ["capture", "hi"], ["--version", "extra"], ["--nope"]]) {
+    for (const argv of [["zzz-not-a-verb"], ["--nope"], ["--version", "extra"],
+                        ["--core-selftest", "extra"]]) {
       const r = await runCore(argv);
       expect(r.code).toBe(EXIT_NOT_FOUND);
       expect(r.stdout).toBeUndefined();

@@ -103,20 +103,41 @@ export function engineRoot(): string {
   );
 }
 
-// PLAINKEEP_ENGINE, read back after dispatch() has set it from the validated discovery result. The
-// same shape as requireHome() and for the same reason: exactly one place could ever grow a fallback.
+// ACTIVATE THE ENGINE: compute the code-relative root and OVERWRITE PLAINKEEP_ENGINE with it.
 //
-// It is READ ONLY BY CONSUMERS THE CORE ITSELF SET IT FOR — resolver.ts asks engineRoot() directly,
-// never this. That asymmetry is the security property ADR-014 D2 asks for spelled as code: the value
-// in the environment is an OUTPUT of the dispatcher, and a caller who exports PLAINKEEP_ENGINE=/evil
-// has it REPLACED before anything reads it, because nothing that decides where to load code from
-// ever consults the variable in the first place.
+// This is the whole of ADR-014 D2's "caller input must not control it, the core replaces any
+// inherited value", in one assignment — and the reason it is a separate function rather than a line
+// inside dispatch() is that dispatch() is not the only entry point. `--core-resolve`, `--core-api`
+// and `--core-gate` reach the resolver without dispatching, so a replacement that lived only in
+// dispatch() would leave those three reading whatever the caller exported. It is called ONCE, at the
+// top of runCore(), before any flag branch, so no future entry point can be added that forgets it.
+//
+// The value comes from engineRoot() — the executable's own location, realpath-resolved — and from
+// nowhere else. It has to: discovery is itself SPAWNED out of this tree, so the tree must be known
+// before discovery can run, which rules out carrying the value back from discovery's output. The
+// floor answers the same question with a `$0` symlink chain ending in `cd -P`, and the two agree
+// because both are canonical; that agreement is PINNED, not assumed — the parity suite compares the
+// exported value against a running verb's own `Path(__file__).resolve().parents[2]`.
+export function activateEngine(): string {
+  const root = engineRoot();
+  process.env.PLAINKEEP_ENGINE = root;
+  return root;
+}
+
+// The activated engine tree. Same shape as requireHome() and for the same reason: exactly one place
+// could ever grow a fallback back.
+//
+// It reads the ENVIRONMENT rather than re-deriving, and that is not a hole — it is what makes the
+// replacement above load-bearing instead of decorative. Every entry point activates first, so by the
+// time anything asks, the variable holds the code-derived answer and a caller's value is gone. A
+// process that reaches here WITHOUT activating (only a unit test does) gets a refusal rather than a
+// guess.
 export function requireEngine(): string {
   const env = process.env.PLAINKEEP_ENGINE;
   if (env) return env;
   throw new VaultRefusal(
-    "plainkeep: no engine selected — PLAINKEEP_ENGINE is unset (the dispatcher sets it from its " +
-      "own location; a verb reached any other way must be given one)",
+    "plainkeep: no engine selected — PLAINKEEP_ENGINE is unset (every entry point activates the " +
+      "engine from its own location before anything reads this)",
   );
 }
 
@@ -141,16 +162,11 @@ export interface Root {
   // chain finds step 2 already satisfied and can only ever answer "PLAINKEEP_HOME". `vault status`
   // reads it back out of PLAINKEEP_VAULT_MECHANISM.
   mechanism: string;
-  // The canonical ENGINE root, as the discovery module's own `Path(__file__).resolve()` spells it
-  // (Task 2). Taken from there rather than from engineRoot() above so that the floor and the core
-  // export byte-identical values for PLAINKEEP_ENGINE — they self-locate differently (a `$0` chain
-  // vs an execPath) and must still agree on one spelling.
-  engine: string;
 }
 
-// Run the shared discovery module. stdout is FOUR lines — canonical data root, vault id, mechanism,
-// canonical engine root. A refusal keeps ITS exit code (2 usage / 5 policy-denied) and ITS stderr,
-// which is written through verbatim so the floor and the core are indistinguishable to a caller.
+// Run the shared discovery module. stdout is three lines — canonical root, vault id, mechanism. A
+// refusal keeps ITS exit code (2 usage / 5 policy-denied) and ITS stderr, which is written through
+// verbatim so the floor and the core are indistinguishable to a caller.
 export function discoverRoot(selector: string | null): Root {
   const script = path.join(engineRoot(), ...DISCOVERY_REL);
   const args = selector === null ? [script, "--select"] : [script, "--select", "--vault", selector];
@@ -181,9 +197,8 @@ export function discoverRoot(selector: string | null): Root {
   const root = lines[0] ?? "";
   const id = lines[1] ?? "";
   const mechanism = lines[2] ?? "";
-  const engine = lines[3] ?? "";
-  if (!root || !id || !mechanism || !engine) {
+  if (!root || !id || !mechanism) {
     throw new VaultRefusal("plainkeep: vault discovery returned no root — the engine tree is broken");
   }
-  return { root, id, mechanism, engine };
+  return { root, id, mechanism };
 }

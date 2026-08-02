@@ -1341,7 +1341,14 @@ def prune(keep: int = DEFAULT_KEEP) -> list[str]:
         return []
 
     def when(v: str) -> float:
-        doc = _read_json(pair_manifest_path(v)) or {}
+        # Every read here is best-effort by design. `prune()` runs AFTER a successful activation, so
+        # anything it raises turns an update that WORKED into one that reports failure — and the two
+        # readable sources of a raise are a version directory whose name `check_version_name`
+        # refuses (something else put it in `engine/`) and a manifest that will not parse.
+        try:
+            doc = _read_json(pair_manifest_path(v)) or {}
+        except VaultError:
+            doc = {}
         at = doc.get("installed_at")
         if isinstance(at, str):
             try:
@@ -1383,7 +1390,13 @@ def pairs_report() -> dict:
     rows = []
     for v in installed_versions():
         d = versions_dir() / v
-        manifest = _read_json(pair_manifest_path(v)) or {}
+        # Guarded for `prune`'s reason and one more: `plainkeep doctor` calls this on every run, and
+        # a diagnostic that dies on the thing it is diagnosing reports the crash instead of the
+        # damage (ADR-019 D3).
+        try:
+            manifest = _read_json(pair_manifest_path(v)) or {}
+        except VaultError:
+            manifest = {}
         rows.append({"version": v, "active": v == active,
                      "rollback_target": v == rollback_target(),
                      "complete": not verify(d, check_seal=False),

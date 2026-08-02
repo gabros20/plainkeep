@@ -30,6 +30,12 @@ CLAUDE.md
 .codex
 .claude
 requirements.txt
+requirements-search.txt
+# The DELIVERED PROJECT (Phase 2 Task 4b). These two ship as ONE artifact with the code — they are in
+# `enginetree.OWNED_FILES` as well, which is unusual for this file (it is normally the superset) and
+# is the point: an engine and the lock it provisions from must never arrive separately.
+pyproject.toml
+uv.lock
 docs/design
 docs/DECISIONS.md
 docs/README.md

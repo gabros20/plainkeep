@@ -1,0 +1,77 @@
+# plainkeep — THE DEPENDENCY MATRIX, frozen to exactly today's behaviour (Phase 2 Task 4c).
+#
+# This file and `uv.lock` beside it ship INSIDE the engine tree as one artifact with the code
+# (`enginetree.OWNED_FILES`), and provisioning is `uv sync --frozen` against them — not a `pip
+# install -r`, and not an install of a wheel, because neither imposes THIS project's exact
+# transitive resolution on the machine that installs it. `bin/lib/provision.py` is the module that
+# reads both, and the reasoning lives in its header.
+#
+# It is a VIRTUAL project (`[tool.uv] package = false`): plainkeep is a tree of verb scripts exec'd
+# by installed path (ADR-017), not an importable distribution, so there is nothing to build and
+# nothing to install of plainkeep itself. What is declared here is the dependency matrix and nothing
+# else.
+#
+# THE MATRIX, per cell — what is in it, where the product reads it, and what it deliberately leaves
+# out. `bin/lib/setuplib.py` reads the extras below through `provision.extras()`; the lists are not
+# duplicated in Python any more, so an edit here changes what `plainkeep setup` installs.
+#
+#   base       nothing — stdlib only. ADR-009's floor is a CONTRACT, not a default: `plainkeep`
+#              dispatches through a bare interpreter and every deterministic suite runs with no
+#              third-party package present. `dependencies = []` below is load-bearing and
+#              test/run_provision.py reddens if anything is added to it.
+#   [search]   the retrieval planes (stage-2 vectors + stage-3 rerank). A strict subset, isolated
+#              because the search venv must not drag in the file-processing packages.
+#   [models]   the file-processing packages `plainkeep setup models` installs. See the warning below:
+#              this extra is HALF of what that verb does, and the verb now says so.
+#
+# WHAT IS NOT HERE, on purpose (each would be a silent scope change):
+#   * The BYO tier — pymupdf4llm, docling, sentence_transformers, parakeet_mlx, mlx_whisper,
+#     faster_whisper, ocrmac. Seven heavy imports, every one behind a `find_spec` probe with a
+#     deterministic fallback, declared nowhere. They must NOT join [models]: an extra that pulls
+#     sentence-transformers/docling/faster-whisper is a multi-GB torch download triggered by a setup
+#     verb. A vault that wants one declares it on a plugin and gets it through ADR-018's dependency
+#     overlay, which is vault-local and consented to per pack.
+#   * Things that are not Python distributions at all — Ollama model WEIGHTS, `restic`, `tesseract`,
+#     launchd, the compiled `plainkeep-ui` asset. uv provisions Python distributions; weights and
+#     system tools stay explicit, confirm-gated setup actions. `test/run_provision.py` asserts a sync
+#     downloads neither.
+
+[project]
+name = "plainkeep"
+version = "4.0.0.dev0"          # tracks VERSION; the lock does not care, but a project needs one
+description = "plainkeep engine — dependency matrix for the optional layers"
+requires-python = ">=3.10"      # ADR-009: the verbs use PEP 604 `str | None`, so 3.10 is the floor
+
+# THE ZERO-INSTALL FLOOR. Deliberately empty. Do not add to this list without changing ADR-009.
+dependencies = []
+
+[project.optional-dependencies]
+# `plainkeep setup search` — stage-2 vectors (lancedb) + stage-3 rerank (fastembed). LanceDB stopped
+# publishing macOS-Intel wheels after 0.25.x, so the two markers are mutually exclusive and every
+# host resolves exactly one of them. `pyarrow` is NOT declared: it rides in transitively via lancedb
+# (`bin/lib/vectorstore.py` imports it), and declaring a transitive dependency we do not choose the
+# version of would pin it against lancedb's own resolution.
+search = [
+    'lancedb>=0.25,<0.26 ; platform_system == "Darwin" and platform_machine == "x86_64"',
+    'lancedb>=0.33 ; platform_system != "Darwin" or platform_machine != "x86_64"',
+    "fastembed>=0.4",
+]
+
+# `plainkeep setup models` — the pip HALF of that verb. Verbatim today's set (setuplib's `models`
+# branch): Pillow, trafilatura, and mlx-vlm only where mlx exists.
+#
+# THE HONEST CONSEQUENCE, stated here rather than smoothed: **`plainkeep setup models` does two
+# things and this extra covers one of them.** The other half is `plainkeep models pull --all`, which
+# downloads Ollama WEIGHTS — gigabytes, over the network, and not a pip package. Naming this extra
+# `models` is accurate to what it installs and under-delivers on what its name suggests, and the fix
+# is not to widen the extra (that is how packaging silently becomes a downloader) but to make the
+# verb say which half it is doing, which it now does.
+models = [
+    "Pillow>=10.0",
+    "trafilatura>=2.0",
+    'mlx-vlm>=0.1 ; platform_system == "Darwin" and platform_machine == "arm64"',
+]
+
+[tool.uv]
+# Nothing to build: the engine is exec'd by path, not imported as a distribution.
+package = false

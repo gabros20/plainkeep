@@ -38,11 +38,20 @@ write `__pycache__` into a read-only tree, so every invocation re-compiles the l
 imports. Measured, and carried in the Task 2 report.
 
 `verify()` then asks, on every `--verify` and every `doctor`, whether the tree is still complete and
-still read-only. **Neither question is "is this the code that was installed".** The seal check reads
-MODES, so it catches the seal being gone — an interrupted install, a `chmod` someone forgot to undo —
-and it cannot catch an edit whose author put the mode back. Immutability here is enforced against
-accident and against casual hot-patching; authenticating content would need digests kept outside the
-tree, which is not shipped. `seal_problems` says so where the check itself is.
+still read-only. The seal check reads MODES, so it catches the seal being gone — an interrupted
+install, a `chmod` someone forgot to undo — and on its own it cannot catch an edit whose author put
+the mode back. **That third question — "is this the code that was installed" — is now answerable**,
+by the digest manifest Task 4b needed and this module records at install time under
+`<install-root>/engine/.digests/<version>.json`, i.e. OUTSIDE the tree it covers. `--verify
+--digests` and `provision.sync()` ask it; `doctor`'s routine pass still does not, because re-reading
+every owned file is the right cost for "prove this tree is intact" and the wrong one for a health
+check. What it still does not prove is that the SOURCE was authentic: `install()` digests what it
+was handed.
+
+**An installed engine also has one writable directory**, `tools/` — where the pinned `uv` and the
+Python environment it syncs are provisioned (`PROVISION_DIR` below, and `bin/lib/provision.py` for
+why it is inside the versioned tree at all). It carries no engine code, and the seal is applied to
+the whole tree and then lifted from that one path.
 
 **What the engine OWNS** is enumerated in `OWNED_TREES`/`OWNED_FILES` below and verified, because a
 manifest nothing executes is paperwork. `install()` refuses to leave behind a tree that fails
@@ -111,7 +120,29 @@ OWNED_TREES = (
 OWNED_FILES = (
     "VERSION",                          # load-bearing: manifest.py reads it as <engine>/VERSION
     "plainkeep",                        # the launcher itself ships inside the tree it launches
+    # THE LOCK TRAVELS WITH THE CODE IT LOCKS (Phase 2 Task 4). These two are ONE artifact with the
+    # rest of the tree — extracted to the versioned directory, checksummed, and provisioned from with
+    # `uv sync --frozen`. Shipping the engine and fetching its lock separately is how a machine ends
+    # up resolving against a lock that was never paired with this code; making them owned paths means
+    # the pairing is by construction rather than by procedure. `bin/lib/provision.py` reads them.
+    "pyproject.toml",                   # the declared dependency matrix (base + [search] + [models])
+    "uv.lock",                          # the exact transitive resolution, per platform
 )
+
+# The ONE writable directory in a sealed tree, and the whole of the exception (ADR-019 / Task 4a).
+# `install()` creates it in staging, seals the tree with everything else, and then chmods THIS PATH
+# alone back to 0755 — chmod needs ownership, not a writable parent, so no other path is unsealed
+# even momentarily. What lands in it: the pinned `uv` binary (`tools/uv/<version>/uv`, itself sealed
+# 0555 once its sha256 is verified), the environment `uv sync` manages (`tools/venv`, necessarily
+# writable — uv owns it) and any uv-managed interpreter (`tools/python`).
+#
+# It carries no engine CODE, which is what keeps ADR-017 D4's claim intact: what must not be
+# hot-patchable is the code, and everything here is reconstructible from the pin and the lock by
+# deleting the directory. It is deliberately NOT in the ownership manifest — `verify()`'s seal check
+# walks the manifest, so keeping `tools/` out of it means the exception never has to be special-cased
+# inside the check. `verify()` asks about it separately and asks the INVERSE question (is it there
+# and is it still writable), so the exception is in the model rather than in what the walk misses.
+PROVISION_DIR = "tools"
 
 # Directories under `bin/` that are NOT verbs, so `verify()` does not demand a run.py of them.
 NON_VERB_BIN_DIRS = ("lib",)
@@ -343,7 +374,128 @@ def seal_problems(root: Path, *, modes: list[int] | None = None) -> list[str]:
     return [_UNSEALED] if m is not None and m & stat.S_IWUSR else []
 
 
-def verify(root: Path, *, check_seal: bool = True) -> list[str]:
+# --- the digest manifest ---------------------------------------------------------------------------
+# WHAT WAS DELIVERED, recorded OUTSIDE the tree it covers (Phase 2 Task 4b).
+#
+# The module header used to end this subject with "authenticating content would need digests kept
+# outside the tree, which is not shipped". This is that, shipped, and it exists because 4b's gate
+# needs it: provisioning runs `uv sync --frozen` against a `pyproject.toml` and a `uv.lock` that ship
+# INSIDE the engine, and "a tampered lock fails its checksum rather than installing" is only true if
+# there is a checksum to fail, kept somewhere the same edit cannot rewrite.
+#
+# `<install-root>/engine/.digests/<version>.json`, beside the versioned trees rather than in one:
+#   * a `chmod u+w && edit` inside the sealed tree does not reach it, which is the entire point;
+#   * it is keyed by version, so it is written, replaced and removed exactly with its tree;
+#   * `.`-prefixed, so `installed_versions()` and `_looks_installed()` skip it for free.
+#
+# WHAT IT DOES AND DOES NOT PROVE, in the same terms `seal_problems` uses. It proves the tree is
+# byte-for-byte what `install()` copied. It does NOT prove the SOURCE was authentic — `install()`
+# digests what it was handed — and it is not a defence against someone who can write the digest file
+# too. It closes the gap between "sealed" (modes) and "complete" (presence): a hot patch whose author
+# put the mode back is now visible, where before it was not.
+DIGESTS_DIRNAME = ".digests"
+DIGEST_SCHEMA = "plainkeep.engine-digests/1"
+
+
+def digests_path(root: Path) -> Path:
+    """Where `root`'s manifest lives. Derived from the TREE, never from `versions_dir()`: a `doctor`
+    run under a different `PLAINKEEP_ENGINE_HOME` must not look up the digests of an engine it is not
+    talking about — the same trap `_looks_installed` avoids for the seal."""
+    return root.parent / DIGESTS_DIRNAME / f"{root.name}.json"
+
+
+def _owned_paths(root: Path) -> list[str]:
+    """Every owned FILE in `root`, as sorted relative posix paths. Symlinks are listed but not
+    digested (see `compute_digests`) — `frontends/raycast` may legitimately carry one."""
+    rels: list[str] = [r for r in OWNED_FILES if (root / r).is_file()]
+    for tree in OWNED_TREES:
+        base = root / tree
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*"):
+            if p.is_file() and not p.is_symlink() and "__pycache__" not in p.parts:
+                rels.append(p.relative_to(root).as_posix())
+    return sorted(set(rels))
+
+
+def compute_digests(root: Path) -> dict[str, str]:
+    """sha256 of every owned file. `hashlib` is imported HERE rather than at module scope for the
+    reason the header gives about import weight: this module is imported on the first act of every
+    invocation, and no dispatch ever computes a digest."""
+    import hashlib
+    out: dict[str, str] = {}
+    for rel in _owned_paths(root):
+        h = hashlib.sha256()
+        with open(root / rel, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+        out[rel] = h.hexdigest()
+    return out
+
+
+def record_digests(root: Path, digests: dict[str, str] | None = None) -> Path:
+    """Write `root`'s manifest. Called by `install()` from the STAGING tree, before the rename, so
+    the digests describe what is about to land rather than what survived it."""
+    import json
+    p = digests_path(root)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"schema": DIGEST_SCHEMA, "version": root.name,
+               "files": digests if digests is not None else compute_digests(root)}
+    tmp = p.with_name(f".{p.name}.incoming.{os.getpid()}")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(tmp, p)
+    return p
+
+
+def read_digests(root: Path) -> dict[str, str] | None:
+    import json
+    try:
+        payload = json.loads(digests_path(root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    files = payload.get("files")
+    return files if isinstance(files, dict) else None
+
+
+def digest_problems(root: Path, *, only: tuple[str, ...] | None = None) -> list[str]:
+    """Every owned file whose content is not what was installed. Empty means it matches (or that
+    `root` is not an installed tree at all, which is the same convention `seal_problems` uses — a
+    contributor's checkout has no manifest and is not claiming to).
+
+    `only` narrows it to named paths, which is what `provision.sync()` passes: checking the two files
+    it is about to hand to uv costs two digests, where the whole tree costs ~150."""
+    import hashlib
+    if not _looks_installed(root):
+        return []
+    recorded = read_digests(root)
+    if recorded is None:
+        return [f"no recorded checksums for this engine ({digests_path(root)} is missing or unreadable)"]
+    rels = [r for r in recorded if only is None or r in only]
+    if only is not None:
+        for r in only:
+            if r not in recorded:
+                return [f"{r} has no recorded checksum"]
+    problems: list[str] = []
+    for rel in sorted(rels):
+        p = root / rel
+        try:
+            h = hashlib.sha256()
+            with open(p, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+        except OSError:
+            problems.append(f"{rel} is recorded but missing")
+            continue
+        if h.hexdigest() != recorded[rel]:
+            problems.append(f"{rel} does not match its recorded checksum")
+    if only is None:
+        for rel in _owned_paths(root):
+            if rel not in recorded:
+                problems.append(f"{rel} is present but was never recorded")
+    return problems
+
+
+def verify(root: Path, *, check_seal: bool = True, check_digests: bool = False) -> list[str]:
     """Every way `root` fails to be a complete engine tree, as a list of one-line problems.
 
     Empty means the whole ownership manifest is present AND — for a tree installed under a version
@@ -401,8 +553,21 @@ def verify(root: Path, *, check_seal: bool = True) -> list[str]:
         problems.append("missing engine files: frontends/raycast/*.sh")
     for s in scripts:                     # they are executable engine code; the seal covers them too
         kind_of(s)
+    # `tools/` is asked about SEPARATELY and in the INVERSE direction (Task 4a): it must be there and
+    # it must still be writable, because it is where provisioning lands and a sealed one turns every
+    # `plainkeep setup` into a permission error at the last step. Its mode is deliberately NOT added
+    # to `modes` — that list feeds the seal check, and this is the one path exempt from it.
+    tools = root / PROVISION_DIR
+    tm = _mode_of(tools)
+    if tm is None or not stat.S_ISDIR(tm):
+        problems.append(f"missing engine tree: {PROVISION_DIR}/")
+    elif _looks_installed(root) and not tm & stat.S_IWUSR:
+        problems.append(f"{PROVISION_DIR}/ is read-only — the engine cannot provision uv or its "
+                        "Python environment into it")
     if check_seal:
         problems.extend(seal_problems(root, modes=modes))
+    if check_digests:
+        problems.extend(digest_problems(root))
     return problems
 
 
@@ -582,6 +747,11 @@ def _copy_owned(src: Path, dst: Path) -> None:
         d = dst / ".local" / "bin" / "plainkeep-core"
         d.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(core, d)
+    # The provisioning directory is created EMPTY here rather than on first use, so that `verify()`
+    # can ask for it and so that the seal-then-chmod dance in `install()` has exactly one path to
+    # exempt. It is not copied from `src`: a contributor's checkout may have a populated `tools/`
+    # holding a uv for a different engine version, and an install is a fresh tree.
+    (dst / PROVISION_DIR).mkdir(parents=True, exist_ok=True)
 
 
 # How old an abandoned staging tree must be before an unrelated install sweeps it. A `SIGKILL` mid
@@ -621,6 +791,25 @@ def remove_version(version: str) -> None:
         return
     _chmod_tree(d, writable=True)
     shutil.rmtree(d, ignore_errors=True)
+    # The manifest is written and removed WITH its tree. A stale one outlives nothing useful: the
+    # next install of the same version overwrites it anyway, and one left behind for a version that
+    # is gone is a checksum nobody can check.
+    try:
+        digests_path(d).unlink()
+    except OSError:
+        pass
+
+
+def _seal_installed(root: Path) -> None:
+    """Seal the tree, then re-open the ONE writable exception (`PROVISION_DIR`).
+
+    Both callers need both halves, and the pair is a unit: a seal without the re-open produces a tree
+    that `verify()` calls broken and that no `plainkeep setup` can provision — which is exactly what
+    the repair branch of `install()` used to produce, because it sealed and stopped there. `chmod`
+    needs ownership rather than a writable parent, so this reaches into a 0555 root without unsealing
+    it (see PROVISION_DIR)."""
+    _chmod_tree(root, writable=False)
+    (root / PROVISION_DIR).chmod(0o755)
 
 
 def install(src: Path, *, version: str | None = None, force: bool = False,
@@ -671,7 +860,7 @@ def install(src: Path, *, version: str | None = None, force: bool = False,
         # still refuses.
         problems = verify(dst)
         if problems == [_UNSEALED] and not writable:
-            _chmod_tree(dst, writable=False)
+            _seal_installed(dst)
             if activate_it:
                 activate(version)
             return dst
@@ -701,12 +890,19 @@ def install(src: Path, *, version: str | None = None, force: bool = False,
         # version name is already complete and already verified, and only its permissions change
         # afterwards. The window it opens — a rename that lands and a seal that does not — is what
         # `verify()`'s mode check and the repair branch above exist to make visible and fixable.
+        # Digested from the STAGING tree, before the rename: the manifest describes what is about to
+        # land, and it is on disk before the tree it covers is reachable under a version name. It is
+        # written under `dst`'s name (that is where the tree is going), so a failure after this point
+        # leaves a manifest for a version that does not exist — which the `except` below removes
+        # along with the tree, and which `digest_problems` would report as a missing tree anyway.
+        digests = compute_digests(staging)
         if dst.exists():
             remove_version(version)
         os.rename(staging, dst)
         staged = False
+        record_digests(dst, digests)
         if not writable:
-            _chmod_tree(dst, writable=False)
+            _seal_installed(dst)
     except BaseException:
         if staged:
             _chmod_tree(staging, writable=True)
@@ -748,7 +944,7 @@ _USAGE = ("usage: enginetree.py --print [root|install-root|current|versions]\n"
           "       enginetree.py --install <source-checkout> [--version V] [--force] "
           "[--no-activate] [--writable]\n"
           "       enginetree.py --activate <version>\n"
-          "       enginetree.py --verify [<engine-root>]")
+          "       enginetree.py --verify [<engine-root>] [--digests]")
 
 
 def main(argv: list[str]) -> int:
@@ -804,8 +1000,13 @@ def main(argv: list[str]) -> int:
             print(activate(rest[0]))
             return output.EXIT_OK
         if cmd == "--verify":
-            root = Path(rest[0]) if rest else ENGINE_ROOT
-            problems = verify(root)
+            # `--digests` is OPT-IN rather than the default because it re-reads every owned file
+            # (~150 of them, ~5 MB) where the mode walk stats them: the right cost for an operator
+            # asking "is this the code that was installed", the wrong one for `doctor`'s routine
+            # pass. `provision.sync()` asks for the two paths it cares about instead of all of them.
+            args = [a for a in rest if a != "--digests"]
+            root = Path(args[0]) if args else ENGINE_ROOT
+            problems = verify(root, check_digests="--digests" in rest)
             for p in problems:
                 print(p, file=sys.stderr)
             print(f"{root}: {'OK' if not problems else f'{len(problems)} problem(s)'}")

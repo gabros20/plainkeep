@@ -1100,3 +1100,116 @@ was scoped to move; `bin/lib/enginetree.py --install|--activate|--verify|--print
   the suite plus one manual end-to-end run; multi-version rollback (`--activate <older>`) has unit
   coverage but no field use; and `plainkeep plugin`'s trust ceiling has not been re-examined against
   a plugin that now imports `lib` through an env var the dispatcher sets.
+
+---
+
+## ADR-018 — an old plugin keeps working because the SDK travels on `PYTHONPATH`, and dependencies are declared (2026-08-02)
+
+**Status.** **Accepted** (2026-08-02). It closes the break ADR-017 opened: relocating the engine
+(D2/D6) invalidated the one line every plugin ever scaffolded carries, while
+`PLAINKEEP_API_VERSION = "1.0"` promises those plugins keep working. Basis: Phase 2 Task 3,
+implemented against a fully green suite; every claim below was measured or mutation-tested.
+
+**Context.** The pre-Task-2 scaffold bootstraps the SDK with
+`sys.path.insert(0, str(Path(os.environ["PLAINKEEP_HOME"]) / "bin"))`. After ADR-017 a vault has no
+`bin/`, so that line names a directory that does not exist. Nothing about the SDK's *surface* changed
+— every signature `test/run_plugin.py` snapshots is identical — which is precisely why a signature
+snapshot could not detect the break: the question is not what `lib.api` exports, it is whether
+`from lib import api` still resolves.
+
+**Decision.**
+
+1. **Both dispatchers prepend the engine's own `bin/` to `PYTHONPATH` when they spawn a PLUGIN verb.**
+   The stale `insert(0, …)` prepends a nonexistent entry, which CPython skips, and the import falls
+   through to `PYTHONPATH`. Zero plugin edits. The engine's own `bin/lib/` IS the compatibility
+   layer, so there is nothing that can drift from what it forwards to — the alternative considered and
+   rejected by both design panelists was a vault-local forwarding stub, which is an engine-owned file
+   that must be installed, updated, merged and eventually migrated: the exact machinery Phase 2 is
+   removing. Codex's two conditions are kept: the scaffold is not rewritten away from `lib.api` during
+   API 1.x, and if a canonical `plainkeep.api` is ever introduced, `lib.api` FORWARDS to it — removal
+   waits for a deliberate 2.0.
+
+   `bin/lib/pluginenv.py` holds the rule; `resolver.py --dispatch` computes the value inside the ONE
+   spawn the bash floor already paid for (so the shell exports a value rather than composing one);
+   `cli/src/core/pluginenv.ts` is the port the compiled core uses, and
+   `test/cases/core-parity/dispatcher.json`'s `plugin-spawn-environment` compares the child
+   environment the two dispatchers actually produce.
+
+2. **PER-SPAWN, and only for a verb the resolver answered `plugin:<pack>`.** This is the question the
+   plan left open ("decide per-spawn vs per-process and PROVE it"). An engine verb self-locates
+   through `__file__` and has never needed `PYTHONPATH`; injecting for all 35 of them would put
+   `<engine>/bin` into the environment of every `git`, every scheduled job and every subprocess they
+   spawn, for no benefit. The parity case asserts the negative — an engine verb sees no
+   `PLAINKEEP_PLUGIN_PACK`, an untouched `PYTHONPATH`, and no importable `lib` — because an injection
+   for every verb would satisfy the positive half just as well.
+
+   **The residual leak, measured rather than described.** `PYTHONPATH` is inherited by everything a
+   process spawns, so a plugin verb's own children would see the engine tree to any depth. That is
+   narrowed at the earliest honest moment: `lib/api.py` — the import the plugin contract makes every
+   plugin perform — removes `<engine>/bin` from the process environment once it has done its job.
+   `sys.path` was built at interpreter startup, so the running plugin is unaffected; a child spawned
+   afterwards inherits nothing. The dependency overlay is deliberately KEPT for children: those are
+   packages the pack declared, and its own helper scripts have the same claim on them. **What remains
+   open, and is pinned by a test rather than left as prose:** a child spawned BEFORE the SDK import
+   does inherit `<engine>/bin`, and with it 35 importable top-level namespace packages (`models`,
+   `files`, `index`, …). `PLAINKEEP_PLUGIN_PACK` is not scrubbed at all — it is small, inert, and it
+   is what makes a missing-dependency refusal able to name the pack.
+
+3. **The precedence inversion is REAL, silent, and is pinned rather than fixed.** `sys.path[0]` is the
+   script's own directory and precedes every `PYTHONPATH` entry. The old scaffold's `insert(0, …)`
+   put the SDK AHEAD of the plugin's directory; under `PYTHONPATH` a pack shipping a top-level
+   `lib.py`/`lib/` beside its `run.py` now shadows the SDK, where the engine used to win. It is not
+   fixable from outside the process — `sys.path[0]` belongs to CPython and prepending from outside is
+   the whole mechanism — so what ships is VISIBILITY: `test/run_pluginsdk.py` pins which way it
+   actually goes (so a change in either direction is noticed), `plainkeep doctor` warns, and
+   `plainkeep plugin add` says it at install time, when the pack can still be looked at.
+
+4. **The dependency contract is ADDED, not preserved.** Verified during design and it changes the
+   framing: the plugin format had **no** dependency contract at all — `docs/plugins.md`'s manifest
+   carried name/version/min_ops_version/api/verbs, and the lock entry recorded none. So this is a
+   scope decision, and the scope is: **declared** in `plugin.json` (never inferred from imports),
+   **recorded** in `plugins.lock.json`, **installed as an overlay** (`pip install --target
+   <vault>/plugins/.deps`) which both dispatchers prepend to a plugin spawn's `PYTHONPATH`.
+
+   **"Re-applied when an engine update creates a fresh environment" is satisfied STRUCTURALLY rather
+   than by a re-install step**: the overlay is vault-local and was never part of the engine
+   environment, so a new engine tree re-applies it by doing nothing. The only thing that can
+   invalidate it is the INTERPRETER moving underneath it (a `--target` install can carry compiled
+   extensions), which `doctor` watches and `plugin sync --yes` repairs. **What happens to a dependency
+   already pip-installed into `<vault>/.venv`**, stated rather than implied: it keeps working, because
+   the dispatcher still prefers that interpreter when it exists — but nothing records it, so it does
+   not travel with the vault and nothing rebuilds it. Declaring it and syncing is the migration.
+
+   Two consequences that are not obvious. **The overlay comes FIRST on the path**, ahead of the
+   engine, so a declared dependency beats the engine tree's incidental top-level names; the one name
+   that costs is `lib` itself, and `sync` refuses an overlay that grows one. **A declaration is a
+   risk-surface growth**: an `update` that adds one revokes trust, because installing third-party
+   code and putting it on the path of every verb a pack ships is not covered by consent given for
+   something smaller. Declarations are a grammar (name, extras, version specifiers) and not a pip
+   passthrough — flags, URLs, local paths and environment markers are refused at `add`, since these
+   strings become pip's argv.
+
+5. **A missing module becomes a refusal that names the pack.** Installed by `lib.api` when
+   `PLAINKEEP_PLUGIN_PACK` is set, gated so that importing the SDK anywhere else changes nothing. Two
+   messages, because the operator's next move differs: a DECLARED dependency that is missing means the
+   overlay was never built (run `sync`), an UNDECLARED one means the manifest has to change first.
+   Exit 1 — a missing module is neither a usage error (2) nor a policy refusal (5); it is the
+   environment not being what the pack needs.
+
+**Consequences.**
+
+- **`PYTHONPATH` is now part of a plugin verb's contract**, which it was not before. A plugin that
+  spawns its own Python helper and expects it to import the SDK must pass what it needs explicitly;
+  the overlay it declared is inherited, the engine is not.
+- **The refusal in D5 only covers imports that happen after the SDK import.** The scaffold puts
+  `from lib import api` at the top, so the shape the project generates is covered; a plugin that
+  imports a third-party module above its SDK import gets CPython's traceback instead. Closing that
+  would need a `sitecustomize` in the injected path, which runs in every descendant interpreter and
+  can shadow a user's own — a worse trade, and it is registered here rather than taken.
+- **`plugin sync` runs pip**, which is the first network-reaching thing in the plugin surface. It is
+  confirm-class, it is never automatic, and the suite exercises it offline against a wheel the test
+  builds by hand.
+- **Not done**: the overlay is not keyed by interpreter version (one directory, with the built-for
+  version recorded and checked); there is no `sync --check` or garbage collection of packages a pack
+  no longer declares; `$PLAINKEEP_PATH` packs are scanned by the shadow preflight but have no
+  lockfile, so they can declare nothing.

@@ -99,7 +99,7 @@ CRASH_NOISE_OPT_INS = ("PLAINKEEP_REQUIRE_CORE", "PLAINKEEP_PARITY_FAULT_SIGNALS
 # pinned so that deleting a case (or an invocation) reddens instead of quietly shrinking coverage; see
 # the accounting invariant at the bottom of main() for why a self-consistency check cannot do that job.
 # ADDING cases is expected and welcome: raise this number in the same commit that adds them.
-EXPECTED_CATALOG_INVOCATIONS = 203
+EXPECTED_CATALOG_INVOCATIONS = 205
 
 results: list[tuple[str, bool, str]] = []
 skipped: list[tuple[str, str]] = []
@@ -805,6 +805,13 @@ def _dispatch_env(fx: Fixture, inv: dict, home: Path) -> dict:
     # and once with =off, and this comparator must drive both sides itself either way.
     e.pop("PLAINKEEP_CORE", None)
     e.pop("PLAINKEEP_CORE_BIN", None)
+    # ...and never let the DEVELOPER's PYTHONPATH decide what a case sees. The plugin spawn contract
+    # (Task 3) PREPENDS to whatever the caller had, so an ambient value would appear as a third,
+    # machine-specific entry in the child's path and turn `plugin-spawn-environment`'s exact-stdout
+    # assertion into a property of the shell it was run from. The MERGE with a caller's value is
+    # asserted where it can be controlled (test/run_pluginsdk.py); what this comparator owns is that
+    # the two dispatchers produce the same thing from the same start.
+    e.pop("PYTHONPATH", None)
     return e
 
 

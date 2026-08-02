@@ -794,6 +794,46 @@
           "expect_stdout_contains": "BIGBOTH-TAIL"
         }
       ]
+    },
+    {
+      "name": "plugin-spawn-environment",
+      "rationale": "THE PLUGIN SPAWN CONTRACT (Phase 2 Task 3), compared where it can actually diverge: the floor exports PYTHONPATH + PLAINKEEP_PLUGIN_PACK from resolver.py's `--dispatch` answer, the core composes the same two values in-process from pluginenv.ts, and nothing but this case makes the two agree. A plugin verb must see the vault's dependency overlay FIRST, the engine's bin/ SECOND, the pack name, and an importable `lib`; an ENGINE verb in the same fixture must see NONE of it — no pack, an untouched PYTHONPATH, and no importable `lib`, since it self-locates through __file__ and never needed the path. That negative half is the point: an injection for every verb would pass a plugin-only assertion and leak the engine tree into the environment of every child all 35 engine verbs spawn. Output is normalized to LABELS because the comparator gives each side its own vault copy, so absolute paths would differ by construction.",
+      "fixture": {
+        "verbs": [
+          {
+            "at": "plugin:probe",
+            "verb": "v_plugenv",
+            "cmd": {
+              "verb": "v_plugenv",
+              "risk": "read"
+            },
+            "run": "import importlib.util, json, os\nfrom pathlib import Path\n# NORMALIZED on purpose: the comparator gives each side its own VAULT copy, so any absolute\n# path printed here would differ between the two by construction. What is compared is the\n# SHAPE — which labelled entry is where, and whether the SDK is importable at all.\nengine = os.environ.get('PLAINKEEP_ENGINE') or ''\nhome = os.environ.get('PLAINKEEP_HOME') or ''\nlabel = {str(Path(home) / 'plugins' / '.deps'): 'DEPS', str(Path(engine) / 'bin'): 'ENGINE_BIN'}\nraw = os.environ.get('PYTHONPATH') or ''\nprint(json.dumps({\n    'pack': os.environ.get('PLAINKEEP_PLUGIN_PACK'),\n    'pythonpath': [label.get(x, 'other') for x in raw.split(os.pathsep)] if raw else [],\n    'sdk_importable': importlib.util.find_spec('lib') is not None,\n}, sort_keys=True))\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_engenv",
+            "cmd": {
+              "verb": "v_engenv",
+              "risk": "read"
+            },
+            "run": "import importlib.util, json, os\nfrom pathlib import Path\n# NORMALIZED on purpose: the comparator gives each side its own VAULT copy, so any absolute\n# path printed here would differ between the two by construction. What is compared is the\n# SHAPE — which labelled entry is where, and whether the SDK is importable at all.\nengine = os.environ.get('PLAINKEEP_ENGINE') or ''\nhome = os.environ.get('PLAINKEEP_HOME') or ''\nlabel = {str(Path(home) / 'plugins' / '.deps'): 'DEPS', str(Path(engine) / 'bin'): 'ENGINE_BIN'}\nraw = os.environ.get('PYTHONPATH') or ''\nprint(json.dumps({\n    'pack': os.environ.get('PLAINKEEP_PLUGIN_PACK'),\n    'pythonpath': [label.get(x, 'other') for x in raw.split(os.pathsep)] if raw else [],\n    'sdk_importable': importlib.util.find_spec('lib') is not None,\n}, sort_keys=True))\n"
+          }
+        ]
+      },
+      "invocations": [
+        {
+          "compare": "dispatch",
+          "verb": "v_plugenv",
+          "args": [],
+          "expect_stdout": "{\"pack\": \"probe\", \"pythonpath\": [\"DEPS\", \"ENGINE_BIN\"], \"sdk_importable\": true}\n"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_engenv",
+          "args": [],
+          "expect_stdout": "{\"pack\": null, \"pythonpath\": [], \"sdk_importable\": false}\n"
+        }
+      ]
     }
   ]
 }

@@ -6,22 +6,100 @@
       "rationale": "Every code in the frozen protocol, each reached the way it is actually reached in production: 0 from a read verb that ran; 2 from the VERB'S OWN usage error inside run.py (not the gate — the dispatcher must pass a child's 2 through untouched); 3 from the gate refusing a confirm verb, and 0 once --yes clears it; 5 from a deny verb; 4 twice over, once from the gate's unknown-verb path (with the did-you-mean line the floor prints) and once from the dispatcher's own 'has no run.py' line (byte-exact vs floor line 40) for a verb that resolves from its cmd.json but ships no script. Far-miss included so the help-hint branch is compared too.",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "v_ok", "cmd": { "verb": "v_ok", "risk": "read" }, "run": "print('ok')\n" },
-          { "at": "engine", "verb": "v_usage", "cmd": { "verb": "v_usage", "risk": "read" }, "run": "import sys\nsys.stderr.write('v_usage: missing <thing>\\n')\nsys.exit(2)\n" },
-          { "at": "engine", "verb": "v_confirm", "cmd": { "verb": "v_confirm", "risk": "confirm" }, "run": "print('ran')\n" },
-          { "at": "engine", "verb": "v_deny", "cmd": { "verb": "v_deny", "risk": "deny" }, "run": "print('MUST NEVER RUN')\n" },
-          { "at": "engine", "verb": "v_nopy", "files": ["cmd.json"], "cmd": { "verb": "v_nopy", "risk": "read" } }
+          {
+            "at": "engine",
+            "verb": "v_ok",
+            "cmd": {
+              "verb": "v_ok",
+              "risk": "read"
+            },
+            "run": "print('ok')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_usage",
+            "cmd": {
+              "verb": "v_usage",
+              "risk": "read"
+            },
+            "run": "import sys\nsys.stderr.write('v_usage: missing <thing>\\n')\nsys.exit(2)\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_confirm",
+            "cmd": {
+              "verb": "v_confirm",
+              "risk": "confirm"
+            },
+            "run": "print('ran')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_deny",
+            "cmd": {
+              "verb": "v_deny",
+              "risk": "deny"
+            },
+            "run": "print('MUST NEVER RUN')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_nopy",
+            "files": [
+              "cmd.json"
+            ],
+            "cmd": {
+              "verb": "v_nopy",
+              "risk": "read"
+            }
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_ok", "args": [], "expect_stdout_contains": "ok" },
-        { "compare": "dispatch", "verb": "v_usage", "args": [] },
-        { "compare": "dispatch", "verb": "v_confirm", "args": [] },
-        { "compare": "dispatch", "verb": "v_confirm", "args": ["--yes"], "expect_stdout_contains": "ran" },
-        { "compare": "dispatch", "verb": "v_deny", "args": [] },
-        { "compare": "dispatch", "verb": "v_nopy", "args": [] },
-        { "compare": "dispatch", "verb": "v_okk", "args": [] },
-        { "compare": "dispatch", "verb": "zzzzzzzz", "args": [] }
+        {
+          "compare": "dispatch",
+          "verb": "v_ok",
+          "args": [],
+          "expect_stdout_contains": "ok"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_usage",
+          "args": []
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_confirm",
+          "args": []
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_confirm",
+          "args": [
+            "--yes"
+          ],
+          "expect_stdout_contains": "ran"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_deny",
+          "args": []
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_nopy",
+          "args": []
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_okk",
+          "args": []
+        },
+        {
+          "compare": "dispatch",
+          "verb": "zzzzzzzz",
+          "args": []
+        }
       ]
     },
     {
@@ -29,16 +107,68 @@
       "rationale": "What the dispatcher owes the child and what it owes the caller. Forwarding: the verb prints its own sys.argv[1:] as JSON, so an empty arg, an arg with spaces, non-ASCII, an astral emoji, a leading-dash arg and a bare `--` are all proven to arrive positionally intact through both dispatchers (the gate sees the same args, so the audit line's naive space-join is compared too). Status: a child exiting 7 must pass through as 7 (not collapsed to 1), and a child that kills itself with SIGTERM must leave the DISPATCHER dead by that signal — the floor `exec`s the verb, so its wait status is WIFSIGNALED, and a binary that merely exits 143 would differ here (subprocess reports -15 vs 143).",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "v_args", "cmd": { "verb": "v_args", "risk": "read" }, "run": "import json, sys\nprint(json.dumps(sys.argv[1:], ensure_ascii=False))\n" },
-          { "at": "engine", "verb": "v_exit7", "cmd": { "verb": "v_exit7", "risk": "read" }, "run": "import sys\nprint('before exit 7')\nsys.exit(7)\n" },
-          { "at": "engine", "verb": "v_sig", "cmd": { "verb": "v_sig", "risk": "read" }, "run": "import os, signal, sys\nsys.stdout.write('dying by signal\\n')\nsys.stdout.flush()\nos.kill(os.getpid(), signal.SIGTERM)\n" }
+          {
+            "at": "engine",
+            "verb": "v_args",
+            "cmd": {
+              "verb": "v_args",
+              "risk": "read"
+            },
+            "run": "import json, sys\nprint(json.dumps(sys.argv[1:], ensure_ascii=False))\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_exit7",
+            "cmd": {
+              "verb": "v_exit7",
+              "risk": "read"
+            },
+            "run": "import sys\nprint('before exit 7')\nsys.exit(7)\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_sig",
+            "cmd": {
+              "verb": "v_sig",
+              "risk": "read"
+            },
+            "run": "import os, signal, sys\nsys.stdout.write('dying by signal\\n')\nsys.stdout.flush()\nos.kill(os.getpid(), signal.SIGTERM)\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_args", "args": [], "expect_stdout_contains": "[]" },
-        { "compare": "dispatch", "verb": "v_args", "args": ["", "a b c", "héllo wörld", "😀", "-x", "--", "tail"], "expect_stdout_contains": "héllo wörld" },
-        { "compare": "dispatch", "verb": "v_exit7", "args": [], "expect_stdout_contains": "before exit 7" },
-        { "compare": "dispatch", "verb": "v_sig", "args": [], "expect_stdout_contains": "dying by signal" }
+        {
+          "compare": "dispatch",
+          "verb": "v_args",
+          "args": [],
+          "expect_stdout_contains": "[]"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_args",
+          "args": [
+            "",
+            "a b c",
+            "héllo wörld",
+            "😀",
+            "-x",
+            "--",
+            "tail"
+          ],
+          "expect_stdout_contains": "héllo wörld"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_exit7",
+          "args": [],
+          "expect_stdout_contains": "before exit 7"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_sig",
+          "args": [],
+          "expect_stdout_contains": "dying by signal"
+        }
       ]
     },
     {
@@ -46,30 +176,262 @@
       "rationale": "One invocation for every signal that (a) terminates by default and (b) exists on BOTH macOS and Linux, since this catalog must run on either — each carrying an explicit expectation of what BOTH sides must produce. That boundary is stated rather than implied: the one default-terminating signal it leaves out is SIGEMT (macOS 7), because Python's signal module has no SIGEMT on Linux; it was measured AGREEING on macOS and is recorded in .orchestrate/raw/task4-fix2-signal-matrix.log rather than guarded here. Names resolve per platform on purpose, so a cell means the same SIGNAL rather than the same number. Partial coverage is what let two separate defect classes hide here — first bun's Linux signal NAMES (fixed in a9eb69a), then bun's signal DELIVERY (found by spec re-review r2 because no case exercised the numbers involved) — so the enumeration is now the whole set rather than a sample, and every cell is a named case that reddens if delivery moves in EITHER direction, including toward correctness. The verb restores SIG_DFL for the named signal and kills itself. Cells: 'signal' = died by that signal (-N, resolved per platform since SIGBUS is 10 on macOS and 7 on Linux); 'sigtrap' = bun's crash handler intercepted the re-raise and killed the dispatcher with SIGTRAP instead; 'fallback' = bun ignores that signal process-wide, so the re-raise is a no-op and the dispatcher exits 128+N. Measured on bun 1.3.14 / macOS arm64 (.orchestrate/raw/task4-fix2-signal-matrix.log): 15 signals reproduce the floor exactly; 6 diverge — SIGILL/SIGFPE/SIGBUS/SIGSEGV die as SIGTRAP, SIGPIPE/SIGXFSZ take the 128+N fallback. The four fault cells pin a SECOND facet that a returncode table cannot see and that this exhaustive sweep surfaced: bun's crash handler also prints a crash report to stderr where the floor is silent, so those cells assert the core's stderr carries it AND the floor's is empty. Excluded on purpose: the stop/continue family (SIGSTOP, SIGTSTP, SIGCONT, SIGTTIN, SIGTTOU), which suspends rather than kills and would hang the harness, and the ignored-by-default set (SIGURG, SIGCHLD, SIGIO, SIGWINCH, SIGINFO), where the child simply exits 0. WHEN A DIVERGENCE CELL GOES RED: bun now delivers that signal — flip the cell to {'core':'signal','floor':'signal'} and delete the matching paragraph in dispatch.ts. CRASH-NOISE GATE (Task 8 item A), a DELIBERATE and therefore dangerous coverage trade: eight of these twenty invocations kill a child with a signal whose macOS default action is 'create core image' (man 3 signal: QUIT, ILL, TRAP, ABRT, FPE, BUS, SEGV, SYS), and each such death makes macOS write a .ips report into ~/Library/Logs/DiagnosticReports and pop a notification attributing a crash to plainkeep. They are therefore marked crash_noise and are NOT run by a routine local run on macOS. WHAT THAT COSTS, stated because partial coverage in exactly this file is what hid two defect classes (bun's signal NAMES, then its DELIVERY): four of the six pinned divergences (SIGILL/SIGFPE/SIGBUS/SIGSEGV, the ones bun's crash handler turns into SIGTRAP) and their stderr crash-report assertions are macOS-only facts that CI cannot check for us — CI runs ubuntu-latest, where these cells run but pin LINUX delivery, which is a different measurement. So on macOS these four pins are only enforced on an opt-in run, and a macOS release must do one: PLAINKEEP_PARITY_FAULT_SIGNALS=1 python3 test/run_core_parity.py. A skipped cell prints SKIP and is counted apart from the passes; it is never reported as a pass. SCOPE CORRECTION (2026-08-01, found by the user still getting crash dialogs after this gate landed): this catalog is NOT the only place in the repo that kills children with report-generating signals, and gating it alone MOVED the noise rather than removing it. cli/src/core/dispatch.test.ts carries a second signal sweep — the Task 4 behavioral pin on signalNumberOf and on bun's delivery classes — and `bun test` is the most-run command here; measured, it alone produced 5 crash reports per run. That sweep is now gated by the SAME two variables, split so the quiet signals still run by default, and it prints its own SKIP notice. The category to reason about is 'anything in this repo that kills a child with a create-core-image signal', not 'the fault-signal cells in this file'. Note SIGEMT: excluded here for Linux portability, but the bun sweep does hit it, which is one of the ways the first scoping under-reached. WHY GATING AND NOT REDUCTION, since the quality review reached the opposite conclusion and that disagreement should not be silently resolved by whoever edited this file last: review r1 (M9) observed that the four fault cells all pin the SAME mechanism (bun's crash handler intercepting a re-raise), so keeping ONE representative would cut the noise about fourfold — and it explicitly did NOT recommend gating them off, on the grounds that gating weakens the oracle. Both halves are right, and they point in different directions because they optimize different things. Reduction deletes three cells for EVERYONE, permanently, including the Linux CI run where these cells cost nothing at all and where their delivery has never been measured; and it assumes the four are equivalent, which is an assumption about a bun internal that a previous version of this same assumption already got wrong twice. Gating removes them from ONE audience — the default local run on darwin — leaves the CI/release path at full strength, and is reversed by an environment variable rather than by re-authoring a case. So the trade taken here is the narrower of the two: the oracle keeps all 20 cells, and a macOS developer's routine run covers 12 of them plus a loud statement of which 8 it did not. What still runs locally on darwin, for the record: every agreement cell for a terminate-only signal, and BOTH remaining divergence pins (SIGPIPE and SIGXFSZ, which exit 128+N rather than dying, and therefore write nothing). M9's reduction idea is recorded in the follow-ups list and is still available on top of this: it would shrink the opt-in run too, which the gate does not.",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "v_kill", "cmd": { "verb": "v_kill", "risk": "read" }, "run": "import os, signal, sys\nname = sys.argv[1]\nsig = getattr(signal, name)\ntry:\n    signal.signal(sig, signal.SIG_DFL)\nexcept (OSError, ValueError):\n    pass  # SIGKILL cannot have its disposition set; it kills regardless\nsys.stdout.write('dying by ' + name + '\\n')\nsys.stdout.flush()\nos.kill(os.getpid(), sig)\n" }
+          {
+            "at": "engine",
+            "verb": "v_kill",
+            "cmd": {
+              "verb": "v_kill",
+              "risk": "read"
+            },
+            "run": "import os, signal, sys\nname = sys.argv[1]\nsig = getattr(signal, name)\ntry:\n    signal.signal(sig, signal.SIG_DFL)\nexcept (OSError, ValueError):\n    pass  # SIGKILL cannot have its disposition set; it kills regardless\nsys.stdout.write('dying by ' + name + '\\n')\nsys.stdout.flush()\nos.kill(os.getpid(), sig)\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGHUP"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGINT"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGQUIT"], "crash_noise": true, "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGILL"], "crash_noise": true, "expect_returncodes": { "core": "sigtrap", "floor": "signal" }, "expect_stderr_divergence": { "core_contains": "Bun v", "floor": "" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGTRAP"], "crash_noise": true, "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGABRT"], "crash_noise": true, "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGFPE"], "crash_noise": true, "expect_returncodes": { "core": "sigtrap", "floor": "signal" }, "expect_stderr_divergence": { "core_contains": "Bun v", "floor": "" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGKILL"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGBUS"], "crash_noise": true, "expect_returncodes": { "core": "sigtrap", "floor": "signal" }, "expect_stderr_divergence": { "core_contains": "Bun v", "floor": "" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGSEGV"], "crash_noise": true, "expect_returncodes": { "core": "sigtrap", "floor": "signal" }, "expect_stderr_divergence": { "core_contains": "Bun v", "floor": "" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGSYS"], "crash_noise": true, "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGPIPE"], "expect_returncodes": { "core": "fallback", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGALRM"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGTERM"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGXCPU"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGXFSZ"], "expect_returncodes": { "core": "fallback", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGVTALRM"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGPROF"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGUSR1"], "expect_returncodes": { "core": "signal", "floor": "signal" } },
-        { "compare": "dispatch", "verb": "v_kill", "args": ["SIGUSR2"], "expect_returncodes": { "core": "signal", "floor": "signal" } }
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGHUP"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGINT"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGQUIT"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGILL"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "sigtrap",
+            "floor": "signal"
+          },
+          "expect_stderr_divergence": {
+            "core_contains": "Bun v",
+            "floor": ""
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGTRAP"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGABRT"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGFPE"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "sigtrap",
+            "floor": "signal"
+          },
+          "expect_stderr_divergence": {
+            "core_contains": "Bun v",
+            "floor": ""
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGKILL"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGBUS"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "sigtrap",
+            "floor": "signal"
+          },
+          "expect_stderr_divergence": {
+            "core_contains": "Bun v",
+            "floor": ""
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGSEGV"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "sigtrap",
+            "floor": "signal"
+          },
+          "expect_stderr_divergence": {
+            "core_contains": "Bun v",
+            "floor": ""
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGSYS"
+          ],
+          "crash_noise": true,
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGPIPE"
+          ],
+          "expect_returncodes": {
+            "core": "fallback",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGALRM"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGTERM"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGXCPU"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGXFSZ"
+          ],
+          "expect_returncodes": {
+            "core": "fallback",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGVTALRM"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGPROF"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGUSR1"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_kill",
+          "args": [
+            "SIGUSR2"
+          ],
+          "expect_returncodes": {
+            "core": "signal",
+            "floor": "signal"
+          }
+        }
       ]
     },
     {
@@ -77,16 +439,54 @@
       "rationale": "The floor's argv preamble, which is easy to get subtly wrong: `VERB=\"${1:-help}\"` substitutes on unset OR EMPTY (so `plainkeep ''` is `help`, and the empty string is consumed by the shift rather than forwarded), and the `-h|--help -> help` rewrite happens AFTER the shift so the remaining args survive. The fixture ships a real `help` verb printing its own argv, so each of these DISPATCHES rather than 404ing and the forwarded args are visible in stdout.",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "help", "cmd": { "verb": "help", "risk": "read" }, "run": "import json, sys\nprint('helped ' + json.dumps(sys.argv[1:], ensure_ascii=False))\n" }
+          {
+            "at": "engine",
+            "verb": "help",
+            "cmd": {
+              "verb": "help",
+              "risk": "read"
+            },
+            "run": "import json, sys\nprint('helped ' + json.dumps(sys.argv[1:], ensure_ascii=False))\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "expect_stdout_contains": "helped []" },
-        { "compare": "dispatch", "verb": "", "expect_stdout_contains": "helped []" },
-        { "compare": "dispatch", "verb": "-h", "expect_stdout_contains": "helped []" },
-        { "compare": "dispatch", "verb": "--help", "expect_stdout_contains": "helped []" },
-        { "compare": "dispatch", "verb": "--help", "args": ["extra", "args"], "expect_stdout_contains": "helped [\"extra\", \"args\"]" },
-        { "compare": "dispatch", "verb": "help", "args": ["--yes"], "expect_stdout_contains": "helped [\"--yes\"]" }
+        {
+          "compare": "dispatch",
+          "expect_stdout_contains": "helped []"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "",
+          "expect_stdout_contains": "helped []"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "-h",
+          "expect_stdout_contains": "helped []"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "--help",
+          "expect_stdout_contains": "helped []"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "--help",
+          "args": [
+            "extra",
+            "args"
+          ],
+          "expect_stdout_contains": "helped [\"extra\", \"args\"]"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "help",
+          "args": [
+            "--yes"
+          ],
+          "expect_stdout_contains": "helped [\"--yes\"]"
+        }
       ]
     },
     {
@@ -94,11 +494,24 @@
       "rationale": "The zero-install path: no $PLAINKEEP_HOME/.venv exists, so both dispatchers must run the verb on bare `python3` from PATH. The verb reports which interpreter carried it by comparing sys.executable against $PLAINKEEP_HOME/.venv, and the expected token is asserted absolutely — otherwise two sides agreeing on 'system' would prove nothing about the live-venv case.",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "v_interp", "cmd": { "verb": "v_interp", "risk": "read" }, "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n" }
+          {
+            "at": "engine",
+            "verb": "v_interp",
+            "cmd": {
+              "verb": "v_interp",
+              "risk": "read"
+            },
+            "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_interp", "args": [], "expect_stdout_contains": "system" }
+        {
+          "compare": "dispatch",
+          "verb": "v_interp",
+          "args": [],
+          "expect_stdout_contains": "system"
+        }
       ]
     },
     {
@@ -107,11 +520,24 @@
       "fixture": {
         "venv": "live",
         "verbs": [
-          { "at": "engine", "verb": "v_interp", "cmd": { "verb": "v_interp", "risk": "read" }, "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n" }
+          {
+            "at": "engine",
+            "verb": "v_interp",
+            "cmd": {
+              "verb": "v_interp",
+              "risk": "read"
+            },
+            "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_interp", "args": [], "expect_stdout_contains": "venv" }
+        {
+          "compare": "dispatch",
+          "verb": "v_interp",
+          "args": [],
+          "expect_stdout_contains": "venv"
+        }
       ]
     },
     {
@@ -120,11 +546,24 @@
       "fixture": {
         "venv": "broken",
         "verbs": [
-          { "at": "engine", "verb": "v_interp", "cmd": { "verb": "v_interp", "risk": "read" }, "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n" }
+          {
+            "at": "engine",
+            "verb": "v_interp",
+            "cmd": {
+              "verb": "v_interp",
+              "risk": "read"
+            },
+            "run": "import os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nvenv = os.path.join(h, '.venv')\nprint('venv' if h and sys.executable.startswith(venv) else 'system')\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_interp", "args": [], "expect_stdout_contains": "system" }
+        {
+          "compare": "dispatch",
+          "verb": "v_interp",
+          "args": [],
+          "expect_stdout_contains": "system"
+        }
       ]
     },
     {
@@ -132,53 +571,228 @@
       "rationale": "A verb name is a DIRECTORY NAME a pack ships, so it is attacker-shaped, and the dispatcher's interception table is a JS object literal with a prototype. Indexing it as `INTERCEPTS[verb]` resolved an INHERITED member for each of these eight names and treated it as a registered interception: the verb never ran, and for `toString`/`constructor` the binary exited 0 while writing an audit line saying the verb was allowed — an enforcement tool reporting success for work it did not do. Nothing about that is visible to a differential unless a case actually uses such a name, which is why these exist. Each verb's run.py prints a marker, so the assertion is that the REAL verb ran on both sides, not merely that the two sides agreed. `__proto__` is included even though it is the one name that could not silently succeed (it threw, exit 5): it is the same defect class, and a fix that guards only the callable members would pass without it.",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "toString", "cmd": { "verb": "toString", "risk": "read" }, "run": "print('RAN toString')\n" },
-          { "at": "engine", "verb": "constructor", "cmd": { "verb": "constructor", "risk": "read" }, "run": "print('RAN constructor')\n" },
-          { "at": "engine", "verb": "valueOf", "cmd": { "verb": "valueOf", "risk": "read" }, "run": "print('RAN valueOf')\n" },
-          { "at": "engine", "verb": "hasOwnProperty", "cmd": { "verb": "hasOwnProperty", "risk": "read" }, "run": "print('RAN hasOwnProperty')\n" },
-          { "at": "engine", "verb": "isPrototypeOf", "cmd": { "verb": "isPrototypeOf", "risk": "read" }, "run": "print('RAN isPrototypeOf')\n" },
-          { "at": "engine", "verb": "propertyIsEnumerable", "cmd": { "verb": "propertyIsEnumerable", "risk": "read" }, "run": "print('RAN propertyIsEnumerable')\n" },
-          { "at": "engine", "verb": "toLocaleString", "cmd": { "verb": "toLocaleString", "risk": "read" }, "run": "print('RAN toLocaleString')\n" },
-          { "at": "engine", "verb": "__proto__", "cmd": { "verb": "__proto__", "risk": "read" }, "run": "print('RAN __proto__')\n" }
+          {
+            "at": "engine",
+            "verb": "toString",
+            "cmd": {
+              "verb": "toString",
+              "risk": "read"
+            },
+            "run": "print('RAN toString')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "constructor",
+            "cmd": {
+              "verb": "constructor",
+              "risk": "read"
+            },
+            "run": "print('RAN constructor')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "valueOf",
+            "cmd": {
+              "verb": "valueOf",
+              "risk": "read"
+            },
+            "run": "print('RAN valueOf')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "hasOwnProperty",
+            "cmd": {
+              "verb": "hasOwnProperty",
+              "risk": "read"
+            },
+            "run": "print('RAN hasOwnProperty')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "isPrototypeOf",
+            "cmd": {
+              "verb": "isPrototypeOf",
+              "risk": "read"
+            },
+            "run": "print('RAN isPrototypeOf')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "propertyIsEnumerable",
+            "cmd": {
+              "verb": "propertyIsEnumerable",
+              "risk": "read"
+            },
+            "run": "print('RAN propertyIsEnumerable')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "toLocaleString",
+            "cmd": {
+              "verb": "toLocaleString",
+              "risk": "read"
+            },
+            "run": "print('RAN toLocaleString')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "__proto__",
+            "cmd": {
+              "verb": "__proto__",
+              "risk": "read"
+            },
+            "run": "print('RAN __proto__')\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "toString", "args": ["extra-arg"], "expect_stdout_contains": "RAN toString" },
-        { "compare": "dispatch", "verb": "constructor", "args": ["extra-arg"], "expect_stdout_contains": "RAN constructor" },
-        { "compare": "dispatch", "verb": "valueOf", "args": ["extra-arg"], "expect_stdout_contains": "RAN valueOf" },
-        { "compare": "dispatch", "verb": "hasOwnProperty", "args": ["extra-arg"], "expect_stdout_contains": "RAN hasOwnProperty" },
-        { "compare": "dispatch", "verb": "isPrototypeOf", "args": ["extra-arg"], "expect_stdout_contains": "RAN isPrototypeOf" },
-        { "compare": "dispatch", "verb": "propertyIsEnumerable", "args": ["extra-arg"], "expect_stdout_contains": "RAN propertyIsEnumerable" },
-        { "compare": "dispatch", "verb": "toLocaleString", "args": ["extra-arg"], "expect_stdout_contains": "RAN toLocaleString" },
-        { "compare": "dispatch", "verb": "__proto__", "args": ["extra-arg"], "expect_stdout_contains": "RAN __proto__" }
+        {
+          "compare": "dispatch",
+          "verb": "toString",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN toString"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "constructor",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN constructor"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "valueOf",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN valueOf"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "hasOwnProperty",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN hasOwnProperty"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "isPrototypeOf",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN isPrototypeOf"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "propertyIsEnumerable",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN propertyIsEnumerable"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "toLocaleString",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN toLocaleString"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "__proto__",
+          "args": [
+            "extra-arg"
+          ],
+          "expect_stdout_contains": "RAN __proto__"
+        }
       ]
     },
     {
-      "name": "symlinked-home-not-canonicalized",
-      "rationale": "The realpath decision (field guide #1), pinned. Both sides are invoked with PLAINKEEP_HOME pointing at a SYMLINK to the vault (the macOS /tmp -> /private/tmp shape), and the verb reports whether the PLAINKEEP_HOME it inherited still differs from its realpath. The dispatcher treats PLAINKEEP_HOME as opaque text and canonicalizes nothing, so the answer must be 'not canonical' on BOTH sides: the value a caller supplied is the value every verb sees. If either side started calling realpath() on it, this case fails — as would every vault whose path runs through a symlink, silently relocating .logs and the resolver's engine bin/ relative to what the operator typed. The basename is compared too (both aliases are named `vault`), since the two sides necessarily live under different temp roots.",
+      "name": "symlinked-home-IS-canonicalized",
+      "rationale": "The realpath decision, REVERSED BY ADR-014 Task 1b and re-pinned in the new direction. Both sides are invoked with PLAINKEEP_HOME pointing at a SYMLINK to the vault (the macOS /tmp -> /private/tmp shape), and the verb reports whether the PLAINKEEP_HOME it inherited still differs from its realpath. Until Task 1b the dispatcher treated PLAINKEEP_HOME as opaque text and canonicalized nothing, and this case asserted 'not canonical' on both sides. That is now wrong on purpose: discovery validates the root and exports its CANONICAL realpath, because the path-wall compares canonical-to-canonical and a vault reachable under two names would otherwise be two different vaults to it — /tmp/v authorized while /private/tmp/v is an escape. So the answer must be 'canonical' on BOTH sides, and a side that went back to passing the caller's spelling through fails here. The basename is no longer comparable — canonicalizing resolves each alias to its own temp root — so the case asserts the OTHER half of the same export instead: PLAINKEEP_VAULT_ID reaches the child, on both sides, which is the second thing Task 1b made the dispatchers hand every verb.",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "v_symhome", "cmd": { "verb": "v_symhome", "risk": "read" }, "run": "import json, os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nprint(json.dumps({'canonical': h == os.path.realpath(h), 'base': os.path.basename(h), 'argv': sys.argv[1:]}))\n" }
+          {
+            "at": "engine",
+            "verb": "v_symhome",
+            "cmd": {
+              "verb": "v_symhome",
+              "risk": "read"
+            },
+            "run": "import json, os, sys\nh = os.environ.get('PLAINKEEP_HOME', '')\nprint(json.dumps({'canonical': h == os.path.realpath(h),\n                  'id_set': bool(os.environ.get('PLAINKEEP_VAULT_ID')),\n                  'argv': sys.argv[1:]}))\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_symhome", "args": ["arg"], "home_via_symlink": true, "expect_stdout_contains": "{\"canonical\": false, \"base\": \"vault\", \"argv\": [\"arg\"]}" }
+        {
+          "compare": "dispatch",
+          "verb": "v_symhome",
+          "args": [
+            "arg"
+          ],
+          "home_via_symlink": true,
+          "expect_stdout_contains": "{\"canonical\": true, \"id_set\": true, \"argv\": [\"arg\"]}"
+        }
       ]
     },
     {
       "name": "large-output-across-the-pipe-buffer",
-      "rationale": "A verb whose output exceeds the pipe buffer. This catalog was 213/213 green while the core SILENTLY TRUNCATED any such verb and reported failure, because no case crossed the threshold \u2014 the 'green test of nothing' class (quality review r1, Q1). Mechanism: bun marks its own stdout/stderr O_NONBLOCK when they are PIPES, the flag lives on the open file description, and `stdio: \"inherit\"` hands that same description to the child; CPython then raises BlockingIOError on the first write it cannot satisfy in full. Measured before the fix: `plainkeep <verb> --json | cat` delivered 81,920 bytes and exited 1 where the floor delivered 500,062 and exited 0, byte-identically at face8b7 \u2014 i.e. pre-existing since Task 4. The harness captures with pipes, so these three invocations sit exactly on that condition. Each verb writes its BULK FIRST and a short TAIL MARKER LAST, so the assertion is the real outcome \u2014 the whole payload arrived \u2014 not merely that the two sides agree: a build truncating both sides identically would still fail the marker. v_bigerr's marker goes to STDOUT after the big STDERR write, which is what makes fd 2 checkable through a stdout expectation.",
+      "rationale": "A verb whose output exceeds the pipe buffer. This catalog was 213/213 green while the core SILENTLY TRUNCATED any such verb and reported failure, because no case crossed the threshold — the 'green test of nothing' class (quality review r1, Q1). Mechanism: bun marks its own stdout/stderr O_NONBLOCK when they are PIPES, the flag lives on the open file description, and `stdio: \"inherit\"` hands that same description to the child; CPython then raises BlockingIOError on the first write it cannot satisfy in full. Measured before the fix: `plainkeep <verb> --json | cat` delivered 81,920 bytes and exited 1 where the floor delivered 500,062 and exited 0, byte-identically at face8b7 — i.e. pre-existing since Task 4. The harness captures with pipes, so these three invocations sit exactly on that condition. Each verb writes its BULK FIRST and a short TAIL MARKER LAST, so the assertion is the real outcome — the whole payload arrived — not merely that the two sides agree: a build truncating both sides identically would still fail the marker. v_bigerr's marker goes to STDOUT after the big STDERR write, which is what makes fd 2 checkable through a stdout expectation.",
       "fixture": {
         "verbs": [
-          { "at": "engine", "verb": "v_bigout", "cmd": { "verb": "v_bigout", "risk": "read" }, "run": "import sys\nsys.stdout.write('o' * 500000)\nsys.stdout.write('\\nBIGOUT-TAIL\\n')\n" },
-          { "at": "engine", "verb": "v_bigerr", "cmd": { "verb": "v_bigerr", "risk": "read" }, "run": "import sys\nsys.stderr.write('e' * 500000)\nsys.stderr.write('\\n')\nsys.stdout.write('BIGERR-TAIL\\n')\n" },
-          { "at": "engine", "verb": "v_bigboth", "cmd": { "verb": "v_bigboth", "risk": "read" }, "run": "import sys\nsys.stdout.write('o' * 500000)\nsys.stderr.write('e' * 500000)\nsys.stdout.write('\\nBIGBOTH-TAIL\\n')\nsys.stderr.write('\\n')\n" }
+          {
+            "at": "engine",
+            "verb": "v_bigout",
+            "cmd": {
+              "verb": "v_bigout",
+              "risk": "read"
+            },
+            "run": "import sys\nsys.stdout.write('o' * 500000)\nsys.stdout.write('\\nBIGOUT-TAIL\\n')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_bigerr",
+            "cmd": {
+              "verb": "v_bigerr",
+              "risk": "read"
+            },
+            "run": "import sys\nsys.stderr.write('e' * 500000)\nsys.stderr.write('\\n')\nsys.stdout.write('BIGERR-TAIL\\n')\n"
+          },
+          {
+            "at": "engine",
+            "verb": "v_bigboth",
+            "cmd": {
+              "verb": "v_bigboth",
+              "risk": "read"
+            },
+            "run": "import sys\nsys.stdout.write('o' * 500000)\nsys.stderr.write('e' * 500000)\nsys.stdout.write('\\nBIGBOTH-TAIL\\n')\nsys.stderr.write('\\n')\n"
+          }
         ]
       },
       "invocations": [
-        { "compare": "dispatch", "verb": "v_bigout", "args": [], "expect_stdout_contains": "BIGOUT-TAIL" },
-        { "compare": "dispatch", "verb": "v_bigerr", "args": [], "expect_stdout_contains": "BIGERR-TAIL" },
-        { "compare": "dispatch", "verb": "v_bigboth", "args": [], "expect_stdout_contains": "BIGBOTH-TAIL" }
+        {
+          "compare": "dispatch",
+          "verb": "v_bigout",
+          "args": [],
+          "expect_stdout_contains": "BIGOUT-TAIL"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_bigerr",
+          "args": [],
+          "expect_stdout_contains": "BIGERR-TAIL"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_bigboth",
+          "args": [],
+          "expect_stdout_contains": "BIGBOTH-TAIL"
+        }
       ]
     }
   ]

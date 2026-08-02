@@ -19,6 +19,14 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import vaultfx  # noqa: E402
+
+# The engine modules loaded IN-PROCESS below resolve the data root at import and have no
+# engine-relative fallback since ADR-014 Task 1b, so a root has to be selected before the
+# first import. Only pure functions are exercised in-process (no path is written through
+# it); every subprocess invocation sets its own PLAINKEEP_HOME per call.
+os.environ.setdefault("PLAINKEEP_HOME", str(Path(__file__).resolve().parents[1]))
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
 
@@ -64,10 +72,12 @@ def test_exit_codes():
 
     # the guardrail CLI end-to-end against an isolated bin/ (no confirm/deny verb ships today)
     with tempfile.TemporaryDirectory() as td:
+        # The WHOLE bin/lib, not a two-file closure: since ADR-014 Task 1b guardrail.py resolves the
+        # data root through lib/vaultroot.py (which reads vaultreg.py, wall.py and output.py), and a
+        # hand-listed closure would encode an import graph here that lives there.
         binlib = Path(td) / "bin" / "lib"
-        binlib.mkdir(parents=True)
-        shutil.copy(REPO / "bin" / "lib" / "guardrail.py", binlib / "guardrail.py")
-        shutil.copy(REPO / "bin" / "lib" / "output.py", binlib / "output.py")
+        binlib.parent.mkdir(parents=True)
+        shutil.copytree(REPO / "bin" / "lib", binlib, ignore=shutil.ignore_patterns("__pycache__"))
 
         def verb(name, risk, dry_run=False):
             d = Path(td) / "bin" / name
@@ -82,9 +92,15 @@ def test_exit_codes():
         verb("denyy", "deny")
         verb("dryable", "confirm", dry_run=True)
 
+        # PLAINKEEP_HOME is the isolated fixture, marked so it validates (Task 1b): the guardrail CLI
+        # is being exercised over ITS verb surface, and its audit log must land there and not in the
+        # developer's vault.
+        vaultfx.mark_vault(Path(td))
+
         def cli(*args):
             return subprocess.run([sys.executable, str(binlib / "guardrail.py"), *args],
-                                  capture_output=True, text=True)
+                                  capture_output=True, text=True,
+                                  env={**os.environ, "PLAINKEEP_HOME": str(td)})
 
         r = cli("confirmy")
         check("CLI confirm-class → exit 3 + remediation",

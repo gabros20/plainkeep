@@ -244,7 +244,11 @@ def _api_snapshot():
         "    snap[n] = ('callable ' + str(inspect.signature(o))) if callable(o) else ('value:' + type(o).__name__)\n"
         "print(json.dumps(snap, sort_keys=True))\n"
     )
-    r = subprocess.run([PY, "-c", code], capture_output=True, text=True, cwd=str(REPO))
+    # PLAINKEEP_HOME is set because the SDK's import graph reaches lib/paths.py, which resolves the
+    # data root at import and has no engine-relative fallback since ADR-014 Task 1b. The snapshot is
+    # about SIGNATURES, not about any path, so the repo itself is the cheapest valid root.
+    r = subprocess.run([PY, "-c", code], capture_output=True, text=True, cwd=str(REPO),
+                       env={**os.environ, "PLAINKEEP_HOME": str(REPO)})
     check("lib.api imports cleanly", r.returncode == 0, r.stderr)
     try:
         live = json.loads(r.stdout)
@@ -260,7 +264,8 @@ def _api_snapshot():
 
 def _api_version() -> str:
     r = subprocess.run([PY, "-c", "import sys; sys.path.insert(0,'bin'); from lib import api; print(api.PLAINKEEP_API_VERSION)"],
-                       capture_output=True, text=True, cwd=str(REPO))
+                       capture_output=True, text=True, cwd=str(REPO),
+                       env={**os.environ, "PLAINKEEP_HOME": str(REPO)})  # same reason as _api_snapshot
     return r.stdout.strip()
 
 

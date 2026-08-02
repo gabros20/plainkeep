@@ -11,6 +11,12 @@ import types
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+
+# The engine modules loaded IN-PROCESS below resolve the data root at import and have no
+# engine-relative fallback since ADR-014 Task 1b, so a root has to be selected before the
+# first import. Only pure functions are exercised in-process (no path is written through
+# it); every subprocess invocation sets its own PLAINKEEP_HOME per call.
+os.environ.setdefault("PLAINKEEP_HOME", str(Path(__file__).resolve().parents[1]))
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
 

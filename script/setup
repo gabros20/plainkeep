@@ -114,8 +114,23 @@ else
   echo "  ok:    full vault (test harness kept)"
 fi
 
+# ADR-014 / Phase 2 Task 1b. A clone of the template is NOT a vault: `.plainkeep/` is gitignored
+# precisely so an arbitrary checkout can never present itself as one, and since Task 1b the
+# dispatcher refuses a root with no marker. So this is where a clone BECOMES a vault — before step 5,
+# because `plainkeep doctor` goes through the dispatcher and would otherwise refuse.
+#
+# `bin/vault/run.py` is invoked DIRECTLY rather than as `plainkeep vault register`, and that is the
+# bootstrap, not a shortcut: `plainkeep <anything>` validates a root first, and the root being
+# created here does not exist yet by that definition. It is the same line the refusal message hands
+# an operator with an older vault (lib/vaultroot.py, bootstrap_hint).
+#
+# Re-running setup is safe: register refuses an already-registered path (exit 2) and the `|| true`
+# keeps that from failing the run. It never overwrites an existing marker.
+say "4b. mark + register this vault (the dispatcher will not act on an unregistered root)"
+run env PLAINKEEP_HOME="$ROOT" python3 "$ROOT/bin/vault/run.py" register "$ROOT" --yes || true
+
 say "5. validate the skeleton"
-run "$ROOT/plainkeep" doctor --init
+run env PLAINKEEP_HOME="$ROOT" "$ROOT/plainkeep" doctor --init
 
 say "6. first commit"
 if [ "$COMMIT" = 1 ]; then

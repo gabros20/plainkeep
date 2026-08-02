@@ -79,6 +79,22 @@ ENV_ID = "PLAINKEEP_VAULT_ID"
 
 MECHANISMS = ("--vault", "PLAINKEEP_HOME", "marker walk-up from $PWD", "registry default")
 
+# The engine's own tree — where the CODE is, never where the data is. `resolver.py` draws the same
+# distinction on the same line number for the same reason.
+ENGINE_BIN = Path(__file__).resolve().parents[1]
+
+
+def bootstrap_hint(path) -> str:
+    """The exact command an UNREGISTERED vault needs, spelled out absolutely.
+
+    It invokes `bin/vault/run.py` DIRECTLY instead of saying `plainkeep vault register`, and that is
+    not a stylistic choice — `plainkeep <anything>` goes through the dispatcher, the dispatcher
+    validates a root first, and an unmarked vault has none. Telling the operator to run a command
+    that refuses for the same reason would be a remediation that cannot be followed. This is the
+    bootstrap path, and it is the one `script/setup` uses."""
+    p = os.path.abspath(os.path.expanduser(str(path)))
+    return f"PLAINKEEP_HOME={p} python3 {ENGINE_BIN / 'vault' / 'run.py'} register {p} --yes"
+
 
 @dataclass
 class Selection:
@@ -130,7 +146,7 @@ def validate(candidate, *, how: str, require_registered: bool = False,
     if marker is None:
         raise VaultError(f"{how} names {root}, which is not a plainkeep vault "
                          f"(no {vaultreg.MARKER_DIR}/{vaultreg.MARKER_NAME})",
-                         hint=f"if it should be one: plainkeep vault register {root} --yes")
+                         hint="if it should be one, mark and register it:\n    " + bootstrap_hint(root))
     vid = marker["id"]
 
     if require_registered:
@@ -139,7 +155,7 @@ def validate(candidate, *, how: str, require_registered: bool = False,
         if entry is None:
             raise VaultError(f"{how} names {root}, which carries a vault marker (id {vid}) that is "
                              f"not in the registry",
-                             hint=f"register it: plainkeep vault register {root} --yes")
+                             hint="register it:\n    " + bootstrap_hint(root))
         # A registry entry pointing somewhere else means the vault MOVED (or this is a copy of it).
         # Substituting the registered path would act on the wrong notes and rescanning the disk to
         # find the "real" one is exactly the guess ADR-014 forbids, so this is loud.
@@ -229,8 +245,9 @@ def discover(selector: str | None = None, cwd: str | None = None) -> Selection:
     #    so it carries the remediation rather than only the diagnosis.
     raise VaultError("no vault selected — every discovery mechanism came up empty:\n"
                      + "\n".join(f"  {m:<26} {saw.get(m, '?')}" for m in MECHANISMS),
-                     hint="register this directory (plainkeep vault register --yes), "
-                          "pick one (plainkeep --vault <name> <verb>), or set PLAINKEEP_HOME")
+                     hint="pick a registered vault (plainkeep --vault <name> <verb>), point "
+                          "PLAINKEEP_HOME at one, or make THIS directory a vault:\n    "
+                          + bootstrap_hint(cwd))
 
 
 # --- the consumer side ----------------------------------------------------------------------------
@@ -247,8 +264,8 @@ def active_root() -> Path:
         output.fail(output.EXIT_USAGE,
                     f"no vault selected — {ENV_HOME} is unset "
                     f"(plainkeep no longer guesses one from where the engine is installed)",
-                    hint="run this through `plainkeep <verb>`, or set PLAINKEEP_HOME to a "
-                         "registered vault")
+                    hint="run this through `plainkeep <verb>`, which selects and validates one, "
+                         "or set PLAINKEEP_HOME to a marked vault")
     return Path(v)
 
 

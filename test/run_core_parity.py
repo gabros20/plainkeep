@@ -37,12 +37,12 @@ import signal
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 RESOLVER_SRC = REPO / "bin" / "lib" / "resolver.py"
-GUARDRAIL_SRC = REPO / "bin" / "lib" / "guardrail.py"
 ENGINE_SRC = REPO / "bin"
 # The root shim (Task 4). Its `PLAINKEEP_CORE=off` path is the BASH FLOOR — the pre-core dispatcher,
 # preserved verbatim — and is the reference side of the dispatcher differential matrix.
@@ -135,6 +135,23 @@ _VERB_FILES = {
 }
 
 
+def _mark_vault(root: Path) -> str:
+    """Make `root` a real vault: write `.plainkeep/vault.json` and return its id.
+
+    Required since ADR-014 Task 1b — a directory PLAINKEEP_HOME points at is not a vault unless it
+    carries a marker, and an unmarked one refuses (exit 2) before the gate. Written directly rather
+    than by shelling out to `plainkeep vault register` on purpose: registering would also write into
+    a REGISTRY, and a fixture must never touch the developer's real one."""
+    vid = str(uuid.uuid4())
+    d = root / ".plainkeep"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "vault.json").write_text(
+        json.dumps({"schema": "plainkeep.vault/1", "id": vid,
+                    "created": "2026-08-02T00:00:00+00:00"}, indent=2) + "\n",
+        encoding="utf-8")
+    return vid
+
+
 def _content(spec) -> str:
     """The text a catalog writes into cmd.json / plugins.lock.json.
 
@@ -194,9 +211,24 @@ class Fixture:
     def _build(self, spec: dict) -> None:
         self.home = self.root / "_home"
         self.home.mkdir()
+
+        # The WHOLE bin/lib/, always. It used to be resolver.py alone (plus guardrail.py, copied by
+        # the harnesses that need it). Since ADR-014 Task 1b resolver.py and guardrail.py resolve the
+        # data root through lib/vaultroot.py, which reads lib/vaultreg.py, lib/wall.py and
+        # lib/output.py — copying a hand-maintained closure would encode an import graph HERE that
+        # lives THERE, and every future edit to it would fail as an ImportError from inside a temp
+        # vault. bin/lib holds no run.py or cmd.json, so it is not a verb dir and the resolver
+        # catalogs see exactly the verb surface they declare.
+        shutil.copytree(ENGINE_SRC / "lib", self.root / "bin" / "lib",
+                        dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
         self.resolver_py = self.root / "bin" / "lib" / "resolver.py"
-        self.resolver_py.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(RESOLVER_SRC, self.resolver_py)
+
+        # ...and the fixture is a real VAULT, because since Task 1b a directory is not one just
+        # because PLAINKEEP_HOME points at it: an unmarked root refuses with exit 2 before the gate
+        # runs. Every fixture invocation supplies PLAINKEEP_HOME explicitly, which is step 2 of the
+        # chain — marker required, registration NOT (a fixture is deliberately never registered, and
+        # that is also the shape of the canary migration ADR-014 calls mandatory evidence).
+        self.vault_id = _mark_vault(self.root)
 
         # Completion-catalog addition (Task 5): `engine_from_repo` installs REAL engine verbs from
         # the repo's bin/ into the fixture, together with the whole bin/lib/ they import. The
@@ -220,8 +252,6 @@ class Fixture:
         from_repo = spec.get("engine_from_repo", [])
         if from_repo:
             ignore = shutil.ignore_patterns("__pycache__")
-            shutil.copytree(ENGINE_SRC / "lib", self.root / "bin" / "lib",
-                            dirs_exist_ok=True, ignore=ignore)
             for verb in from_repo:
                 src = ENGINE_SRC / verb
                 if not src.is_dir():
@@ -358,8 +388,19 @@ else:
 # Comparators — one per introspection surface. (Task 3 registers a "gate" comparator here.)
 # --------------------------------------------------------------------------------------------------
 
-def _run(cmd: list[str], env: dict) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, env=env, capture_output=True, text=True, encoding="utf-8")
+def _run(cmd: list[str], env: dict, cwd: str | None = None) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, text=True, encoding="utf-8")
+
+
+# A cwd that is inside NO vault. Needed since Task 1b for any invocation that deliberately supplies
+# no root: discovery's third step walks UP from $PWD, and this suite's own cwd is the repo — which,
+# per the Task 1b instructions, the developer has registered as a vault. Without this, "nothing
+# selected a root" checks resolve to the repo (or refuse for the wrong reason, as they did while
+# these were being written) instead of reaching the refusal they are asserting.
+def _nowhere(holder: list[Path]) -> str:
+    d = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-no-vault-")))
+    holder.append(d)
+    return str(d)
 
 
 def _compare_cli(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
@@ -445,7 +486,6 @@ def _compare_gate(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
     try:
         shutil.copytree(fx.root, ts_root, dirs_exist_ok=True)
         shutil.copytree(fx.root, py_root, dirs_exist_ok=True)
-        shutil.copy2(GUARDRAIL_SRC, py_root / "bin" / "lib" / "guardrail.py")
         ts = _run([binary, "--core-gate", verb, *args], _gate_env(fx, inv, ts_root))
         py = _run([PY, str(py_root / "bin" / "lib" / "guardrail.py"), verb, *args],
                   _gate_env(fx, inv, py_root))
@@ -557,9 +597,9 @@ def _noncomparable_verb(binary: str, argv: list[str]) -> str | None:
     return argv[0] if argv[0] in verbs.get("noncomparable", []) else None
 
 def _install_floor(root: Path) -> None:
-    """Make a built fixture vault runnable by the bash floor: the shim at the vault root, plus
-    guardrail.py next to the resolver.py the Fixture already copied (the floor spawns both)."""
-    shutil.copy2(GUARDRAIL_SRC, root / "bin" / "lib" / "guardrail.py")
+    """Make a built fixture vault runnable by the bash floor: the shim at the vault root. The engine
+    modules the floor spawns (guardrail.py, resolver.py, and since Task 1b vaultroot.py and what it
+    imports) are already there — Fixture copies the WHOLE bin/lib."""
     dst = root / "plainkeep"
     shutil.copy2(PLAINKEEP_SRC, dst)
     dst.chmod(0o755)
@@ -801,6 +841,13 @@ def _shim_env(home: Path | None, **over) -> dict:
     e = dict(os.environ)
     for k in ("PLAINKEEP_CORE", "PLAINKEEP_CORE_BIN", "PLAINKEEP_HOME", "PLAINKEEP_PATH"):
         e.pop(k, None)
+    # HERMETIC REGISTRY, and this is not belt-and-braces. Since Task 1b an invocation with no
+    # PLAINKEEP_HOME falls through to the marker walk-up and then to the registry DEFAULT — so
+    # without this, a shim check run on a machine whose developer has registered a vault (which the
+    # Task 1b instructions require them to do) silently dispatches against that REAL vault. It was
+    # observed doing exactly that while this suite was being updated: two checks failed with
+    # "unknown verb 'v_home'" because they had resolved to the repo instead of the fixture.
+    e["PLAINKEEP_CONFIG_HOME"] = str(Path(tempfile.gettempdir()) / "pk-parity-no-registry")
     if home is not None:
         e["PLAINKEEP_HOME"] = str(home)
         e["HOME"] = str(home / "_home")
@@ -836,26 +883,48 @@ def _shim_checks(binary: str) -> None:
                   r.returncode == 0 and r.stdout.strip() == str(other),
                   f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(other)!r}")
 
-        # 3. Direct binary invocation, no PLAINKEEP_HOME: home is two parents above the REAL path of
-        # the executable, so a vault-local copy of the binary finds its own vault.
+        # 3. REWRITTEN IN TASK 1b, and the rewrite is the point. This check used to assert
+        # "direct binary invocation derives PLAINKEEP_HOME from execPath" — the behavior ADR-014 D2
+        # deletes, because for an INSTALLED `~/.local/bin/plainkeep-core` that derivation resolves to
+        # `~` and every guarded write then lands wherever the binary happens to live. A binary sitting
+        # inside a vault, invoked directly with nothing selecting a root, must now REFUSE.
         withcore = _clone_vault(base, tmps, "pk-shim-core-")
         core_dst = withcore / ".local" / "bin" / "plainkeep-core"
         core_dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(binary, core_dst)
         core_dst.chmod(0o755)
-        r = _run([str(core_dst), "v_home"], _shim_env(None))
-        check("[shim] direct binary invocation derives PLAINKEEP_HOME from execPath",
-              r.returncode == 0 and r.stdout.strip() == str(withcore),
-              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(withcore)!r}")
+        nowhere = _nowhere(tmps)
+        r = _run([str(core_dst), "v_home"], _shim_env(None), cwd=nowhere)
+        # Asserted by SIDE EFFECT as well as by exit code: the refusal must leave no audit log
+        # behind, which is the "no audit-log append before a root is validated" half of the contract
+        # and the half an exit code cannot show.
+        check("[shim] direct binary invocation REFUSES — no vault is derived from execPath",
+              r.returncode == 2 and "no vault selected" in r.stderr
+              and not (withcore / ".logs").exists(),
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} "
+              f"logs={(withcore / '.logs').exists()}")
 
         # 4. A COPIED vault (the scout-Q1 shape: run_terminal/run_mcp copy a vault to temp) with no
-        # PLAINKEEP_HOME and no PLAINKEEP_CORE_BIN: bash discovers home from $0, auto finds the
-        # vault's own core, and the binary trusts the home the shim exported.
+        # PLAINKEEP_CORE_BIN: `auto` must find the copied vault's OWN core rather than the original's.
+        # PLAINKEEP_HOME is now supplied explicitly — the `$0`-relative vault fallback this used to
+        # lean on is deleted with the execPath one, for the same reason (a copy of the launcher must
+        # not silently repoint the safety model). What the check still proves is the half that did NOT
+        # change: the BINARY's default location is engine-relative, so a copied tree runs its own.
         copied = _clone_vault(withcore, tmps, "pk-shim-copy-")
-        r = _run([str(copied / "plainkeep"), "v_home"], _shim_env(None, PLAINKEEP_CORE="auto"))
+        r = _run([str(copied / "plainkeep"), "v_home"], _shim_env(copied, PLAINKEEP_CORE="auto"))
         check("[shim] copied vault dispatches through its OWN copied core",
               r.returncode == 0 and r.stdout.strip() == str(copied),
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(copied)!r}")
+
+        # 4b. ...and with NOTHING selecting a root, the copied vault refuses instead of adopting
+        # itself. A marker alone is not trust: this clone carries the fixture's marker, and it is
+        # still refused because it is not registered (test/run_discovery.py gates the registered
+        # walk-up that DOES select).
+        r = _run([str(copied / "plainkeep"), "v_home"], _shim_env(None, PLAINKEEP_CORE="auto"),
+                 cwd=nowhere)
+        check("[shim] copied vault with no selection REFUSES — $0 no longer names a vault",
+              r.returncode == 2 and "no vault selected" in r.stderr,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
 
         # 5. No core installed at all (`base` has no .local/bin).
         r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="auto"))

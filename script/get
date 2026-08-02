@@ -84,10 +84,14 @@ if [ "$DEMO" = 1 ]; then
   [ "$DRY" = 1 ] || ENGINE_REF="$(git -C "$VAULT" rev-parse HEAD 2>/dev/null || true)"
   REF_ARG=""; [ -n "$ENGINE_REF" ] && REF_ARG="--engine-ref $ENGINE_REF"
   say "2. setup (sandboxed: roots, PATH, completion all inside the demo dir)"
-  SETUP_ENV="PLAINKEEP_ROOTS_HOME='$DEMO_DIR' PLAINKEEP_BIN_DIR='$DEMO_DIR/.bin' PLAINKEEP_COMP_DIR='$DEMO_DIR/.comp' PLAINKEEP_HOME='$VAULT'"
+  # PLAINKEEP_CONFIG_HOME is inside the demo dir too (Task 1b): setup now registers the vault, and
+  # the registry lives OUTSIDE every vault — in the real ~/.config unless it is redirected. `rm -rf`
+  # on one directory is this mode's whole promise, so the registry entry has to be in there with
+  # everything else.
+  SETUP_ENV="PLAINKEEP_ROOTS_HOME='$DEMO_DIR' PLAINKEEP_BIN_DIR='$DEMO_DIR/.bin' PLAINKEEP_COMP_DIR='$DEMO_DIR/.comp' PLAINKEEP_CONFIG_HOME='$DEMO_DIR/.config' PLAINKEEP_HOME='$VAULT'"
   run "env $SETUP_ENV '$VAULT/script/setup' --full --yes --no-commit $REF_ARG --upstream '$REPO_URL'"
   say "3. seed example notes so search/week have something to show"
-  run "env PLAINKEEP_HOME='$VAULT' '$VAULT/plainkeep' capture 'demo: try plainkeep search, plainkeep week, plainkeep task add'"
+  run "env $SETUP_ENV '$VAULT/plainkeep' capture 'demo: try plainkeep search, plainkeep week, plainkeep task add'"
   if [ "$DRY" != 1 ]; then
     mkdir -p "$VAULT/wiki/notes"
     cat > "$VAULT/wiki/notes/demo-welcome.md" <<'NOTE'
@@ -109,7 +113,7 @@ This is a throwaway demo vault. Try:
 Delete the one directory printed below to walk away — nothing else on your machine was touched.
 NOTE
   fi
-  run "env PLAINKEEP_HOME='$VAULT' '$VAULT/plainkeep' index"
+  run "env $SETUP_ENV '$VAULT/plainkeep' index"
   echo
   say "demo ready. everything is under ONE directory:"
   echo "  vault:  $VAULT"

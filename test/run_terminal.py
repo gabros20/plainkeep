@@ -21,6 +21,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import vaultfx  # noqa: E402
 BIN = REPO / "bin"
 PLAINKEEP = REPO / "plainkeep"
 PY = sys.executable
@@ -80,6 +82,7 @@ def main() -> int:
         # fixture vault so dispatcher re-entry (`plainkeep open`, search `--open`) is exercised honestly.
         shutil.copytree(BIN, h / "bin")
         shutil.copy2(PLAINKEEP, h / "plainkeep"); os.chmod(h / "plainkeep", 0o755)
+        vaultfx.mark_vault(h)   # Task 1b: the dispatcher validates the root before it dispatches
         (h / "VERSION").write_text((REPO / "VERSION").read_text(encoding="utf-8"), encoding="utf-8")
         home_bin = h / "plainkeep"
         # seed: a wiki note, a task, a files asset (shadow note), a search-only note

@@ -187,7 +187,12 @@ def main() -> int:
          "print('FLOW', P.fm_list(flow,'tags'));"
          "print('BLOCK', P.fm_list(block,'tags'));"
          "print('REORDER', P.frontmatter(block).get('type'))"],
-        capture_output=True, text=True, cwd=str(REPO))
+        # PLAINKEEP_HOME is set because lib/paths.py resolves the data root at import and has no
+        # engine-relative fallback since ADR-014 Task 1b. These three assertions are about
+        # frontmatter PARSING and touch no path at all, so any valid root will do — REPO is used
+        # rather than a temp dir precisely because nothing here writes.
+        capture_output=True, text=True, cwd=str(REPO),
+        env={**os.environ, "PLAINKEEP_HOME": str(REPO)})
     out = tol.stdout
     check("fm_list reads a flow list", "FLOW ['Alpha', 'beta-two']" in out, out + tol.stderr)
     check("fm_list reads a block list (Obsidian-normalized)", "BLOCK ['one', 'two']" in out, out)

@@ -12,12 +12,24 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, guardrail, output, paths, setuplib, vaultio  # noqa: E402
+from lib import enginetree, guardrail, output, paths, pluginenv, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 BIN = Path(__file__).resolve().parents[1]
 checks = []  # (level, msg)
+
+
+def _plugin_overlay() -> dict | None:
+    """The lockfile's record of the dependency overlay, or None when this vault has no lockfile / has
+    never synced. Never raises — doctor reports, it does not fail on a file it only reads."""
+    try:
+        lock = json.loads((paths.PLAINKEEP_HOME / "plugins" / "plugins.lock.json")
+                          .read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    o = lock.get("overlay")
+    return o if isinstance(o, dict) else None
 
 
 def ok(m): checks.append(("ok", m))
@@ -165,6 +177,32 @@ def main(argv):
         fail(f"engine: the vault and the engine tree are not disjoint — {overlap}")
     else:
         ok("engine: disjoint from the vault (data is data, code is code)")
+
+    # THE PRECEDENCE INVERSION (Phase 2 Task 3, ADR-018 D2). The SDK reaches a plugin on PYTHONPATH
+    # now, and PYTHONPATH loses to `sys.path[0]` — the verb's own directory. A pack shipping a
+    # top-level `lib` beside its run.py therefore imports ITS OWN, where the pre-Task-2 scaffold's
+    # `sys.path.insert(0, …)` made the engine win. WARN, not FAIL: shipping a `lib` is legal, it is
+    # only the silence that is not. This is the one shape the migration cannot fix for the user.
+    shadows = pluginenv.sdk_shadows(paths.PLAINKEEP_HOME)
+    if shadows:
+        warn("plugins: " + ", ".join(f"{p}/{v}" for p, v in shadows)
+             + " ship a top-level `lib` beside run.py — it SHADOWS the plainkeep SDK for that verb "
+               "(sys.path[0] is the verb's own directory and beats PYTHONPATH)")
+    else:
+        ok("plugins: no pack shadows the SDK with a top-level `lib`")
+
+    # The dependency overlay was built for ONE interpreter (`pip install --target` can carry compiled
+    # extensions). It survives an ENGINE update by construction — it lives in the vault, and both
+    # dispatchers prepend it per spawn — so the only thing that can invalidate it is the interpreter
+    # moving underneath it, which is what this row watches.
+    overlay = _plugin_overlay()
+    if overlay is not None:
+        want = f"{sys.version_info.major}.{sys.version_info.minor}"
+        if overlay.get("python") and overlay["python"] != want:
+            warn(f"plugins: the dependency overlay was installed for python {overlay['python']}, "
+                 f"this interpreter is {want} — re-run `plainkeep plugin sync --yes`")
+        else:
+            ok(f"plugins: dependency overlay matches this interpreter (python {want})")
 
     # 2. folders
     for d in REQUIRED_DIRS:

@@ -104,6 +104,57 @@ def spawn_env(engine, vault, source: str | None, environ=None) -> dict[str, str]
 
 
 # --------------------------------------------------------------------------------------------------
+# THE PRECEDENCE INVERSION, and the preflight that finds it.
+#
+# `sys.path[0]` is the SCRIPT'S OWN DIRECTORY and it precedes every PYTHONPATH entry. The pre-Task-2
+# scaffold put the SDK at position 0 with `sys.path.insert`, AHEAD of the plugin's own directory, so
+# a plugin that happened to ship a `lib.py` or `lib/` beside its `run.py` still got the engine's. On
+# PYTHONPATH the order is the other way round and that plugin now imports ITS OWN `lib` — silently,
+# and possibly with an `api` of its own that answers every call differently.
+#
+# This is not fixable from the dispatcher: `sys.path[0]` belongs to CPython, and prepending the SDK
+# from outside the process is the whole mechanism. What IS possible is to make the case VISIBLE
+# before it bites, which is what this function is for — `plainkeep doctor` reports it and `plugin
+# add` says it at install time, when the pack can still be looked at.
+# --------------------------------------------------------------------------------------------------
+SDK_PACKAGE = "lib"
+
+
+def _pack_roots(vault, environ=None) -> list[tuple[str, Path]]:
+    """(pack_name, pack_dir) for the vault's own packs and each $PLAINKEEP_PATH root — the same set
+    the resolver treats as packs, minus the dot-prefixed machinery (`.deps` is not a pack)."""
+    env = os.environ if environ is None else environ
+    roots: list[tuple[str, Path]] = []
+    pdir = Path(vault) / "plugins"
+    if pdir.is_dir():
+        roots += [(d.name, d) for d in sorted(pdir.iterdir())
+                  if d.is_dir() and not d.name.startswith(".")]
+    for raw in (env.get("PLAINKEEP_PATH") or "").split(os.pathsep):
+        root = raw.strip()
+        if root:
+            rp = Path(os.path.expanduser(root))
+            if rp.is_dir():
+                roots.append((rp.name, rp))
+    return roots
+
+
+def sdk_shadows(vault, environ=None) -> list[tuple[str, str]]:
+    """(pack, verb) for every plugin verb directory that ships a top-level `lib` beside its run.py.
+
+    Cheap by construction — two stats per verb directory — so it can sit in `doctor` without turning
+    a health check into a tree walk.
+    """
+    out: list[tuple[str, str]] = []
+    for pack, root in _pack_roots(vault, environ):
+        for d in sorted(root.iterdir()):
+            if not d.is_dir() or d.name.startswith("."):
+                continue
+            if (d / SDK_PACKAGE).is_dir() or (d / f"{SDK_PACKAGE}.py").is_file():
+                out.append((pack, d.name))
+    return out
+
+
+# --------------------------------------------------------------------------------------------------
 # In-process side: what a PLUGIN VERB's own interpreter does with all this. Both functions below are
 # no-ops unless PACK_ENV is set, i.e. unless this process really was spawned as a plugin verb — an
 # engine verb, a test importing `lib.api` directly, and anything else that reaches this module are

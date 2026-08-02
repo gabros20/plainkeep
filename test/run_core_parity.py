@@ -3,11 +3,26 @@
 run_core_parity.py — the PERMANENT, Python-owned differential oracle proving the compiled TS core
 binary reproduces the untouched Python implementations byte-for-byte (proposal §3; advisor A5/B2).
 
+INSTALLED-ENGINE MODE (Phase 2 Task 2). Every fixture is now TWO trees, not one:
+
+    <base>/install/engine/<version>/     the ENGINE — bin/lib, the synthetic verb dirs, the shim,
+    <base>/install/engine/current ->     ...reached through the `current` symlink, so both
+                                         dispatchers' symlink resolution is exercised on every case
+    <base>/vault/                        the DATA root — marker, plugins/, .venv, .logs
+
+...and the vault ALSO carries a `bin/` of its own, which is the dual-run proof this task turns in.
+That `bin/` is POISONED: `<vault>/bin/lib/guardrail.py` and friends exit 5 printing
+`POISONED-VAULT-ENGINE`, and every declared engine verb gets a `<vault>/bin/<verb>/run.py` that
+prints the same marker. Nothing may ever resolve to it. Before this task the floor spawned
+`$PLAINKEEP_HOME/bin/lib/guardrail.py` and resolver.ts derived engine bin/ as `<home>/bin`, so those
+files WERE the engine; now they are inert data sitting untouched beside it, and the marker assertion
+in every comparator is what keeps that true rather than incidentally true. (It is also the reason a
+vault carrying `bin/capture/` cannot shadow the reserved engine verb `capture`, which the old
+derivation quietly allowed.)
+
 Phase 1 drives the RESOLVER: it loads the language-neutral case catalogs under
-test/cases/core-parity/, builds a throwaway fixture vault per case (engine bin/ = a COPY of
-bin/lib/resolver.py plus synthetic verb dirs, so the Python side's file-derived ENGINE_BIN and the
-binary's $PLAINKEEP_HOME/bin coincide), then for every invocation runs BOTH sides and compares exit
-code + exact stdout:
+test/cases/core-parity/, builds a throwaway fixture per case, then for every invocation runs BOTH
+sides and compares exit code + exact stdout:
   * TS side  = the built binary's `--core-resolve <verb>` / `--core-api <spec>`.
   * PY side  = `python3 <vault>/bin/lib/resolver.py <verb>` for the CLI, and a `python3 -c` probe
                importing that same resolver.py and printing the same compact JSON shapes for the APIs.
@@ -21,7 +36,10 @@ register one in COMPARATORS — the vault builder and runner are catalog-agnosti
 
 Binary discovery: $PLAINKEEP_CORE_BIN else <repo>/.local/bin/plainkeep-core. Absent (or not
 executable) => print a LOUD single SKIP line and exit 0, UNLESS PLAINKEEP_REQUIRE_CORE=1, in which
-case the same line is an error and the suite exits 1. SKIP is visible, never a silent PASS.
+case the same line is an error and the suite exits 1. The discovered binary is INSTALLED INTO EACH
+FIXTURE'S ENGINE and invoked from there, never in place: since Task 2 the core derives its engine
+root from its own execPath, so a binary run out of `<repo>/.local/bin/` would resolve the REPO's
+verbs and the differential would compare the fixture against the repository. SKIP is visible, never a silent PASS.
 
 The same rule covers the ONE other thing this oracle declines to do by default: on macOS, the
 fault-signal cells marked "crash_noise" in a catalog are skipped unless PLAINKEEP_REQUIRE_CORE=1 or
@@ -45,6 +63,12 @@ seal()   # hermetic: an empty throwaway registry, never the developer's real vau
 REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
 ENGINE_SRC = REPO / "bin"
+# The installed-engine layout, read from the engine module rather than restated: a fixture that
+# spelled `engine/<version>/current` its own way would keep passing after the real layout moved.
+sys.path.insert(0, str(ENGINE_SRC / "lib"))
+import enginetree  # type: ignore  # noqa: E402
+VERSIONS_DIRNAME = enginetree.VERSIONS_DIRNAME
+ENGINE_VERSION = (REPO / "VERSION").read_text(encoding="utf-8").strip()
 # The root shim (Task 4). Its `PLAINKEEP_CORE=off` path is the BASH FLOOR — the pre-core dispatcher,
 # preserved verbatim — and is the reference side of the dispatcher differential matrix.
 PLAINKEEP_SRC = REPO / "plainkeep"
@@ -182,13 +206,55 @@ def _content(spec) -> str:
     return json.dumps(spec)
 
 
-class Fixture:
-    """A built fixture vault plus the env needed to invoke either side against it.
+POISON_MARKER = "POISONED-VAULT-ENGINE"
 
-    Layout: <vault>/bin/lib/resolver.py (copy) + <vault>/bin/<verb>/ (engine verbs),
-    <vault>/plugins/<pack>/<verb>/, PLAINKEEP_PATH roots under <vault>/_roots/<ref> (absolute) or
-    <vault>/_home/<ref> (referenced as ~/<ref>). The vault root is REALPATH-canonical so Python's
-    ENGINE_BIN `.resolve()` is a no-op and matches the binary's unresolved $PLAINKEEP_HOME/bin.
+# What a poisoned in-vault engine file does when something runs it: say so, loudly, on the channel
+# the comparator reads, and exit off the happy path. Exit 5 rather than 0 so a dispatch that reached
+# it cannot look like a pass even if the marker assertion were ever dropped.
+_POISON_PY = (f"import sys\nsys.stderr.write({POISON_MARKER!r} + chr(10))\n"
+              f"sys.stdout.write({POISON_MARKER!r} + chr(10))\nraise SystemExit(5)\n")
+
+
+def _poison_vault_engine(vault: Path, verbs: list[str]) -> None:
+    """Give the fixture vault a `bin/` of its own that must never be reached — the dual-run proof.
+
+    The vault keeps this tree UNTOUCHED for the whole run (nothing in this task deletes anything),
+    and every comparator asserts the marker never appears in either side's output. Two things it
+    pins, both of which were live before Task 2:
+
+      * the floor spawned `$PLAINKEEP_HOME/bin/lib/guardrail.py` — put that line back and every
+        dispatch case reddens on a stderr marker rather than on a subtle diff;
+      * resolver.ts derived engine bin/ as `<home>/bin`, so a verb directory a VAULT happened to
+        carry resolved as an `engine` verb, which is the one source a plugin is forbidden to shadow.
+    """
+    lib = vault / "bin" / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for mod in ("guardrail.py", "resolver.py", "vaultroot.py", "manifest.py"):
+        (lib / mod).write_text(_POISON_PY, encoding="utf-8")
+    for verb in verbs:
+        d = vault / "bin" / verb
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "run.py").write_text(_POISON_PY, encoding="utf-8")
+        (d / "cmd.json").write_text(
+            json.dumps({"verb": verb, "summary": POISON_MARKER, "risk": "read"}), encoding="utf-8")
+
+
+class Fixture:
+    """A built fixture ENGINE + VAULT pair plus the env needed to invoke either side against it.
+
+    Layout (Task 2 — the engine is no longer inside the vault):
+
+        <base>/install/engine/<version>/bin/lib/       the whole bin/lib, copied
+        <base>/install/engine/<version>/bin/<verb>/    `at: engine` verbs
+        <base>/install/engine/<version>/plainkeep      the shim (the floor's entry point)
+        <base>/install/engine/<version>/.local/bin/plainkeep-core   the binary under test
+        <base>/install/engine/current -> <version>     what a dispatcher is actually invoked through
+        <base>/vault/plugins/<pack>/<verb>/            plugin packs — these DO live in the vault
+        <base>/vault/bin/                              poisoned, inert, never resolved
+        <base>/vault/_roots/<ref> | <base>/vault/_home/<ref>        PLAINKEEP_PATH roots
+
+    Both trees are REALPATH-canonical, so Python's `Path(__file__).resolve()` is a no-op against
+    them and the engine/data disjointness check compares like with like.
 
     STANDING CONSTRAINT ON EVERY CASE AUTHOR, recorded here because it is a permanent property of
     this oracle: **sorted-set comparisons between the two sides agree only for ASCII names.**
@@ -201,30 +267,49 @@ class Fixture:
 
     def __init__(self, spec: dict):
         # mkdtemp first, then guard the rest so a catalog authoring error (bad path:ref, unknown
-        # verb location, unregistered file) cleans up its temp vault instead of leaking it (M-2).
-        self.root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-parity-")))
+        # verb location, unregistered file) cleans up its temp trees instead of leaking them (M-2).
+        self.base = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-parity-")))
         try:
             self._build(spec)
         except Exception:
-            shutil.rmtree(self.root, ignore_errors=True)
+            shutil.rmtree(self.base, ignore_errors=True)
             raise
 
     def _build(self, spec: dict) -> None:
-        self.home = self.root / "_home"
-        self.home.mkdir()
+        # --- the ENGINE, in the real installed shape ------------------------------------------
+        # `<base>/install/engine/<version>/` with a `current` symlink beside it, because that is what
+        # `enginetree.install()` produces and what a dispatcher is reached through in production. The
+        # symlink is not decoration: the floor resolves `$0` through it and the core realpaths its
+        # execPath, and the two must land on ONE spelling or the disjointness check compares two
+        # names for one directory. Running every case through `current/` is what keeps that honest.
+        versions = self.base / "install" / VERSIONS_DIRNAME
+        versions.mkdir(parents=True)
+        self.engine = versions / ENGINE_VERSION
+        self.engine.mkdir()
+        self.engine_current = versions / "current"
+        self.engine_current.symlink_to(self.engine)
 
         # The WHOLE bin/lib/, always. It used to be resolver.py alone (plus guardrail.py, copied by
         # the harnesses that need it). Since ADR-014 Task 1b resolver.py and guardrail.py resolve the
         # data root through lib/vaultroot.py, which reads lib/vaultreg.py, lib/wall.py and
         # lib/output.py — copying a hand-maintained closure would encode an import graph HERE that
         # lives THERE, and every future edit to it would fail as an ImportError from inside a temp
-        # vault. bin/lib holds no run.py or cmd.json, so it is not a verb dir and the resolver
+        # tree. bin/lib holds no run.py or cmd.json, so it is not a verb dir and the resolver
         # catalogs see exactly the verb surface they declare.
-        shutil.copytree(ENGINE_SRC / "lib", self.root / "bin" / "lib",
+        shutil.copytree(ENGINE_SRC / "lib", self.engine / "bin" / "lib",
                         dirs_exist_ok=True, ignore=shutil.ignore_patterns("__pycache__"))
-        self.resolver_py = self.root / "bin" / "lib" / "resolver.py"
+        # `enginetree.require_intact()` runs on EVERY invocation and asks for <engine>/VERSION, so a
+        # fixture engine without one refuses before any comparison happens.
+        shutil.copy2(REPO / "VERSION", self.engine / "VERSION")
+        self.resolver_py = self.engine / "bin" / "lib" / "resolver.py"
 
-        # ...and the fixture is a real VAULT, because since Task 1b a directory is not one just
+        # --- the VAULT ---------------------------------------------------------------------------
+        self.root = self.base / "vault"
+        self.root.mkdir()
+        self.home = self.root / "_home"
+        self.home.mkdir()
+
+        # The fixture vault is a real VAULT, because since Task 1b a directory is not one just
         # because PLAINKEEP_HOME points at it: an unmarked root refuses with exit 2 before the gate
         # runs. Every fixture invocation supplies PLAINKEEP_HOME explicitly, which is step 2 of the
         # chain — marker required, registration NOT (a fixture is deliberately never registered, and
@@ -257,7 +342,7 @@ class Fixture:
                 src = ENGINE_SRC / verb
                 if not src.is_dir():
                     raise ValueError(f"engine_from_repo names a verb the repo has no bin/ dir for: {verb!r}")
-                shutil.copytree(src, self.root / "bin" / verb, dirs_exist_ok=True, ignore=ignore)
+                shutil.copytree(src, self.engine / "bin" / verb, dirs_exist_ok=True, ignore=ignore)
 
         # Completion-catalog addition (Task 5): `vault_files` writes plain files under the vault
         # root, which is what the completion PROVIDERS read (wiki/**.md, tasks/<status>/T-*.md).
@@ -321,9 +406,38 @@ class Fixture:
             pdir.mkdir(parents=True, exist_ok=True)
             (pdir / "plugins.lock.json").write_text(_content(pl), encoding="utf-8")
 
+        # THE DUAL-RUN PROOF (Task 2), built last so it can name every engine verb the case declared.
+        # The vault gets a complete-looking `bin/` that must never be reached. See
+        # `_poison_vault_engine` — and note that the case's OWN verb names are what get poisoned, so
+        # a regression does not merely produce a wrong answer, it produces the marker.
+        _poison_vault_engine(self.root, sorted(
+            {v["verb"] for v in spec.get("verbs", []) if v["at"] == "engine"} | set(from_repo)))
+
+    def install_core(self, binary: str) -> str:
+        """Put the binary under test INSIDE this fixture's engine and return the path to invoke.
+
+        Since Task 2 the core derives its engine root from its own execPath, so invoking the repo's
+        `.local/bin/plainkeep-core` in place would resolve the REPOSITORY's verbs — the differential
+        would compare a fixture against the source tree and pass for the wrong reason. Hardlinked
+        rather than copied: the binary is ~64 MB and there is one fixture per case."""
+        dst = self.engine / ".local" / "bin" / "plainkeep-core"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        if not dst.exists():
+            try:
+                os.link(binary, dst)
+            except OSError:          # different filesystem — correctness over speed
+                shutil.copy2(binary, dst)
+            dst.chmod(0o755)
+        # Invoked through `current/`, not through the version directory: that is how a real install
+        # is reached, and it is what exercises the core's execPath realpath resolution.
+        return str(self.engine_current / ".local" / "bin" / "plainkeep-core")
+
     def _base_dir(self, at: str) -> Path:
         if at == "engine":
-            return self.root / "bin"
+            # THE ENGINE TREE, not `<vault>/bin` (Task 2). This one line is most of what "the parity
+            # harness gains an installed-engine mode" means: every `at: engine` verb a catalog
+            # declares is now installed where the code lives, and the resolvers find it there.
+            return self.engine / "bin"
         if at.startswith("plugin:"):
             return self.root / "plugins" / at[len("plugin:"):]
         if at.startswith("path:"):
@@ -357,10 +471,16 @@ class Fixture:
         e["PLAINKEEP_HOME"] = str(self.root)
         e["PLAINKEEP_PATH"] = self.path_value(path_order)
         e["HOME"] = str(self.home)
+        # A HOSTILE inherited PLAINKEEP_ENGINE on EVERY invocation, not on one special case. ADR-014
+        # D2 says caller input must not control where code is loaded from, and both dispatchers
+        # overwrite this before anything reads it. Poisoning it universally means the property is
+        # re-proved by all 203 catalog invocations rather than by one test that could rot: if either
+        # dispatcher ever started honouring the inherited value, every case would fail on ENOENT.
+        e["PLAINKEEP_ENGINE"] = str(self.base / "_engine_that_does_not_exist")
         return e
 
     def cleanup(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.base, ignore_errors=True)
 
 
 # --------------------------------------------------------------------------------------------------
@@ -404,15 +524,26 @@ def _nowhere(holder: list[Path]) -> str:
     return str(d)
 
 
+# The dual-run assertion, applied by every comparator (Task 2). The vault's own `bin/` is present and
+# untouched on disk for the whole run; nothing may ever resolve to it. An `in` test on both channels
+# of both sides, because the poison writes to stdout AND stderr and either side reaching it is the
+# same defect.
+def _poison_reached(*outputs: str) -> bool:
+    return any(POISON_MARKER in (o or "") for o in outputs)
+
+
 def _compare_cli(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
     env = fx.env(inv.get("path_order"))
     verb = inv["verb"]
-    ts = _run([binary, "--core-resolve", verb], env)
+    core = fx.install_core(binary)
+    ts = _run([core, "--core-resolve", verb], env)
     py = _run([PY, str(fx.resolver_py), verb], env)
-    ok = ts.returncode == py.returncode and ts.stdout == py.stdout
+    clean = not _poison_reached(ts.stdout, ts.stderr, py.stdout, py.stderr)
+    ok = ts.returncode == py.returncode and ts.stdout == py.stdout and clean
     detail = (
         f"verb={verb!r} ts=(rc={ts.returncode},out={ts.stdout!r}) "
-        f"py=(rc={py.returncode},out={py.stdout!r}) pyerr={py.stderr.strip()!r}"
+        f"py=(rc={py.returncode},out={py.stdout!r}) pyerr={py.stderr.strip()!r} "
+        f"vault_bin_untouched={clean}"
     )
     return ok, detail
 
@@ -420,13 +551,16 @@ def _compare_cli(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
 def _compare_api(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
     env = fx.env(inv.get("path_order"))
     api = inv["api"]
-    ts = _run([binary, "--core-api", api], env)
+    core = fx.install_core(binary)
+    ts = _run([core, "--core-api", api], env)
     penv = dict(env, PK_RESOLVER_PY=str(fx.resolver_py))
     py = _run([PY, "-c", _PROBE, api], penv)
-    ok = ts.returncode == py.returncode and ts.stdout == py.stdout
+    clean = not _poison_reached(ts.stdout, ts.stderr, py.stdout, py.stderr)
+    ok = ts.returncode == py.returncode and ts.stdout == py.stdout and clean
     detail = (
         f"api={api!r} ts=(rc={ts.returncode},out={ts.stdout!r}) "
-        f"py=(rc={py.returncode},out={py.stdout!r}) pyerr={py.stderr.strip()!r}"
+        f"py=(rc={py.returncode},out={py.stdout!r}) pyerr={py.stderr.strip()!r} "
+        f"vault_bin_untouched={clean}"
     )
     return ok, detail
 
@@ -482,21 +616,29 @@ def _compare_log(ts_log: str, py_log: str) -> tuple[bool, str]:
 def _compare_gate(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
     verb = inv["verb"]
     args = inv.get("args", [])
+    # Per-side VAULT copies only (Task 2). The engine is shared: it is read-only code, both sides run
+    # byte-identical bytes out of it by construction, and what needed isolating was never the code —
+    # it was `.logs/plainkeep.log`, which lives in the vault. The Python side is now handed the
+    # ENGINE's guardrail.py rather than a copy sitting in its own vault; the copy in the vault is the
+    # POISONED one, and running it is the failure this comparator now also detects.
     ts_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-gate-ts-")))
     py_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-gate-py-")))
+    core = fx.install_core(binary)
     try:
         shutil.copytree(fx.root, ts_root, dirs_exist_ok=True)
         shutil.copytree(fx.root, py_root, dirs_exist_ok=True)
-        ts = _run([binary, "--core-gate", verb, *args], _gate_env(fx, inv, ts_root))
-        py = _run([PY, str(py_root / "bin" / "lib" / "guardrail.py"), verb, *args],
+        ts = _run([core, "--core-gate", verb, *args], _gate_env(fx, inv, ts_root))
+        py = _run([PY, str(fx.engine / "bin" / "lib" / "guardrail.py"), verb, *args],
                   _gate_env(fx, inv, py_root))
         ok_log, log_detail = _compare_log(_read_log(ts_root), _read_log(py_root))
+        clean = not _poison_reached(ts.stdout, ts.stderr, py.stdout, py.stderr)
         ok = (ts.returncode == py.returncode and ts.stdout == py.stdout
-              and ts.stderr == py.stderr and ok_log)
+              and ts.stderr == py.stderr and ok_log and clean)
         detail = (
             f"verb={verb!r} args={args!r} "
             f"ts=(rc={ts.returncode},out={ts.stdout!r},err={ts.stderr!r}) "
-            f"py=(rc={py.returncode},out={py.stdout!r},err={py.stderr!r}) log[{log_detail}]"
+            f"py=(rc={py.returncode},out={py.stdout!r},err={py.stderr!r}) log[{log_detail}] "
+            f"vault_bin_untouched={clean}"
         )
         return ok, detail
     finally:
@@ -597,11 +739,14 @@ def _noncomparable_verb(binary: str, argv: list[str]) -> str | None:
     verbs = _load_intercepts(binary)["verbs"]
     return argv[0] if argv[0] in verbs.get("noncomparable", []) else None
 
-def _install_floor(root: Path) -> None:
-    """Make a built fixture vault runnable by the bash floor: the shim at the vault root. The engine
-    modules the floor spawns (guardrail.py, resolver.py, and since Task 1b vaultroot.py and what it
-    imports) are already there — Fixture copies the WHOLE bin/lib."""
-    dst = root / "plainkeep"
+def _install_floor(engine: Path) -> None:
+    """Make a built fixture ENGINE runnable by the bash floor: the shim at the engine root.
+
+    It took a VAULT root through Phase 1, which is the assumption Task 2 deletes — the launcher ships
+    inside the tree it launches, and `$0` is how the floor finds the engine. The engine modules it
+    spawns (guardrail.py, resolver.py, vaultroot.py and what they import) are beside it, because
+    Fixture copies the WHOLE bin/lib into the engine."""
+    dst = engine / "plainkeep"
     shutil.copy2(PLAINKEEP_SRC, dst)
     dst.chmod(0o755)
 
@@ -711,15 +856,20 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
             "empty stdout satisfies the exclusion and the case is green in exactly the failure mode "
             "it is meant to detect. To assert that output is empty, use expect_stdout: \"\"."
         )
+    # Per-side VAULT copies; the ENGINE is shared (Task 2). Sharing it is stronger than copying it,
+    # not weaker: the two sides now run the SAME BYTES rather than two copies asserted to be
+    # identical, which is what the note on `engine_from_repo` above was working to guarantee by hand.
+    # What still needs isolating is the vault, because that is where `.logs/plainkeep.log` is.
     core_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-core-")))
     floor_root = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-disp-floor-")))
     aliases: list[Path] = []
+    core_bin = fx.install_core(binary)
+    _install_floor(fx.engine)
     try:
         for r in (core_root, floor_root):
             # symlinks=True: a "live" venv fixture is a SYMLINK to the running python3; copying its
             # target instead would produce a python binary that cannot find its own framework.
             shutil.copytree(fx.root, r, dirs_exist_ok=True, symlinks=True)
-            _install_floor(r)
         marker = floor_root / "_core_was_used"
         tracer = floor_root / "_fake_core"
         _write_tracer(tracer, marker)
@@ -732,8 +882,11 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
         floor_env = dict(_dispatch_env(fx, inv, floor_home or floor_root),
                          PLAINKEEP_CORE="off", PLAINKEEP_CORE_BIN=str(tracer))
 
-        core = _run([binary, *argv], core_env)
-        floor = _run([str(floor_root / "plainkeep"), *argv], floor_env)
+        # Both sides are reached through `current/`, which is a symlink into the version directory —
+        # the shape a real install has, and the one that makes the floor's `$0` chain and the core's
+        # execPath realpath agree on one canonical engine root.
+        core = _run([core_bin, *argv], core_env)
+        floor = _run([str(fx.engine_current / "plainkeep"), *argv], floor_env)
 
         ok_log, log_detail = _compare_log(_read_log(core_root), _read_log(floor_root))
         mode_pinned = not marker.exists()
@@ -765,7 +918,12 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
         else:
             err_ok = (want_err["core_contains"] in core.stderr
                       and core.stderr != "" and floor.stderr == want_err["floor"])
-        ok = (rc_ok and core.stdout == floor.stdout and err_ok and ok_log and mode_pinned)
+        # The dual-run proof, on the comparator that can actually reach a verb (Task 2). The vault
+        # each side runs against carries a full poisoned `bin/` — put back either of the two
+        # pre-Task-2 derivations and this goes red with the marker in stderr rather than with a diff
+        # nobody can read.
+        clean = not _poison_reached(core.stdout, core.stderr, floor.stdout, floor.stderr)
+        ok = (rc_ok and core.stdout == floor.stdout and err_ok and ok_log and mode_pinned and clean)
         # An absolute assertion on top of the differential: two sides that agree on the WRONG answer
         # (e.g. both ignoring a live venv) would still compare equal. Cases that care state what the
         # shared stdout must contain.
@@ -792,7 +950,8 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
             f"verb={verb!r} args={args!r} "
             f"core=(rc={core.returncode},out={core.stdout!r},err={core.stderr!r}) "
             f"floor=(rc={floor.returncode},out={floor.stdout!r},err={floor.stderr!r}) "
-            f"log[{log_detail}] mode_pinned={mode_pinned} expect={want!r} excludes={nope!r} "
+            f"log[{log_detail}] mode_pinned={mode_pinned} vault_bin_untouched={clean} "
+            f"expect={want!r} excludes={nope!r} "
             f"expect_exact={want_exact!r} expect_rc={want_rc!r} resolved_rc(core,floor)={exp!r}"
         )
         return ok, detail
@@ -810,22 +969,26 @@ COMPARATORS = {
 
 
 # --------------------------------------------------------------------------------------------------
-# Shim + root-discovery checks (Task 4)
+# Shim + root-discovery + ENGINE-TREE checks (Task 4, extended in Phase 2 Task 2)
 #
-# These are NOT TS-vs-Python differentials — they are behavioral assertions about the root `plainkeep`
+# These are NOT TS-vs-Python differentials — they are behavioral assertions about the `plainkeep`
 # shim's own contract, which no catalog case can express because each needs a differently-shaped
-# vault (an in-vault core binary, no core at all, a core that lies about being alive). They live here
-# rather than in a bun test because the contract is a bash script's, and because the same Fixture
-# builder already produces the vaults.
+# ENGINE (one with a core binary, one with none, one with a core that lies about being alive, one
+# with a file missing). They live here rather than in a bun test because the contract is a bash
+# script's, and because the same Fixture builder already produces the trees.
 #
-# The contract under test (proposal §3 / plan-phase1 "The shim + root-discovery contract"):
+# The contract under test (proposal §3 / plan-phase1 "The shim + root-discovery contract", plus
+# ADR-014 D2/D3 as Task 2 turns them on):
 #   * a caller-supplied PLAINKEEP_HOME survives the shim AND the binary, unmodified;
-#   * invoked directly with no PLAINKEEP_HOME, the binary derives home from its own execPath;
-#   * a copied vault dispatches through its own copied core, with no reference back to the original;
+#   * invoked directly with no PLAINKEEP_HOME, the binary REFUSES — no vault from execPath;
+#   * a copied ENGINE dispatches through its own copied core, with no reference back to the original;
 #   * no core installed -> auto takes the bash floor SILENTLY, require fails loudly (exit 1), off
 #     takes the floor;
 #   * a core that is executable but fails --core-selftest -> auto takes the floor after EXACTLY ONE
-#     warning line, require fails loudly. A broken core must never poison plainkeep.
+#     warning line, require fails loudly. A broken core must never poison plainkeep;
+#   * (Task 2) the engine and the data root are DISJOINT, refused in both directions and in both
+#     dispatchers; an INCOMPLETE engine refuses before it dispatches; PLAINKEEP_ENGINE is REPLACED
+#     rather than honoured; and verb discovery reads the installed tree and NOT the repository.
 # --------------------------------------------------------------------------------------------------
 
 _SHIM_FIXTURE = {
@@ -834,13 +997,20 @@ _SHIM_FIXTURE = {
          "run": "print('ok')\n"},
         {"at": "engine", "verb": "v_home", "cmd": {"verb": "v_home", "risk": "read"},
          "run": "import os\nprint(os.environ.get('PLAINKEEP_HOME', '<unset>'))\n"},
+        # Task 2: what the verb was TOLD the engine is, and where its own code actually sits. The
+        # two must agree, and neither may be the value the caller exported.
+        {"at": "engine", "verb": "v_engine", "cmd": {"verb": "v_engine", "risk": "read"},
+         "run": "import os, pathlib\n"
+                "print(os.environ.get('PLAINKEEP_ENGINE', '<unset>'))\n"
+                "print(pathlib.Path(__file__).resolve().parents[2])\n"},
     ],
 }
 
 
 def _shim_env(home: Path | None, **over) -> dict:
     e = dict(os.environ)
-    for k in ("PLAINKEEP_CORE", "PLAINKEEP_CORE_BIN", "PLAINKEEP_HOME", "PLAINKEEP_PATH"):
+    for k in ("PLAINKEEP_CORE", "PLAINKEEP_CORE_BIN", "PLAINKEEP_HOME", "PLAINKEEP_PATH",
+              "PLAINKEEP_ENGINE", "PLAINKEEP_ENGINE_HOME"):
         e.pop(k, None)
     # HERMETIC REGISTRY, and this is not belt-and-braces. Since Task 1b an invocation with no
     # PLAINKEEP_HOME falls through to the marker walk-up and then to the registry DEFAULT — so
@@ -857,11 +1027,22 @@ def _shim_env(home: Path | None, **over) -> dict:
     return e
 
 
-def _clone_vault(src: Path, holder: list[Path], prefix: str) -> Path:
-    dst = Path(os.path.realpath(tempfile.mkdtemp(prefix=prefix))) / "vault"
+def _clone_tree(src: Path, holder: list[Path], prefix: str, name: str) -> Path:
+    dst = Path(os.path.realpath(tempfile.mkdtemp(prefix=prefix))) / name
     holder.append(dst.parent)
     shutil.copytree(src, dst, symlinks=True)
     return dst
+
+
+def _clone_vault(src: Path, holder: list[Path], prefix: str) -> Path:
+    return _clone_tree(src, holder, prefix, "vault")
+
+
+def _clone_engine(src: Path, holder: list[Path], prefix: str) -> Path:
+    """A second ENGINE tree, complete and standalone. Separate from `_clone_vault` since Task 2 for
+    the reason the whole task exists: these are two different kinds of thing, and a helper that
+    copies "the fixture" without saying which one is how the distinction gets lost again."""
+    return _clone_tree(src, holder, prefix, "engine")
 
 
 def _shim_checks(binary: str) -> None:
@@ -872,27 +1053,60 @@ def _shim_checks(binary: str) -> None:
         check("[shim] fixture-build", False, f"exception: {e!r}")
         return
     try:
-        _install_floor(fx.root)
-        base, shim = fx.root, str(fx.root / "plainkeep")
+        _install_floor(fx.engine)
+        # THE TWO TREES, named apart. `base` is the ENGINE (it holds the shim and the verbs); the
+        # vault is data and holds a poisoned `bin/` that nothing may reach.
+        base, shim = fx.engine, str(fx.engine / "plainkeep")
+        core_in_engine = fx.install_core(binary)
+        vault = _clone_vault(fx.root, tmps, "pk-shim-vault-")
 
         # 1-2. A caller-supplied PLAINKEEP_HOME is the vault, whichever path took the dispatch: the
-        # shim script lives in `base` but every read/write must happen in `other`.
-        other = _clone_vault(base, tmps, "pk-shim-home-")
-        for mode, extra in (("require", {"PLAINKEEP_CORE_BIN": binary}), ("off", {})):
-            r = _run([shim, "v_home"], _shim_env(other, PLAINKEEP_CORE=mode, **extra))
+        # shim script lives in the ENGINE and every read/write must happen in `vault`.
+        for mode, extra in (("require", {"PLAINKEEP_CORE_BIN": core_in_engine}), ("off", {})):
+            r = _run([shim, "v_home"], _shim_env(vault, PLAINKEEP_CORE=mode, **extra))
             check(f"[shim] caller PLAINKEEP_HOME preserved through the shim (mode={mode})",
-                  r.returncode == 0 and r.stdout.strip() == str(other),
-                  f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(other)!r}")
+                  r.returncode == 0 and r.stdout.strip() == str(vault),
+                  f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(vault)!r}")
+
+        # 2b. TASK 2 — the dual-run proof, at the level of a whole dispatch. `vault` carries a
+        # complete-looking `bin/v_ok/run.py` that prints POISONED-VAULT-ENGINE, and a
+        # `bin/lib/guardrail.py` that exits 5. Neither is reached: the engine's `v_ok` is.
+        for mode, extra in (("require", {"PLAINKEEP_CORE_BIN": core_in_engine}), ("off", {})):
+            r = _run([shim, "v_ok"], _shim_env(vault, PLAINKEEP_CORE=mode, **extra))
+            check(f"[shim] the vault's own bin/ is DATA, never the engine (mode={mode})",
+                  r.returncode == 0 and r.stdout == "ok\n"
+                  and not _poison_reached(r.stdout, r.stderr)
+                  and (vault / "bin" / "v_ok" / "run.py").is_file(),
+                  f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} "
+                  f"vault_bin_still_there={(vault / 'bin' / 'v_ok' / 'run.py').is_file()}")
+
+        # 2c. TASK 2 — PLAINKEEP_ENGINE is an OUTPUT. A caller who exports a hostile value has it
+        # REPLACED, and the replacement is what the verb sees. Asserted against the verb's OWN
+        # `__file__`-derived answer rather than against a path this test computed, so it cannot pass
+        # by both sides sharing one mistake.
+        evil = str(Path(tempfile.gettempdir()) / "pk-evil-engine")
+        for mode, extra in (("require", {"PLAINKEEP_CORE_BIN": core_in_engine}), ("off", {})):
+            r = _run([shim, "v_engine"],
+                     _shim_env(vault, PLAINKEEP_CORE=mode, PLAINKEEP_ENGINE=evil, **extra))
+            lines = r.stdout.strip().split("\n")
+            exported = lines[0] if lines else ""
+            selflocated = lines[1] if len(lines) > 1 else ""
+            check(f"[shim] a hostile inherited PLAINKEEP_ENGINE is REPLACED, not honoured "
+                  f"(mode={mode})",
+                  r.returncode == 0 and exported == selflocated == str(base) and exported != evil,
+                  f"rc={r.returncode} exported={exported!r} selflocated={selflocated!r} "
+                  f"evil={evil!r} want={str(base)!r} err={r.stderr!r}")
 
         # 3. REWRITTEN IN TASK 1b, and the rewrite is the point. This check used to assert
         # "direct binary invocation derives PLAINKEEP_HOME from execPath" — the behavior ADR-014 D2
         # deletes, because for an INSTALLED `~/.local/bin/plainkeep-core` that derivation resolves to
         # `~` and every guarded write then lands wherever the binary happens to live. A binary sitting
-        # inside a vault, invoked directly with nothing selecting a root, must now REFUSE.
-        withcore = _clone_vault(base, tmps, "pk-shim-core-")
+        # inside an engine, invoked directly with nothing selecting a root, must REFUSE.
+        withcore = _clone_engine(base, tmps, "pk-shim-core-")
         core_dst = withcore / ".local" / "bin" / "plainkeep-core"
         core_dst.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(binary, core_dst)
+        if not core_dst.exists():
+            shutil.copy2(binary, core_dst)
         core_dst.chmod(0o755)
         nowhere = _nowhere(tmps)
         r = _run([str(core_dst), "v_home"], _shim_env(None), cwd=nowhere)
@@ -905,56 +1119,55 @@ def _shim_checks(binary: str) -> None:
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} "
               f"logs={(withcore / '.logs').exists()}")
 
-        # 4. A COPIED vault (the scout-Q1 shape: run_terminal/run_mcp copy a vault to temp) with no
-        # PLAINKEEP_CORE_BIN: `auto` must find the copied vault's OWN core rather than the original's.
-        # PLAINKEEP_HOME is now supplied explicitly — the `$0`-relative vault fallback this used to
-        # lean on is deleted with the execPath one, for the same reason (a copy of the launcher must
-        # not silently repoint the safety model). What the check still proves is the half that did NOT
-        # change: the BINARY's default location is engine-relative, so a copied tree runs its own.
-        copied = _clone_vault(withcore, tmps, "pk-shim-copy-")
-        r = _run([str(copied / "plainkeep"), "v_home"], _shim_env(copied, PLAINKEEP_CORE="auto"))
-        check("[shim] copied vault dispatches through its OWN copied core",
-              r.returncode == 0 and r.stdout.strip() == str(copied),
-              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(copied)!r}")
+        # 4. A COPIED ENGINE with no PLAINKEEP_CORE_BIN: `auto` must find the copied engine's OWN
+        # core rather than the original's. `base` deliberately has no core of its own in this check —
+        # `install_core` put one in `fx.engine`, and `withcore` is a clone that carries it — so the
+        # dispatch succeeding through the clone is evidence the default core location is
+        # ENGINE-relative and followed the copy.
+        r = _run([str(withcore / "plainkeep"), "v_home"], _shim_env(vault, PLAINKEEP_CORE="auto"))
+        check("[shim] copied engine dispatches through its OWN copied core",
+              r.returncode == 0 and r.stdout.strip() == str(vault),
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={str(vault)!r}")
 
-        # 4b. ...and with NOTHING selecting a root, the copied vault refuses instead of adopting
-        # itself. A marker alone is not trust: this clone carries the fixture's marker, and it is
-        # still refused because it is not registered (test/run_discovery.py gates the registered
-        # walk-up that DOES select).
-        r = _run([str(copied / "plainkeep"), "v_home"], _shim_env(None, PLAINKEEP_CORE="auto"),
+        # 4b. ...and with NOTHING selecting a root, the copied engine refuses instead of adopting
+        # some vault. `$0` names the ENGINE and only the engine.
+        r = _run([str(withcore / "plainkeep"), "v_home"], _shim_env(None, PLAINKEEP_CORE="auto"),
                  cwd=nowhere)
-        check("[shim] copied vault with no selection REFUSES — $0 no longer names a vault",
+        check("[shim] copied engine with no selection REFUSES — $0 names code, never data",
               r.returncode == 2 and "no vault selected" in r.stderr,
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
 
-        # 5. No core installed at all (`base` has no .local/bin).
-        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="auto"))
+        # 5. No core installed at all. `nocore` is a clone of the engine with its `.local/` removed.
+        nocore = _clone_engine(base, tmps, "pk-shim-nocore-")
+        shutil.rmtree(nocore / ".local", ignore_errors=True)
+        nocore_shim = str(nocore / "plainkeep")
+        r = _run([nocore_shim, "v_ok"], _shim_env(vault, PLAINKEEP_CORE="auto"))
         check("[shim] absent core · auto falls back to the bash floor, silently",
               r.returncode == 0 and r.stdout == "ok\n" and r.stderr == "",
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
-        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="require"))
+        r = _run([nocore_shim, "v_ok"], _shim_env(vault, PLAINKEEP_CORE="require"))
         check("[shim] absent core · require fails loudly (exit 1), never silently falls back",
               r.returncode == 1 and r.stdout == "" and "require" in r.stderr,
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
-        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="off"))
+        r = _run([nocore_shim, "v_ok"], _shim_env(vault, PLAINKEEP_CORE="off"))
         check("[shim] absent core · off takes the bash floor",
               r.returncode == 0 and r.stdout == "ok\n",
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
 
         # 6. Executable but DEAD: passes `-x`, fails --core-selftest. The failure mode the probe
         # exists for (wrong platform, truncated download, missing dylib).
-        broken = _clone_vault(base, tmps, "pk-shim-broken-")
+        broken = _clone_engine(nocore, tmps, "pk-shim-broken-")
         bpath = broken / ".local" / "bin" / "plainkeep-core"
         bpath.parent.mkdir(parents=True, exist_ok=True)
         bpath.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
         bpath.chmod(0o755)
-        r = _run([str(broken / "plainkeep"), "v_ok"], _shim_env(broken, PLAINKEEP_CORE="auto"))
+        r = _run([str(broken / "plainkeep"), "v_ok"], _shim_env(vault, PLAINKEEP_CORE="auto"))
         warn_lines = [ln for ln in r.stderr.split("\n") if ln]
         check("[shim] broken-but-executable core · auto = bash floor + EXACTLY ONE warning line",
               r.returncode == 0 and r.stdout == "ok\n" and len(warn_lines) == 1
               and "liveness probe" in warn_lines[0],
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} warn_lines={len(warn_lines)}")
-        r = _run([str(broken / "plainkeep"), "v_ok"], _shim_env(broken, PLAINKEEP_CORE="require"))
+        r = _run([str(broken / "plainkeep"), "v_ok"], _shim_env(vault, PLAINKEEP_CORE="require"))
         check("[shim] broken-but-executable core · require fails loudly (exit 1)",
               r.returncode == 1 and r.stdout == "" and "no live core binary" in r.stderr,
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
@@ -963,12 +1176,12 @@ def _shim_checks(binary: str) -> None:
         # probe it (no marker file at all); auto/require must EXEC it with the verb's argv. This is
         # what makes "the matrix ran the floor" a claim with evidence behind it.
         for mode, want_exec in (("off", False), ("auto", True), ("require", True)):
-            traced = _clone_vault(base, tmps, f"pk-shim-trace-{mode}-")
+            traced = _clone_engine(nocore, tmps, f"pk-shim-trace-{mode}-")
             marker = traced / "_core_was_used"
             tracer = traced / "_fake_core"
             _write_tracer(tracer, marker)
             r = _run([str(traced / "plainkeep"), "v_ok"],
-                     _shim_env(traced, PLAINKEEP_CORE=mode, PLAINKEEP_CORE_BIN=str(tracer)))
+                     _shim_env(vault, PLAINKEEP_CORE=mode, PLAINKEEP_CORE_BIN=str(tracer)))
             got = marker.read_text(encoding="utf-8") if marker.exists() else ""
             check(f"[shim] mode pinning · PLAINKEEP_CORE={mode} "
                   f"{'execs the core' if want_exec else 'never touches the core'}",
@@ -976,14 +1189,252 @@ def _shim_checks(binary: str) -> None:
                   f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} marker={got!r}")
 
         # 8. An unrecognized mode is a usage error, not a silent choice.
-        r = _run([shim, "v_ok"], _shim_env(base, PLAINKEEP_CORE="Require"))
+        r = _run([shim, "v_ok"], _shim_env(vault, PLAINKEEP_CORE="Require"))
         check("[shim] unknown PLAINKEEP_CORE value is a loud usage error (exit 2)",
               r.returncode == 2 and r.stdout == "" and "unknown PLAINKEEP_CORE" in r.stderr,
               f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+
+        # ----------------------------------------------------------------------------------------
+        # 9. TASK 2 — DISJOINTNESS (ADR-014 D3), refused in BOTH directions and in BOTH dispatchers.
+        #
+        # Task 1b wrote the rule and could not turn it on: while the engine was `<vault>/bin`, every
+        # existing vault violated it. It becomes satisfiable in this task, so it is enforced in this
+        # task. Exit 5 (`EXIT_DENY`) — a refusal about WHERE, like the walled-off/cloud-sync verdict
+        # it sits beside — never exit 2, which means "nothing was selected".
+        #
+        # Three shapes, and the third is the one a single naive `startswith` gets wrong:
+        #   same      — the data root IS the engine root
+        #   inside    — the data root is UNDER the engine root
+        #   contains  — the engine root is under the DATA root (the Phase 1 shape, i.e. every vault
+        #               that still has a copy of the engine in it)
+        # ----------------------------------------------------------------------------------------
+        overlap_engine = _clone_engine(base, tmps, "pk-shim-overlap-")
+        # A marked vault AT the engine root, and one marked ancestor CONTAINING it, so each case is
+        # refused for the disjointness reason and not for a missing marker.
+        _mark_vault(overlap_engine)
+        container = overlap_engine.parent
+        _mark_vault(container)
+        inside = overlap_engine / "bin"          # a real directory under the engine
+        _mark_vault(inside)
+        overlap_cases = (
+            ("the data root IS the engine root", overlap_engine, "IS the engine tree"),
+            ("the data root is INSIDE the engine tree", inside, "is inside the engine tree"),
+            ("the engine tree is INSIDE the data root", container, "is inside it"),
+        )
+        for label, home, expect in overlap_cases:
+            for mode, extra in (("off", {}),
+                                ("require", {"PLAINKEEP_CORE_BIN": str(
+                                    overlap_engine / ".local" / "bin" / "plainkeep-core")})):
+                r = _run([str(overlap_engine / "plainkeep"), "v_ok"],
+                         _shim_env(home, PLAINKEEP_CORE=mode, **extra), cwd=nowhere)
+                check(f"[engine] disjointness · {label} → EXIT_DENY (5) (mode={mode})",
+                      r.returncode == 5 and expect in r.stderr and r.stdout == "",
+                      f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} want={expect!r}")
+        # ...and the refusal is byte-identical across the two dispatchers, which is the whole reason
+        # discovery is ONE shared module rather than a port and a differential.
+        f_out = _run([str(overlap_engine / "plainkeep"), "v_ok"],
+                     _shim_env(overlap_engine, PLAINKEEP_CORE="off"), cwd=nowhere)
+        c_out = _run([str(overlap_engine / ".local" / "bin" / "plainkeep-core"), "v_ok"],
+                     _shim_env(overlap_engine), cwd=nowhere)
+        check("[engine] disjointness · floor and core refuse byte-identically",
+              (f_out.returncode, f_out.stdout, f_out.stderr)
+              == (c_out.returncode, c_out.stdout, c_out.stderr),
+              f"floor=({f_out.returncode},{f_out.stdout!r},{f_out.stderr!r}) "
+              f"core=({c_out.returncode},{c_out.stdout!r},{c_out.stderr!r})")
+
+        # 10. TASK 2 — an INCOMPLETE engine refuses BEFORE it dispatches, in both dispatchers.
+        #
+        # This is the inverted `require_engine`: Task 1b asked whether the VAULT carried the engine,
+        # which stopped being a sensible question the moment the engine moved out. The seam is the
+        # same one (both dispatchers run it, so the two refusals are one string), the subject is now
+        # the code. Driven by REMOVING a file the probe names — a guard that is never exercised
+        # against the failure it describes is a green test of nothing.
+        for missing in ("bin/lib/resolver.py", "VERSION"):
+            hurt = _clone_engine(base, tmps, "pk-shim-incomplete-")
+            (hurt / missing).unlink()
+            for mode, extra in (("off", {}),
+                                ("require", {"PLAINKEEP_CORE_BIN": str(
+                                    hurt / ".local" / "bin" / "plainkeep-core")})):
+                r = _run([str(hurt / "plainkeep"), "v_ok"],
+                         _shim_env(vault, PLAINKEEP_CORE=mode, **extra))
+                check(f"[engine] an engine missing {missing} REFUSES before dispatch (mode={mode})",
+                      r.returncode == 2 and "is incomplete" in r.stderr and missing in r.stderr
+                      and r.stdout == "",
+                      f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+
+        # 11. TASK 2 — VERB DISCOVERY DOES NOT READ THE REPOSITORY.
+        #
+        # The gate asks for this to be PROVEN, not inferred from a passing test that would also pass
+        # if the repo tree were being read. Two independent proofs, because either one alone is
+        # weak:
+        #
+        #   (a) POSITIVE-BY-ABSENCE. The installed engine has `v_ok` DELETED from it while the
+        #       repository's `bin/` still carries 35 real verbs including `capture` and `help`.
+        #       Dispatching `capture` — a verb that unquestionably exists in the repo — must answer
+        #       "unknown verb" (exit 4). A dispatcher reading the repo tree resolves it and exits 0.
+        #       This proof cannot pass for the wrong reason: there is no arrangement in which the
+        #       repo is read AND `capture` is unknown.
+        #
+        #   (b) UNREADABLE SOURCE. A full copy of the repository's engine-owned tree is made, an
+        #       engine is installed FROM it, and then every directory in the copy's `bin/` is
+        #       chmod 0000. Any `open()` under it now fails with EACCES. The dispatch still has to
+        #       succeed. (The copy stands in for the repository: making the real `bin/` unreadable
+        #       mid-suite would break every other suite in the batch and leave the checkout wedged
+        #       if this process died between the chmod and its restore.)
+        stripped = _clone_engine(base, tmps, "pk-shim-norepo-")
+        shutil.rmtree(stripped / "bin" / "v_ok")
+        r = _run([str(stripped / "plainkeep"), "capture", "x"],
+                 _shim_env(vault, PLAINKEEP_CORE="off"))
+        repo_has = (ENGINE_SRC / "capture" / "run.py").is_file()
+        check("[engine] no-repo-read (a) · a verb the REPO has but the installed engine does not "
+              "is unknown (exit 4)",
+              repo_has and r.returncode == 4 and "capture" in r.stderr,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r} repo_has_capture={repo_has}")
+        r = _run([str(stripped / ".local" / "bin" / "plainkeep-core"), "capture", "x"],
+                 _shim_env(vault))
+        check("[engine] no-repo-read (a) · ...and the core answers the same",
+              repo_has and r.returncode == 4 and "capture" in r.stderr,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+        _no_repo_read_unreadable_source(binary, tmps, vault)
+
+        # 12. TASK 2 — the ownership manifest is present in the installed tree, ENUMERATED. A table
+        # nothing executes is paperwork: this installs from the real repository through the real
+        # installer and checks every path the manifest claims, plus the counts, so a verb quietly
+        # dropping its `cmd.json` reddens here rather than at a user's shell.
+        _installed_manifest_checks(tmps)
     finally:
         fx.cleanup()
         for d in tmps:
             shutil.rmtree(d, ignore_errors=True)
+
+
+def _no_repo_read_unreadable_source(binary: str, tmps: list[Path], vault: Path) -> None:
+    """Proof (b): install an engine from a source tree, then make that source tree UNREADABLE and
+    dispatch anyway.
+
+    Restored in a `finally` whatever happens, because a 0000 directory that outlives the run is a
+    temp dir nothing can delete. The copy is what gets locked, never the repository — see the note
+    at the call site."""
+    src = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-norepo-src-")))
+    tmps.append(src)
+    inst = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-norepo-inst-")))
+    tmps.append(inst)
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+    for rel in enginetree.OWNED_TREES:
+        d = src / rel
+        d.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(REPO / rel, d, ignore=ignore, symlinks=True)
+    for rel in enginetree.OWNED_FILES:
+        shutil.copy2(REPO / rel, src / rel)
+    (src / ".local" / "bin").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(binary, src / ".local" / "bin" / "plainkeep-core")
+    env = _shim_env(vault, PLAINKEEP_ENGINE_HOME=inst, PLAINKEEP_CORE="off")
+    r = _run([PY, str(src / "bin" / "lib" / "enginetree.py"), "--install", str(src)], env)
+    if r.returncode != 0:
+        check("[engine] no-repo-read (b) · install from a source checkout", False,
+              f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+        return
+    installed = inst / VERSIONS_DIRNAME / "current"
+    locked = [d for d in [src / "bin", *(src / "bin").rglob("*")] if d.is_dir()]
+    try:
+        for d in sorted(locked, key=lambda p: len(p.parts), reverse=True):
+            d.chmod(0o000)
+        unreadable = not os.access(src / "bin" / "lib", os.R_OK)
+        out = _run([str(installed / "plainkeep"), "help"], env)
+        core = _run([str(installed / ".local" / "bin" / "plainkeep-core"), "help"], env)
+        check("[engine] no-repo-read (b) · both dispatchers work with the SOURCE tree's bin/ "
+              "chmod 0000",
+              unreadable and out.returncode == 0 and core.returncode == 0
+              and "plainkeep capture" in out.stdout and out.stdout == core.stdout,
+              f"source_unreadable={unreadable} floor=(rc={out.returncode},err={out.stderr[:200]!r}) "
+              f"core=(rc={core.returncode},err={core.stderr[:200]!r})")
+    finally:
+        for d in sorted(locked, key=lambda p: len(p.parts)):
+            try:
+                d.chmod(0o755)
+            except OSError:
+                pass
+
+
+# The ownership manifest, as COUNTS as well as paths. Pinned like EXPECTED_CATALOG_INVOCATIONS and
+# for the same reason: a per-verb loop shrinks silently when a verb directory disappears, because
+# there is one fewer thing to iterate. Raise these in the commit that adds a verb or a lib module.
+#
+# The plan section's prose says "×34" verbs and "×19" lib modules. Both were already stale when this
+# task started — measured at BASE 79b6b6e: 35 verb directories (35 run.py, 35 cmd.json) and 23 lib
+# modules, which Task 1a/1b/1c grew (vaultreg, vaultroot, wall) and this task grew again
+# (enginetree). The numbers below are what the tree HAS, not what the plan remembered.
+EXPECTED_ENGINE_VERBS = 35
+EXPECTED_ENGINE_LIB_MODULES = 24
+
+
+def _installed_manifest_checks(tmps: list[Path]) -> None:
+    """Install the REAL engine from the repository and check every path the ownership table assigns
+    to it is present in the installed tree — and that the running dispatcher resolves FROM it."""
+    inst = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-manifest-")))
+    tmps.append(inst)
+    env = dict(os.environ, PLAINKEEP_ENGINE_HOME=str(inst))
+    env.pop("PLAINKEEP_HOME", None)
+    r = _run([PY, str(ENGINE_SRC / "lib" / "enginetree.py"), "--install", str(REPO)], env)
+    check("[manifest] the real repository installs as an engine tree",
+          r.returncode == 0, f"rc={r.returncode} out={r.stdout!r} err={r.stderr!r}")
+    if r.returncode != 0:
+        return
+    root = Path(os.path.realpath(inst / VERSIONS_DIRNAME / "current"))
+
+    # (1) The enumerated set, path by path — the four the ownership table assigns to the engine
+    # beyond `bin/**` and VERSION included, because those are the ones no task had moved before this
+    # one and the ones an installer is most likely to forget.
+    for rel in ("VERSION", "plainkeep", "bin/lib/resolver.py", "bin/lib/enginetree.py",
+                "bin/ui/version.txt", "bin/share/worker/worker.js",
+                "templates/verb/run.py", "templates/verb/cmd.json",
+                "skills/operate-plainkeep/SKILL.md"):
+        check(f"[manifest] installed tree carries {rel}", (root / rel).is_file(),
+              f"missing under {root}")
+    ray = sorted((root / "frontends" / "raycast").glob("*.sh"))
+    check("[manifest] installed tree carries frontends/raycast/*.sh", len(ray) >= 4,
+          f"{[p.name for p in ray]}")
+
+    # (2) The COUNTS, pinned. Every verb directory carries BOTH sidecars, and every lib module made
+    # the trip: an installer that copied `bin/` but skipped a dotted or oddly-named child would pass
+    # a path-by-path spot check and fail this.
+    verbs = sorted(d for d in (root / "bin").iterdir() if d.is_dir() and d.name != "lib")
+    with_run = [d for d in verbs if (d / "run.py").is_file()]
+    with_cmd = [d for d in verbs if (d / "cmd.json").is_file()]
+    check(f"[manifest] {EXPECTED_ENGINE_VERBS} verb dirs, each with run.py AND cmd.json",
+          len(verbs) == len(with_run) == len(with_cmd) == EXPECTED_ENGINE_VERBS,
+          f"dirs={len(verbs)} run.py={len(with_run)} cmd.json={len(with_cmd)} "
+          f"expected={EXPECTED_ENGINE_VERBS}; if you ADDED a verb, raise EXPECTED_ENGINE_VERBS in "
+          f"the same commit — never edit it to make this pass")
+    libs = sorted((root / "bin" / "lib").glob("*.py"))
+    check(f"[manifest] {EXPECTED_ENGINE_LIB_MODULES} bin/lib modules installed",
+          len(libs) == EXPECTED_ENGINE_LIB_MODULES,
+          f"got {len(libs)}: {[p.name for p in libs]}")
+
+    # (3) RESOLVED FROM IT, which is the half a presence check cannot give. The installed engine's
+    # own resolver is asked where `capture` lives, with PLAINKEEP_HOME pointed at a throwaway vault:
+    # the answer must be inside the installed tree and nowhere near the repository.
+    vault = Path(os.path.realpath(tempfile.mkdtemp(prefix="pk-manifest-vault-")))
+    tmps.append(vault)
+    _mark_vault(vault)
+    renv = dict(env, PLAINKEEP_HOME=str(vault))
+    got = _run([PY, str(root / "bin" / "lib" / "resolver.py"), "capture"], renv)
+    resolved = got.stdout.strip()
+    check("[manifest] the installed engine resolves its verbs FROM the installed tree",
+          got.returncode == 0 and resolved.startswith(str(root))
+          and not resolved.startswith(str(REPO) + "/"),
+          f"rc={got.returncode} resolved={resolved!r} root={str(root)!r}")
+
+    # (4) The engine's own VERSION is what the manifest reports, read as `<engine>/VERSION` —
+    # `manifest.py:VERSION_FILE` is `BIN.parent / "VERSION"`, which is the line the plan section
+    # calls load-bearing: move `bin/` without it and every plainkeep.json reports 0.0.0.
+    ver = _run([PY, "-c",
+                "import sys;sys.path.insert(0,sys.argv[1]);"
+                "from lib import manifest;print(manifest._engine_version())",
+                str(root / "bin")], renv)
+    check("[manifest] manifest.py reads <engine>/VERSION, not 0.0.0",
+          ver.stdout.strip() == ENGINE_VERSION,
+          f"got {ver.stdout.strip()!r} want {ENGINE_VERSION!r} err={ver.stderr[:200]!r}")
 
 
 # --------------------------------------------------------------------------------------------------

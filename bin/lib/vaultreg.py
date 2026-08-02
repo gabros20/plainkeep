@@ -168,6 +168,7 @@ def validate_registry(data, f) -> dict:
     if not isinstance(vaults, list):
         raise VaultError(f"vault registry has no 'vaults' list: {f}")
     seen: dict[str, set] = {"id": set(), "name": set(), "path": set()}
+    out = []
     for i, v in enumerate(vaults):
         if not isinstance(v, dict):
             raise VaultError(f"vault registry entry {i} is not an object: {f}")
@@ -177,17 +178,28 @@ def validate_registry(data, f) -> dict:
             val = v.get(key)
             if not isinstance(val, str) or not ok(val):
                 raise VaultError(f"vault registry entry {i} has an invalid {key!r}: {f}")
+            # "Registry paths are canonical" is enforced HERE, at the one boundary every read passes
+            # through, rather than at each of the four places that compare one. `vault register`
+            # already writes them canonical; a HAND-EDITED entry, or one whose parent later became a
+            # symlink, did not have to be — and vaultroot compares `entry["path"]` against the
+            # canonical root, so the walk-up refused a vault that --vault and the registry default
+            # both resolved happily, with a `rebind` remediation for a vault that never moved.
+            # It also makes the duplicate check below compare canonical-to-canonical, so two
+            # spellings of one vault refuse as the ambiguity they are instead of reading as two.
+            if key == "path":
+                val = canonical(val)
             # Duplicates are a REFUSAL, not a last-wins: two entries claiming one name/path/id means
             # the file is ambiguous, and guessing which the user meant is how a vault gets written to
             # by accident.
             if val in seen[key]:
                 raise VaultError(f"vault registry has a duplicate {key} {val!r}: {f}")
             seen[key].add(val)
+        out.append({**v, "path": canonical(v["path"])})
     default = data.get("default")
     if default is not None:
         if not isinstance(default, str) or default not in seen["id"]:
             raise VaultError(f"vault registry 'default' does not name a registered vault: {f}")
-    return {"schema": REGISTRY_SCHEMA, "default": default, "vaults": vaults}
+    return {"schema": REGISTRY_SCHEMA, "default": default, "vaults": out}
 
 
 def registry_bytes(reg: dict) -> str:

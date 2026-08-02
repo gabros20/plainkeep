@@ -923,6 +923,63 @@ def case_status_reports_the_real_mechanism() -> None:
               data["selected_by"] == "PLAINKEEP_HOME", str(data["selected_by"]))
 
 
+# --------------------------------------------------------------------------------------------
+# L. A registry `path` that is not canonical must not make the chain contradict itself.
+#
+# `validate_registry` only ever checked that a path starts with "/", while vaultroot compared
+# `entry["path"]` against the CANONICAL root. An entry spelled through a symlink — a hand edit, or a
+# vault whose parent later became one — therefore got two different answers from three mechanisms:
+# --vault and the registry default resolved fine (both go through validate(), which canonicalizes),
+# while the walk-up from inside the same vault refused with "…but vault 'gg' is registered at
+# <the link>" and a `rebind` remediation for a vault that never moved.
+# --------------------------------------------------------------------------------------------
+def case_noncanonical_registry_path() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        sandbox = Path(os.path.realpath(td))
+        (sandbox / "home").mkdir()
+        holder = sandbox / "holder"
+        holder.mkdir()
+        real = holder / "realG"
+        vid = make_vault(real)
+        link = sandbox / "linkG"
+        os.symlink(real, link)
+
+        # Written by hand: `vault register` canonicalizes, so the only way to reach this state is a
+        # hand edit or a parent that became a symlink after registration. Both happen.
+        cfg = sandbox / "config"
+        cfg.mkdir(parents=True, exist_ok=True)
+        (cfg / "registry.json").write_text(json.dumps(
+            {"schema": "plainkeep.registry/1", "default": vid,
+             "vaults": [{"id": vid, "name": "gg", "path": str(link)}]}, indent=2) + "\n",
+            encoding="utf-8")
+
+        env = base_env(sandbox)
+        for label, argv, cwd in (("--vault gg", ["--vault", "gg", "capture", "nc1"], sandbox),
+                                 ("the registry default", ["capture", "nc2"], sandbox),
+                                 ("walk-up from inside", ["capture", "nc3"], real)):
+            before = snapshot(sandbox)
+            r = _run([str(REPO / "plainkeep"), *argv], cwd, {**env, "PLAINKEEP_CORE": "off"})
+            created = new_files(sandbox, before)
+            check(f"a symlink-spelled registry path: {label} resolves the vault", r.returncode == 0,
+                  f"rc={r.returncode} {r.stdout}{r.stderr}")
+            check(f"...and {label} lands in the SAME canonical root as the others",
+                  any(f.startswith(os.path.join("holder", "realG", "inbox")) for f in created),
+                  str(sorted(created)))
+
+        # ...and the registry's own duplicate check now sees two spellings of one vault as one path,
+        # which is the fail-closed direction: an ambiguous registry refuses rather than last-wins.
+        (cfg / "registry.json").write_text(json.dumps(
+            {"schema": "plainkeep.registry/1", "default": None,
+             "vaults": [{"id": vid, "name": "gg", "path": str(link)},
+                        {"id": "11111111-1111-1111-1111-111111111111", "name": "hh",
+                         "path": str(real)}]}, indent=2) + "\n", encoding="utf-8")
+        r = _run([str(REPO / "plainkeep"), "--vault", "gg", "capture", "dup"], sandbox,
+                 {**env, "PLAINKEEP_CORE": "off"})
+        check("two spellings of one path in the registry are a DUPLICATE, not two vaults",
+              r.returncode == EXIT_USAGE and "duplicate path" in (r.stdout + r.stderr),
+              f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+
 def main() -> int:
     case_two_vault_identity()
     case_negative_twin()
@@ -936,6 +993,7 @@ def main() -> int:
     case_canonical_export()
     case_vault_without_engine()
     case_status_reports_the_real_mechanism()
+    case_noncanonical_registry_path()
 
     print(f"{BOLD}Vault DISCOVERY (ADR-014 Task 1b) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

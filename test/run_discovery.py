@@ -570,6 +570,80 @@ def case_canonical_export() -> None:
                   f"{data['vault_id_env']} != {vid}")
 
 
+# --------------------------------------------------------------------------------------------
+# J. A registered vault that does NOT carry a copy of the engine.
+#
+# Every other fixture in this file is handed the engine by `make_vault` (it symlinks `bin/` and the
+# shim in), which is what makes the two-vault identity test above dispatchable at all — and it is
+# also what hid this: an ORDINARY second vault, which is what every real user's second vault looks
+# like, is a directory with a marker and nothing else.
+#
+# Phase 1 still runs the engine from INSIDE the selected root (the floor spawns
+# `$PLAINKEEP_HOME/bin/lib/guardrail.py`; the core's resolver looks under the same root), so such a
+# vault cannot be dispatched for. That constraint is Phase 2 Task 2's to remove. What is gated HERE
+# is the DIAGNOSIS: before this case both dispatchers failed at the far end of the dispatch, in two
+# different ways and both untruthfully — the floor let CPython say "can't open file
+# '<vault>/bin/lib/guardrail.py'" (exit 2, no plainkeep in the message), and the core's resolver,
+# finding no verb under the root, said "unknown verb 'capture'" (exit 4) and sent the operator to
+# `plainkeep help`, which fails identically. Neither mentioned the engine.
+# --------------------------------------------------------------------------------------------
+def case_vault_without_engine() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        sandbox = Path(os.path.realpath(td))
+        (sandbox / "home").mkdir()
+        # A dispatchable vault (the default) and an ordinary notes vault beside it: marker, no engine.
+        home_vault = sandbox / "vault-engine"
+        make_vault(home_vault)
+        register(sandbox, home_vault, "alpha", default=True)
+        notes = sandbox / "mynotes"
+        notes.mkdir()
+        vaultfx.mark_vault(notes)
+        register(sandbox, notes, "mynotes")
+
+        env = base_env(sandbox)
+        for argv, label in ((["--vault", "mynotes", "capture", "hello"], "capture"),
+                            (["--vault", "mynotes", "help"], "help")):
+            runs = {}
+            for path in PATHS:
+                if path != "floor" and not core_live():
+                    continue
+                before = snapshot(sandbox)
+                r = invoke(path, argv, cwd=sandbox, env=env)
+                runs[path] = r
+                out = r.stdout + r.stderr
+                check(f"[{path}] --vault a vault with no engine ({label}): refuses with EXIT_USAGE (2)",
+                      r.returncode == EXIT_USAGE, f"rc={r.returncode} {out}")
+                # The message has to be TRUE. "unknown verb 'capture'" was false (capture exists) and
+                # the CPython traceback was not a plainkeep refusal at all.
+                check(f"[{path}] ...naming the engine as the reason, not the verb ({label})",
+                      "does not carry the plainkeep engine" in out and "unknown verb" not in out, out)
+                check(f"[{path}] ...naming the vault and the missing file ({label})",
+                      "mynotes" in out and str(notes / "bin" / "lib" / "guardrail.py") in out, out)
+                check(f"[{path}] ...and writes nothing ({label})", not new_files(sandbox, before),
+                      str(sorted(new_files(sandbox, before))))
+            # The brief's "both dispatchers must agree byte-for-byte" — this invocation shape was
+            # the one place they disagreed on BOTH text and exit code.
+            if len(runs) == len(PATHS):
+                sigs = {p: (r.returncode, r.stdout, r.stderr) for p, r in runs.items()}
+                check(f"floor, core and direct refuse a no-engine vault identically ({label})",
+                      len(set(sigs.values())) == 1,
+                      "; ".join(f"{p}={s[0]}/{s[2]!r}" for p, s in sigs.items()))
+
+        # The constraint is REAL, not an artefact of the probe: the same vault, once it carries the
+        # engine, dispatches. Without this the case above would also pass against a build that
+        # refused every --vault outright.
+        os.symlink(REPO / "bin", notes / "bin")
+        shutil.copy2(REPO / "plainkeep", notes / "plainkeep")
+        os.chmod(notes / "plainkeep", 0o755)
+        before = snapshot(sandbox)
+        r = _run([str(REPO / "plainkeep"), "--vault", "mynotes", "capture", "nowitworks"], sandbox,
+                 {**env, "PLAINKEEP_CORE": "off"})
+        created = new_files(sandbox, before)
+        check("...and once that vault DOES carry the engine, the same invocation succeeds into it",
+              r.returncode == 0 and any(f.startswith("mynotes" + os.sep + "inbox") for f in created),
+              f"rc={r.returncode} {r.stdout}{r.stderr} {sorted(created)}")
+
+
 def main() -> int:
     case_two_vault_identity()
     case_negative_twin()
@@ -580,6 +654,7 @@ def main() -> int:
     case_policy_denied_location()
     case_selector_position_and_parity()
     case_canonical_export()
+    case_vault_without_engine()
 
     print(f"{BOLD}Vault DISCOVERY (ADR-014 Task 1b) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

@@ -38,6 +38,12 @@ practice that is enforced by WHERE this runs: both dispatchers call `--select` a
 before the gate (which is what appends the audit line) and before the resolver (which is what scans
 plugins).
 
+**A selected root still has to be DISPATCHABLE.** Phase 1 runs the engine from inside the vault it
+acts on, so a valid, registered, ordinary notes vault — a directory with a marker and nothing else,
+which is what a second vault looks like — cannot be dispatched for. `require_engine()` says that in
+one shared refusal instead of letting each dispatcher fail its own way at the far end of the
+dispatch. It does not lift the constraint; removing it is Phase 2 Task 2 (`PLAINKEEP_ENGINE`).
+
 **Refusal codes.** Unset / invalid / unregistered / structurally-not-a-vault → 2 (`EXIT_USAGE`).
 A policy-denied location — a vault inside a walled-off or cloud-sync tree, per `guardrail.py`'s
 markers — → 5 (`EXIT_DENY`). Neither leaves a log, an index or a directory behind.
@@ -82,6 +88,14 @@ MECHANISMS = ("--vault", "PLAINKEEP_HOME", "marker walk-up from $PWD", "registry
 # The engine's own tree — where the CODE is, never where the data is. `resolver.py` draws the same
 # distinction on the same line number for the same reason.
 ENGINE_BIN = Path(__file__).resolve().parents[1]
+
+# The file whose presence makes a selected root DISPATCHABLE, relative to that root. Phase 1 still
+# runs the engine from INSIDE the vault it acts on — the floor spawns `$PLAINKEEP_HOME/bin/lib/
+# guardrail.py` (plainkeep:98) and the core's resolver looks under the same root (resolver.ts's
+# `engineBin()`) — so an ordinary notes vault, which is a directory with a marker and nothing else,
+# cannot be dispatched for. Relocating the engine is Phase 2 Task 2's job (`PLAINKEEP_ENGINE`); this
+# constant does not lift the constraint, it makes the constraint SAY SO.
+ENGINE_PROBE = ("bin", "lib", "guardrail.py")
 
 
 def bootstrap_hint(path) -> str:
@@ -286,6 +300,40 @@ def active_id() -> str | None:
 
 
 # --- the dispatcher entry point -------------------------------------------------------------------
+def require_engine(sel: Selection) -> None:
+    """Refuse a SELECTED root that carries no copy of the engine, before either dispatcher tries to
+    run one out of it.
+
+    This is a diagnosis, not a policy: selection genuinely succeeded, the vault is genuinely valid,
+    and the invocation genuinely cannot proceed. Without it the failure landed at the far end of the
+    dispatch, in two different places and untruthfully in both — the floor reached
+    `"$PY" "$PK/bin/lib/guardrail.py"` and let CPython answer ("can't open file '<vault>/bin/lib/
+    guardrail.py'", exit 2, with no plainkeep in the message), while the core got as far as the
+    resolver, found no verb directory under the root and said `unknown verb 'capture'` (exit 4) —
+    a FALSE reason, since `capture` exists, with a remediation (`plainkeep help`) that fails the
+    same way and so loops.
+
+    It lives HERE, in the one function both dispatchers run, rather than as a check in each of them:
+    two spellings of one refusal is exactly the drift `--select` exists to prevent, and the brief
+    requires the two to agree byte-for-byte."""
+    p = Path(sel.root).joinpath(*ENGINE_PROBE)
+    if p.is_file():
+        return
+    name = None
+    try:
+        entry = vaultreg.entry_for_path(vaultreg.read_registry(), sel.root)
+        name = entry["name"] if entry else None
+    except VaultError:
+        pass          # a registry we cannot read must not turn THIS refusal into a different one
+    who = f"vault '{name}'" if name else "the selected vault"
+    raise VaultError(
+        f"{who} at {sel.root} does not carry the plainkeep engine (no {p}) — selection itself "
+        f"SUCCEEDED, via {sel.mechanism}; Phase 1 still runs the engine from inside the vault it "
+        f"acts on, so a vault holding only notes cannot be dispatched for",
+        hint="put the engine in that vault (script/setup), or select one that already carries it:"
+             "\n    plainkeep vault list")
+
+
 def _select_cli(argv: list[str]) -> int:
     """`vaultroot.py --select [--vault X]` — run the chain and print the answer for a DISPATCHER to
     export. Two lines on stdout: the canonical root, then the vault id. Any refusal goes to stderr
@@ -307,6 +355,7 @@ def _select_cli(argv: list[str]) -> int:
         selector = argv[i + 1]
     try:
         sel = discover(selector)
+        require_engine(sel)
     except VaultError as e:
         sys.stderr.write("plainkeep: " + e.message + (f"\n  {e.hint}" if e.hint else "") + "\n")
         return e.code

@@ -17,6 +17,7 @@ import { mainCli } from "./guardrail.js";
 import {
   artifact,
   checkArgv,
+  deliveredDigestProblems,
   enginePython,
   ensureUv,
   loadPin,
@@ -156,6 +157,19 @@ async function coreProvision(spec: string, rest: string[]): Promise<CoreResult> 
       return { stdout: await ensureUv(root, { allowNetwork: !offline }), code: 0 };
     }
     if (spec === "sync") {
+      // THE CHECKSUM GATE FIRST, before uv is even downloaded — the same order `provision.sync()`
+      // uses, and for the same reason: a tampered lock must fail its checksum rather than be
+      // provisioned from.
+      const tampered = deliveredDigestProblems(root);
+      if (tampered.length) {
+        return {
+          stderr:
+            "plainkeep: refusing to provision from a delivered project that does not match its " +
+            "recorded checksums:\n  " + tampered.join("\n  ") +
+            "\n  the engine tree was modified after it was installed — reinstall it",
+          code: 5,
+        };
+      }
       const uv = await ensureUv(root, { allowNetwork: !offline });
       const extras: string[] = [];
       for (let i = 0; i < rest.length - 1; i++) if (rest[i] === "--extra") extras.push(rest[i + 1]!);

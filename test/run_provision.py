@@ -667,6 +667,21 @@ def case_core_parity(tmp: Path) -> None:
     check("4a parity: the core refuses offline with the same three facts the module gives",
           c.returncode != 0 and "shasum -a 256 -c -" in c.stderr, c.stderr[:200])
 
+    # THE CHECKSUM GATE ON THE CORE PATH. On a machine with no system python3 this IS the
+    # provisioning path, so 4b's "a tampered lock fails its checksum rather than installing" has to
+    # hold here too — a version of the gate that only the Python side enforced would hold exactly on
+    # the machines that do not need it.
+    c = run(str(core), "--core-provision", "sync", "--offline")
+    check("4b: an INTACT tree gets past the core's checksum gate (to the offline uv step)",
+          "recorded checksums" not in c.stderr, c.stderr[:200])
+    unseal_write(engine / "uv.lock", (engine / "uv.lock").read_text(encoding="utf-8") + "\n# tampered\n")
+    c = run(str(core), "--core-provision", "sync", "--offline")
+    check("4b GATE: the CORE refuses a tampered lock, on the checksum, before uv is downloaded",
+          c.returncode == EXIT_DENY and "uv.lock does not match its recorded checksum" in c.stderr
+          and "cannot download uv" not in c.stderr, f"rc={c.returncode} {c.stderr[:250]}")
+    check("4b: and the Python module reaches the same verdict about the same tree",
+          enginetree.digest_problems(engine, only=("pyproject.toml", "uv.lock")) != [])
+
     # The pinned engine interpreter — ADR-013's carried inversion, and what dispatch.ts now spawns.
     c = run(str(core), "--core-provision", "python")
     check("4a: an UNPROVISIONED engine reports no interpreter (exit 4) rather than guessing one",

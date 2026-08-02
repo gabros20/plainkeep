@@ -278,6 +278,42 @@ export function checkArgv(engineRoot: string, uv: string): string[] {
   return [uv, "lock", "--check", "--no-config", "--project", engineRoot];
 }
 
+// THE CHECKSUM GATE, ported (`enginetree.digest_problems(root, only=…)`), and this is not a
+// convenience: on a machine with no system python3 THIS is the provisioning path, so a version of it
+// that skipped the gate would mean "a tampered lock fails its checksum rather than installing" held
+// only on machines that did not need this file. The narrow form — the two files about to be handed to
+// uv — for the same reason the Python side passes `only`: two digests instead of ~114.
+//
+// Scoped to an INSTALLED tree (`<…>/engine/<version>/`), matching `enginetree._looks_installed`: a
+// contributor's checkout has no manifest and is not claiming to.
+export function deliveredDigestProblems(engineRoot: string): string[] {
+  const version = path.basename(engineRoot);
+  if (path.basename(path.dirname(engineRoot)) !== "engine" || version.startsWith(".")) return [];
+  const manifest = path.join(path.dirname(engineRoot), ".digests", `${version}.json`);
+  let files: Record<string, string>;
+  try {
+    files = (JSON.parse(fs.readFileSync(manifest, "utf8")) as { files: Record<string, string> }).files;
+  } catch {
+    return [`no recorded checksums for this engine (${manifest} is missing or unreadable)`];
+  }
+  const problems: string[] = [];
+  for (const rel of ["pyproject.toml", "uv.lock"]) {
+    const want = files?.[rel];
+    if (!want) {
+      problems.push(`${rel} has no recorded checksum`);
+      continue;
+    }
+    try {
+      if (sha256File(path.join(engineRoot, rel)) !== want) {
+        problems.push(`${rel} does not match its recorded checksum`);
+      }
+    } catch {
+      problems.push(`${rel} is recorded but missing`);
+    }
+  }
+  return problems;
+}
+
 export function syncEnv(engineRoot: string, offline: boolean): Record<string, string> {
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),

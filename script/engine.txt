@@ -8,10 +8,19 @@
 #
 # One path per line; blank lines and #comments ignored.
 # Note: bin/share/worker/wrangler.toml is NOT in upstream (per-vault); see wrangler.toml.example.
+#
+# THIS IS NOT THE INSTALL MANIFEST, and the two are deliberately different sets (Phase 2 Task 2).
+# `enginetree.OWNED_TREES`/`OWNED_FILES` is what an installed ENGINE TREE contains — the code that
+# actually runs. This file is what `script/update` refreshes into a SOURCE CHECKOUT, which is a
+# superset: it also carries the docs, the agent adapters, `script/` itself and `requirements.txt`,
+# none of which an installed engine needs at runtime. A path may legitimately be in one and not the
+# other; what may NOT happen is a runtime-owned path being absent from BOTH, which is how an engine
+# file goes stale in every existing checkout. `templates/verb` was exactly that until this task.
 
 plainkeep
 VERSION
 bin
+templates/verb
 frontends
 skills
 AGENTS.md

@@ -269,3 +269,28 @@ fixing it needs.
 - **`plainkeep:31-34,42-43`** vs **`cli/src/core/dispatch.ts:236-243`** — the core gates before the
   venv probe where the floor probes first, so a refused verb costs the floor a probe and the core
   none. Undisclosed, and the matrix cannot detect a probe regression on refused verbs.
+
+## The engine tree (Phase 2 Task 2, ADR-017)
+
+- **`bin/lib/enginetree.py`** — an installed engine is read-only, so CPython cannot cache bytecode
+  beside it and every spawned verb re-compiles `bin/lib`: **+17.6 ms / +12.2%**, measured (ADR-017
+  Consequences). `PYTHONPYCACHEPREFIX` would recover it at the cost of a third location to reason
+  about; not taken, and deliberately left as a measured number rather than a fix.
+- **`bin/lib/enginetree.py:activate`** — rollback (`--activate <older-version>`) is unit-covered and
+  has never been used in the field. Nothing prunes old versions either: every install leaves a full
+  tree behind and there is no `--gc`.
+- **The XDG default path is barely exercised.** Almost every test drives `PLAINKEEP_ENGINE_HOME`, so
+  `${XDG_DATA_HOME:-$HOME/.local/share}/plainkeep/` itself is covered by one manual end-to-end run
+  and by `script/setup` on this machine only.
+- **`bin/plugin/run.py`'s trust ceiling has not been re-examined** against a plugin that now imports
+  `lib` through `$PLAINKEEP_ENGINE`. The variable is dispatcher-set and dispatcher-replaced, so the
+  path is not attacker-steerable — but the ceiling was designed when a plugin bootstrapped through
+  `$PLAINKEEP_HOME`, and nobody has re-read it since.
+- **No engine tree is signed or checksummed.** `verify()` proves a tree is COMPLETE, not that it is
+  the tree the installer wrote; anything that can write to `~/.local/share` can replace a verb in an
+  activated version. That is the same trust boundary as `~/.local/bin`, and it is stated rather than
+  closed.
+- **`enginetree.OWNED_TREES` vs `script/engine.txt`** are two manifests for two different questions
+  (what an installed engine contains vs what `script/update` refreshes into a checkout). Nothing
+  checks that a runtime-owned path appears in at least one of them — which is exactly how
+  `templates/verb` went stale in every existing checkout until this task.

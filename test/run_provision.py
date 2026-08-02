@@ -92,9 +92,47 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     results.append((name, bool(cond), detail))
 
 
+# THE FIXTURE VAULT every subprocess in this suite points at, set once in main().
+#
+# WHY IT EXISTS, and it is the whole of the integration failure this suite shipped with. The cells
+# below spawn the engine's own CLIs and the compiled core. They used to inherit `PLAINKEEP_HOME`
+# unset — so each child ran the discovery chain against whatever the RUNNER's cwd happened to resolve
+# to. In a git worktree that is nothing (`.plainkeep/` is gitignored, so the checkout carries no
+# marker) and the cells passed; in the developer's REAL checkout, which is a marked and registered
+# vault, discovery answered with the repository and the same cells went red — with refusals about the
+# repo, not about anything the cells were testing.
+#
+# That is the defect ADR-017's cwd-dependence fix already named once: **the suite's verdict depended
+# on the environment it happened to run in**. A data-only vault of the suite's own making removes the
+# variable — it is the shape `init` produces, it is not any real vault, and nothing about the machine
+# can change what the children see.
+FIXTURE_HOME: Path | None = None
+
+
+def base_env() -> dict:
+    """The environment every child gets. `PLAINKEEP_HOME` is pinned; `PLAINKEEP_CONFIG_HOME` is
+    already the sealed throwaway registry (`lib.hermetic.seal()`), so the real registry is neither
+    read nor written."""
+    return {"PLAINKEEP_HOME": str(FIXTURE_HOME)} if FIXTURE_HOME else {}
+
+
+def make_fixture_vault(root: Path) -> Path:
+    """A marked, DATA-ONLY vault — no `bin/`, no engine, nothing but the marker. Deliberately not a
+    copy of the repo: the engine is a separate tree (ADR-017), and a vault that carries one is
+    refused with exit 5, which is exactly the trap this helper exists to avoid."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".plainkeep").mkdir(exist_ok=True)
+    (root / ".plainkeep" / "vault.json").write_text(
+        json.dumps({"schema": "plainkeep.vault/1",
+                    "id": "00000000-0000-4000-8000-00000000f1x0",
+                    "created": "2026-08-02T00:00:00+00:00"}), encoding="utf-8")
+    return root
+
+
 def run(*argv: str, env: dict | None = None, cwd: Path | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(list(argv), capture_output=True, text=True,
-                          env={**os.environ, **(env or {})}, cwd=str(cwd) if cwd else None)
+                          env={**os.environ, **base_env(), **(env or {})},
+                          cwd=str(cwd) if cwd else None)
 
 
 def prov(engine: Path, *args: str) -> subprocess.CompletedProcess:
@@ -638,14 +676,46 @@ def case_frozen_sync_offline(tmp: Path) -> None:
 
 
 # --- 4a: the two implementations agree, and the O_NONBLOCK inversion --------------------------------
+# `.local/bin/plainkeep-core` is a BUILD ARTIFACT and it is gitignored, so a checkout can carry one
+# that predates the source beside it. PRESENCE is therefore the wrong question — this suite asked it
+# and paid for it: against a core built before Task 4, every parity cell compared `core=''` (the
+# binary answered "unknown verb") to a real Python value and went red, reporting a defect in the code
+# under test when the true fact was "your build is stale".
+#
+# CURRENCY is the right question, and the binary already publishes the answer: `--core-api intercepts`
+# exists so a harness never has to mirror what the binary handles. If `--core-provision` is not in
+# that list the cells SKIP, loudly, naming the one command that fixes it — a skip that says why beats
+# a red that misattributes.
+def core_speaks_provision(core: Path) -> bool:
+    r = run(str(core), "--core-api", "intercepts")
+    if r.returncode != 0:
+        return False
+    try:
+        return "--core-provision" in json.loads(r.stdout)["flags"]["always"]
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
+STALE_CORE = ("core-parity cells (the compiled plainkeep-core predates this task — it does not "
+              "publish --core-provision. Rebuild it: cd cli && bun run build)")
+
+
 def case_core_parity(tmp: Path) -> None:
     if not CORE.is_file():
         skipped.append("core-parity cells (no compiled plainkeep-core — build it: cd cli && bun run build)")
+        return
+    if not core_speaks_provision(CORE):
+        skipped.append(STALE_CORE)
         return
     engine = install_engine(tmp / "parity")
     core = engine / ".local" / "bin" / "plainkeep-core"
     if not core.is_file():
         skipped.append("core-parity cells (the installed engine carries no core binary)")
+        return
+    # Asked of the INSTALLED copy too, not just the checkout's: `_copy_owned` copies whatever was
+    # there, and the two can differ if a build lands mid-run.
+    if not core_speaks_provision(core):
+        skipped.append(STALE_CORE)
         return
 
     def both(*args: str) -> tuple[subprocess.CompletedProcess, subprocess.CompletedProcess]:
@@ -708,8 +778,10 @@ def case_core_parity(tmp: Path) -> None:
 
 
 def main() -> int:
+    global FIXTURE_HOME
     with tempfile.TemporaryDirectory(prefix="pk-provision-") as td:
         tmp = Path(td)
+        FIXTURE_HOME = make_fixture_vault(tmp / "fixture-vault")
         case_matrix()
         case_pin()
         case_offline_refusal(tmp)

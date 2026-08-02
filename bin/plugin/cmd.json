@@ -63,10 +63,12 @@
     },
     {
       "name": "sync",
-      "summary": "install packs' declared dependencies into plugins/.deps/; needs --yes",
+      "summary": "install packs' declared dependencies into <vault>/.plugin-deps/; needs --yes. Only the lockfile's declarations reach pip — there is no pass-through for arbitrary pip arguments",
       "risk": "confirm",
       "args": [
-        { "name": "name", "type": "string", "required": false, "help": "one pack, or every pack when omitted" }
+        { "name": "name", "type": "string", "required": false, "help": "one pack, or every pack when omitted" },
+        { "name": "--no-index", "type": "flag", "required": false, "help": "forbid pip any network index (offline install from --find-links)" },
+        { "name": "--find-links", "type": "string", "required": false, "help": "a local directory of wheels to install from; a URL is refused" }
       ]
     }
   ]

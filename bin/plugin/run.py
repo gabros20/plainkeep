@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 plainkeep plugin add <owner/repo|path>[@tag] | list | trust <name> | update <name> | remove <name>
-                 | sync [<name>]
+                 | sync [<name>] [--no-index] [--find-links=<dir>]
   — the plugin distribution surface (proposal Part 2.2). A pack is a directory of verb folders
   (run.py + cmd.json, the exact engine shape) plus a `plugin.json` manifest; it installs under
   `plugins/<name>/` (user-owned, survives `script/update`) and is discovered by the resolver like any
@@ -20,12 +20,17 @@ min_ops_version — it never auto-updates. The git-clone path exists but is not 
 (local paths only).
 
 THE DEPENDENCY CONTRACT (Phase 2 Task 3, ADR-018). A pack may DECLARE third-party requirements in
-`plugin.json`; `sync` installs them into `plugins/.deps/`, which both dispatchers prepend to a plugin
-spawn's PYTHONPATH. Declared, never inferred from imports. Recorded in the lockfile, so the overlay
-is rebuilt from what the user CONSENTED to rather than from whatever the pack ships today — and new
-declarations revoke trust for the same reason a grown risk surface does. The overlay is vault-local,
-so an engine update (which replaces the engine tree wholesale) re-applies it by construction; the one
-thing that invalidates it is the INTERPRETER changing, which `doctor` watches.
+`plugin.json`; `sync` installs them into `<vault>/.plugin-deps/`, which both dispatchers prepend to a
+plugin spawn's PYTHONPATH. Declared, never inferred from imports — and nothing but those declarations
+reaches pip's argv (`_pip_options`). Recorded in the lockfile, so the overlay is rebuilt from what the
+user CONSENTED to rather than from whatever the pack ships today — and new declarations revoke trust
+for the same reason a grown risk surface does. The overlay is vault-local, so an engine update (which
+replaces the engine tree wholesale) re-applies it by construction; the one thing that invalidates it
+is the INTERPRETER changing, which `doctor` watches.
+
+The overlay sits at the VAULT ROOT, not under `plugins/`: `plugins/` is the tree the resolver
+enumerates as packs, and an overlay inside it made every pip-installed distribution a candidate verb
+(see bin/lib/pluginenv.py).
 """
 import json
 import re
@@ -47,7 +52,7 @@ REPO_RE = re.compile(r"^[\w.-]+/[\w.-]+$")
 
 # THE DEPENDENCY CONTRACT (Phase 2 Task 3, ADR-018). A pack DECLARES what it imports from outside the
 # stdlib and the SDK; nothing is ever inferred from its source. `sync` installs the declarations into
-# the vault's own overlay (`plugins/.deps/`), which both dispatchers put on a plugin spawn's
+# the vault's own overlay (`<vault>/.plugin-deps/`), which both dispatchers put on a plugin spawn's
 # PYTHONPATH — so the deps live with the VAULT and an engine update, which replaces the engine tree
 # wholesale, re-applies them by construction rather than by remembering to.
 #
@@ -424,22 +429,102 @@ def _pip_argv(target: Path, reqs: list[str], extra: list[str]) -> list[str]:
     `--target` rather than a venv: the overlay is a plain directory the dispatcher prepends to
     PYTHONPATH, so it OVERLAYS whatever interpreter environment the engine happens to bring instead
     of replacing it. `--` ends pip's option parsing, so a requirement can never be read as a flag.
+
+    `extra` is produced by `_pip_options()` from this verb's OWN flags and can only ever be
+    `--no-index` and/or `--find-links <existing local dir>`. It is not a caller's string.
     """
     return [sys.executable, "-m", "pip", "install", "--upgrade", "--target", str(target),
             "--no-input", "--disable-pip-version-check", *extra, "--", *reqs]
 
 
+# --------------------------------------------------------------------------------------------------
+# THE PIP ARGV IS CLOSED (fix wave r1). `sync` used to accept `--pip-arg=<anything>` and splice the
+# value into pip's argv AHEAD of the `--` terminator. That made it not a flag channel but a
+# REQUIREMENT channel: `--pip-arg=zzundeclared` is a positional pip requirement, so a package no pack
+# ever declared was installed onto every plugin verb's PYTHONPATH while the command reported only the
+# declared ones and the lockfile's audit trail never mentioned it. `--pip-arg=--index-url=…` pointed
+# pip at any host. DEP_RE — the consent gate this whole verb exists to be — was bypassed entirely,
+# and the channel needed no human: `bin/mcp/run.py` passes a free-form `args` array through verbatim.
+#
+# What replaced it is the two things the OFFLINE case actually needs, each spelled as a plainkeep flag
+# that THIS FILE translates into pip's argv. Neither can add a requirement; neither can steer an
+# index. Anything else is refused rather than ignored — a flag that is silently dropped is how a
+# caller learns nothing about the boundary it just hit.
+# --------------------------------------------------------------------------------------------------
+FIND_LINKS_PREFIX = "--find-links="
+SYNC_FLAGS = ("--yes", "-y", "--no-index")
+
+
+def _pip_options(argv) -> tuple[list[str], list[str]]:
+    """(pip argv fragment, the same options recorded for the lockfile). Refuses anything else."""
+    unknown = [a for a in argv
+               if a.startswith("-") and a not in SYNC_FLAGS and not a.startswith(FIND_LINKS_PREFIX)]
+    if unknown:
+        output.fail(output.EXIT_USAGE,
+                    f"unknown option(s) for `plugin sync`: {', '.join(unknown)}",
+                    hint="`sync` accepts --yes, --no-index and --find-links=<local dir>. There is no "
+                         "pass-through to pip: an arbitrary pip argument is a way to install a "
+                         "package no pack declared, which is the one thing this verb refuses.",
+                    verb="plugin")
+    extra: list[str] = []
+    if "--no-index" in argv:
+        extra.append("--no-index")
+    for a in argv:
+        if not a.startswith(FIND_LINKS_PREFIX):
+            continue
+        raw = a[len(FIND_LINKS_PREFIX):]
+        # A LOCAL DIRECTORY, only. `--find-links` accepts a URL, and a URL is index steering by
+        # another name — the same authority `--index-url` would have had. An air-gapped wheelhouse is
+        # the case this exists for, so that is the case it permits.
+        if "://" in raw or not raw:
+            output.fail(output.EXIT_USAGE,
+                        f"--find-links must be a local directory, not {raw!r}",
+                        hint="a URL here is an index by another name; `sync` installs only what the "
+                             "lockfile declares, from a local wheelhouse or the default index",
+                        verb="plugin")
+        d = Path(raw).expanduser()
+        if not d.is_dir():
+            output.fail(output.EXIT_NOT_FOUND, f"--find-links directory does not exist: {raw}",
+                        verb="plugin")
+        extra += ["--find-links", str(d)]
+    return extra, [a for a in argv if a == "--no-index" or a.startswith(FIND_LINKS_PREFIX)]
+
+
+def _overlay_contents(target: Path) -> list[dict]:
+    """Every distribution ACTUALLY present in the overlay, read off its `.dist-info` directories.
+
+    The audit trail has to say what LANDED, not what was asked for: `sync` hands pip the declared
+    requirements and pip installs their transitive closure too, so the requirement list alone cannot
+    answer "what is on my plugin import path". Best-effort by construction — an unreadable overlay
+    must not fail an install that already succeeded.
+    """
+    out: list[dict] = []
+    try:
+        for d in sorted(target.iterdir()):
+            if not d.name.endswith(".dist-info"):
+                continue
+            stem = d.name[: -len(".dist-info")]
+            name, _, version = stem.rpartition("-")
+            out.append({"name": name or stem, "version": version if name else ""})
+    except Exception:
+        return out
+    return out
+
+
 def cmd_sync(argv):
-    """plainkeep plugin sync [<name>] --yes [--pip-arg=<flag>]… — build the vault's dependency overlay.
+    """plainkeep plugin sync [<name>] --yes [--no-index] [--find-links=<dir>] — build the vault's
+    dependency overlay.
 
     Confirm-class for the same reason `add` is: it installs third-party code. It is idempotent, it
     reads the LOCK rather than the packs' manifests (the lock is what the user consented to), and it
     is the ONE thing that has to be re-run when the interpreter changes — never when the ENGINE
     changes, because the overlay lives in the vault and the engine tree is not where it was installed.
+
+    THE ONLY THINGS THAT REACH PIP'S ARGV ARE THE LOCKFILE'S DECLARATIONS. See `_pip_options` above.
     """
     _needs_yes(argv, "sync")
     names = [a for a in argv if not a.startswith("-")]
-    extra = [a.split("=", 1)[1] for a in argv if a.startswith("--pip-arg=")]
+    extra, pip_options = _pip_options(argv)
     lock = _load_lock()
     plugins = lock.get("plugins", {})
     if names:
@@ -490,18 +575,35 @@ def cmd_sync(argv):
                         hint=f"remove {target}/lib and drop the dependency that brought it in — `lib` "
                              f"is a reserved top-level name for plugin dependencies", verb="plugin")
 
-    lock["overlay"] = {"python": pyver, "packs": per_pack}
+    # THE AUDIT TRAIL SAYS WHAT LANDED, not what was asked for. `requirements` is what this run
+    # handed to pip and `pip_options` is every option that reached it (there is no third source now);
+    # `contents` is read back off the overlay's own `.dist-info` directories, so a transitive
+    # dependency — the honest reason the two lists differ — is visible rather than unaccounted for.
+    # An overlay whose contents cannot be explained by the declarations is now a question the
+    # lockfile can be asked, which it could not be while `--pip-arg` existed.
+    contents = _overlay_contents(target)
+    lock["overlay"] = {"python": pyver, "packs": per_pack, "requirements": reqs,
+                       "pip_options": pip_options, "contents": contents}
     _save_lock(lock)
 
+    legacy = pluginenv.legacy_deps_dir(paths.PLAINKEEP_HOME)
+    stale = legacy.is_dir()
+
     def render(_):
+        tail = (f"\n{YEL}stale{RESET} {legacy} is left over from before the overlay moved out of "
+                f"plugins/ — nothing reads it; delete it." if stale else "")
         if not reqs:
             return (f"no declared dependencies in {len(selected)} pack(s) — overlay not needed "
-                    f"(packs declare them in plugin.json's `dependencies`)")
-        return (f"{GREEN}synced{RESET} {len(reqs)} dependenc(ies) into plugins/{pluginenv.DEPS_DIRNAME}/ "
-                f"for python {pyver}:\n  " + "\n  ".join(reqs))
+                    f"(packs declare them in plugin.json's `dependencies`)" + tail)
+        landed = ", ".join(f"{c['name']} {c['version']}".strip() for c in contents)
+        return (f"{GREEN}synced{RESET} {len(reqs)} dependenc(ies) into {pluginenv.DEPS_DIRNAME}/ "
+                f"for python {pyver}:\n  " + "\n  ".join(reqs)
+                + (f"\n{DIM}overlay now holds: {landed}{RESET}" if landed else "") + tail)
 
     return output.emit({"packs": sorted(selected), "requirements": reqs, "python": pyver,
-                        "target": str(target), "installed": installed}, "plugin", human=render)
+                        "target": str(target), "installed": installed,
+                        "pip_options": pip_options, "contents": contents,
+                        "legacy_overlay": str(legacy) if stale else None}, "plugin", human=render)
 
 
 def cmd_remove(argv):
@@ -541,7 +643,8 @@ def main(argv):
         return cmd_sync(rest)
     output.fail(output.EXIT_USAGE,
                 "usage: plainkeep plugin add <owner/repo|path>[@tag] --yes | list | trust <name> --yes | "
-                "update <name> --yes | remove <name> --yes | sync [<name>] --yes", verb="plugin")
+                "update <name> --yes | remove <name> --yes | "
+                "sync [<name>] --yes [--no-index] [--find-links=<dir>]", verb="plugin")
 
 
 if __name__ == "__main__":

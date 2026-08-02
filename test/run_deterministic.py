@@ -15,6 +15,8 @@ import json
 import os
 import sys
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 # The wall's vault segment is the SELECTED root since ADR-014 Task 1b, so the model has to be told
 # which root is selected — BEFORE it is imported, since it reads the value once at module scope.

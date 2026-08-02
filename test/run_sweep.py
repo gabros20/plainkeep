@@ -10,6 +10,8 @@ Usage:  python3 test/run_sweep.py
 from __future__ import annotations
 import sys
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.sweepsim import Machine, FileState, SWEEP_DAYS, TRASH_DAYS  # noqa: E402

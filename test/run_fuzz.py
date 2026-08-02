@@ -26,6 +26,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 HERE = Path(__file__).resolve().parent
 FUZZ = HERE / "fuzz"

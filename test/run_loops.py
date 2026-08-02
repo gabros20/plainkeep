@@ -7,6 +7,8 @@ import sys
 import tempfile
 from datetime import date
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 TODAY = date.today().isoformat()

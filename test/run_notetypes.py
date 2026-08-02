@@ -9,14 +9,18 @@ import sys
 import tempfile
 import types
 from pathlib import Path
+from lib.hermetic import scratch_root, seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 
 # The engine modules loaded IN-PROCESS below resolve the data root at import and have no
 # engine-relative fallback since ADR-014 Task 1b, so a root has to be selected before the
-# first import. Only pure functions are exercised in-process (no path is written through
-# it); every subprocess invocation sets its own PLAINKEEP_HOME per call.
-os.environ.setdefault("PLAINKEEP_HOME", str(Path(__file__).resolve().parents[1]))
+# first import. It used to be the CHECKOUT, on the reasoning that only pure functions run
+# in-process. That holds for them and not for what INHERITS the variable: the direct
+# `bin/lib/guardrail.py` subprocess below took it and appended to the real vault's audit log
+# on every green run. A marked throwaway vault answers the same import-time requirement.
+os.environ.setdefault("PLAINKEEP_HOME", scratch_root())
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
 

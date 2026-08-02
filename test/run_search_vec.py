@@ -15,6 +15,8 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent

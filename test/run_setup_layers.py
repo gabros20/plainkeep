@@ -9,9 +9,16 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path = [str(REPO / "bin"), *[p for p in sys.path if Path(p or ".").resolve() != Path(__file__).resolve().parent]]
+# Below this line `lib` means bin/lib, so the test/lib packages imported ABOVE it (the seal) have to
+# leave sys.modules with them — an import is cached by NAME, and `from lib import paths` would
+# otherwise be answered by the already-loaded test/lib.
+for _cached in [m for m in list(sys.modules) if m == "lib" or m.startswith("lib.")]:
+    del sys.modules[_cached]
 
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
@@ -627,7 +634,11 @@ def main() -> int:
         broken_home = tmp / "brokenvenv"
         broken_home.mkdir()
         for entry in REPO.iterdir():
-            if entry.name in (".venv", ".git", ".orchestrate", "__pycache__"):
+            # `.logs` joins the skip list for the same reason `plainkeep.json` is copied below: the
+            # dispatch this fixture performs runs the guardrail, the guardrail APPENDS to
+            # `<root>/.logs/plainkeep.log`, and through a symlink that append landed in the real
+            # checkout's audit log on every green run (measured: one line per run).
+            if entry.name in (".venv", ".git", ".logs", ".orchestrate", "__pycache__"):
                 continue
             # plainkeep.json is COPIED, not symlinked: `plainkeep help` regenerates a stale manifest,
             # and through a symlink that write lands in the real checkout. The path-wall now refuses

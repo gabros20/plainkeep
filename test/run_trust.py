@@ -17,6 +17,8 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from lib.hermetic import scratch_root, seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -24,9 +26,11 @@ from lib import vaultfx  # noqa: E402
 
 # The engine modules loaded IN-PROCESS below resolve the data root at import and have no
 # engine-relative fallback since ADR-014 Task 1b, so a root has to be selected before the
-# first import. Only pure functions are exercised in-process (no path is written through
-# it); every subprocess invocation sets its own PLAINKEEP_HOME per call.
-os.environ.setdefault("PLAINKEEP_HOME", str(Path(__file__).resolve().parents[1]))
+# first import. It used to be the CHECKOUT, on the reasoning that only pure functions run
+# in-process. That holds for them and not for what INHERITS the variable: the direct
+# `bin/lib/guardrail.py` subprocess below took it and appended to the real vault's audit log
+# on every green run. A marked throwaway vault answers the same import-time requirement.
+os.environ.setdefault("PLAINKEEP_HOME", scratch_root())
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
 
@@ -115,12 +119,18 @@ def test_exit_codes():
         check("CLI unknown verb → exit 4 + did-you-mean",
               r.returncode == 4 and "confirmy" in r.stderr and "did you mean" in r.stderr, r.stderr)
 
-    # the real dispatcher must PROPAGATE the code (not `|| exit 1`) for an unknown verb
-    d = subprocess.run([str(REPO / "plainkeep"), "serch"], capture_output=True, text=True)
-    check("dispatcher unknown verb → exit 4 (did-you-mean: search)",
-          d.returncode == 4 and "search" in d.stderr, d.stderr)
-    d = subprocess.run([str(REPO / "plainkeep"), "help"], capture_output=True, text=True)
-    check("dispatcher allow verb → exit 0", d.returncode == 0, d.stderr)
+    # the real dispatcher must PROPAGATE the code (not `|| exit 1`) for an unknown verb.
+    # Against a throwaway engine-carrying vault, not the checkout: the ALLOW branch below logs, and
+    # that log line used to land in the developer's own vault.
+    with tempfile.TemporaryDirectory() as td:
+        dh = Path(td)
+        vaultfx.mark_engine_vault(dh, REPO)
+        denv = {**os.environ, "PLAINKEEP_HOME": str(dh)}
+        d = subprocess.run([str(REPO / "plainkeep"), "serch"], capture_output=True, text=True, env=denv)
+        check("dispatcher unknown verb → exit 4 (did-you-mean: search)",
+              d.returncode == 4 and "search" in d.stderr, d.stderr)
+        d = subprocess.run([str(REPO / "plainkeep"), "help"], capture_output=True, text=True, env=denv)
+        check("dispatcher allow verb → exit 0", d.returncode == 0, d.stderr)
 
 
 # ---------------------------------------------------------------------------

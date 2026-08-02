@@ -4,7 +4,7 @@ run_resolver.py — multi-root verb resolution (proposal Part 2.1 + 0.2). Covers
 (engine bin/ RESERVED > plugins/<pack>/ > $PLAINKEEP_PATH), plugin-verb dispatch end-to-end through ./plainkeep,
 guardrail gating of a plugin verb (identical risk classes), plainkeep.json source tag + PLUGINS group +
 shadowed-verb warning, and `plainkeep new verb` scaffolding into plugins/local/ (never bin/). Offline,
-stdlib only; no real-repo pollution except a throwaway pack cleaned up in finally.
+stdlib only; nothing is written into the real checkout at all.
 """
 from __future__ import annotations
 import json
@@ -14,6 +14,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from lib.hermetic import seal
+from lib.vaultfx import mark_engine_vault
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 PY = sys.executable
@@ -103,15 +106,26 @@ def _resolver_precedence():
 
 
 def _dispatch_and_gate():
-    """End-to-end through ./plainkeep with a throwaway pack in the real repo (so $PLAINKEEP_HOME/bin/lib exists)."""
-    pack = REPO / "plugins" / "_restest"
-    try:
+    """End-to-end through ./plainkeep with a throwaway pack in a throwaway ENGINE-CARRYING vault.
+
+    It used to build the pack inside the real checkout and dispatch with `PLAINKEEP_HOME=REPO`,
+    because both dispatchers look for the engine under the selected root (report §6.3) and a bare
+    temp dir has no `bin/lib`. The cost was that the four dispatches below appended four lines to the
+    developer's own audit log on every green run, and that a crash between `_mk_verb` and the
+    `finally` left a plugin pack in their vault. `mark_engine_vault` gives the root an engine by
+    symlink, so the pack, the manifest and the log are all inside a directory that is deleted.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        home = Path(td) / "vault"
+        home.mkdir(parents=True)
+        mark_engine_vault(home, REPO)
+        pack = home / "plugins" / "_restest"
         _mk_verb(pack / "greetplug", "greetplug", risk="read", run=_GREET)
         _mk_verb(pack / "needsyes", "needsyes", risk="confirm", run=_NEEDS)
-        env = {**os.environ, "PLAINKEEP_HOME": str(REPO)}
+        env = {**os.environ, "PLAINKEEP_HOME": str(home)}
 
         def ops(*args):
-            return subprocess.run([str(REPO / "plainkeep"), *args], capture_output=True, text=True, env=env)
+            return subprocess.run([str(home / "plainkeep"), *args], capture_output=True, text=True, env=env)
 
         r = ops("greetplug")
         check("plugin verb dispatches through ./plainkeep (exit 0)", r.returncode == 0, r.stdout + r.stderr)
@@ -132,8 +146,6 @@ def _dispatch_and_gate():
         r = ops("needsyes", "--yes")
         check("confirm-class plugin verb runs with --yes",
               r.returncode == 0 and "NEEDSYES_RAN" in r.stdout, f"rc={r.returncode} {r.stdout}{r.stderr}")
-    finally:
-        shutil.rmtree(pack, ignore_errors=True)
 
 
 def _manifest_surface():

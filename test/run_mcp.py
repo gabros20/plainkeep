@@ -13,6 +13,9 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from lib.hermetic import seal
+from lib.vaultfx import mark_engine_vault
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
@@ -100,9 +103,14 @@ def main() -> int:
     # unknown method → JSON-RPC method-not-found, gracefully
     check("unknown method → -32601", resp.get(5, {}).get("error", {}).get("code") == -32601)
 
-    # --setup prints the install line
-    setup = subprocess.run([str(REPO / "plainkeep"), "mcp", "--setup"], capture_output=True, text=True,
-                           env={**os.environ, "PLAINKEEP_HOME": str(REPO)})
+    # --setup prints the install line. Against a throwaway engine-carrying vault rather than the
+    # checkout: this runs the REAL dispatcher, whose gate appends to `<root>/.logs/plainkeep.log`,
+    # and with the checkout as the root that line landed in the developer's own vault.
+    with tempfile.TemporaryDirectory() as td:
+        sh = Path(td)
+        mark_engine_vault(sh, REPO)
+        setup = subprocess.run([str(sh / "plainkeep"), "mcp", "--setup"], capture_output=True,
+                               text=True, env={**os.environ, "PLAINKEEP_HOME": str(sh)})
     check("--setup prints the `claude mcp add plainkeep` line",
           "claude mcp add plainkeep --" in setup.stdout and setup.stdout.rstrip().endswith("plainkeep mcp"),
           setup.stdout.strip())

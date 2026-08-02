@@ -47,6 +47,8 @@ import tempfile
 import termios
 import time
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 GREEN, RED, YELLOW, DIM, BOLD, RESET = (

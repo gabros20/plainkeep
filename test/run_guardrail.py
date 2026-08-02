@@ -11,6 +11,8 @@ import json
 import os
 import sys
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 # Since ADR-014 Task 1b the enforcement guardrail's wall is anchored to the SELECTED root and to
 # nothing else, and it refuses outright when no root is selected — so this harness has to select one

@@ -9,6 +9,9 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from lib.hermetic import seal
+from lib.vaultfx import mark_engine_vault
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
@@ -142,7 +145,20 @@ def main() -> int:
               "add" in rh.stdout and "ops_json" not in rh.stdout, rh.stdout[:120])
 
     # ---- guardrail lets __complete through the real dispatcher (risk: read) ----
-    d = subprocess.run([str(REPO / "plainkeep"), "__complete", "wiki"], capture_output=True, text=True)
+    # This is the one check here that runs the REAL dispatcher, so it is the one that has to name a
+    # vault. It used to inherit the environment and pass no root at all: before Task 1b that meant
+    # the engine-relative fallback (the repo), and after it it means the marker walk-up out of the
+    # repo — i.e. the developer's own registered vault, whose audit log this check then appended to
+    # on every green run. Measured: `.logs/plainkeep.log` in the real vault gained a line per run.
+    #
+    # `mark_engine_vault` and not a bare marked directory: both dispatchers still look for the
+    # engine under the selected root (report §6.3). See test/lib/vaultfx.py.
+    with tempfile.TemporaryDirectory() as td:
+        dh = Path(td)
+        mark_engine_vault(dh, REPO)
+        d = subprocess.run([str(REPO / "plainkeep"), "__complete", "wiki"],
+                           capture_output=True, text=True,
+                           env={**os.environ, "PLAINKEEP_HOME": str(dh)})
     check("dispatcher runs __complete (guardrail: read)", d.returncode == 0 and "open" in d.stdout, d.stdout + d.stderr)
 
     # ---- the built-in Markdown renderer ----

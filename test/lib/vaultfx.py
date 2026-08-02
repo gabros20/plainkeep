@@ -41,6 +41,26 @@ def mark_vault(root) -> str:
     return vid
 
 
+def mark_engine_vault(root, repo) -> str:
+    """A marked fixture vault that also CARRIES THE ENGINE, by symlink. Returns the vault id.
+
+    For the handful of checks that run the REAL dispatcher (`REPO/plainkeep …`) rather than a verb's
+    `run.py`. Both dispatchers still look for the engine UNDER the selected root — the floor's
+    `$PK/bin/lib/guardrail.py`, the core's `opsHome()` — so those checks cannot point at a bare
+    marked directory; they used to point at the checkout instead, which is the developer's own
+    registered vault and which they appended an audit line to on every green run.
+
+    Symlinking `bin/` and the `plainkeep` shim satisfies the resolver without copying the tree, and
+    every path the dispatch WRITES (the audit log, an index, a note) is under `root` and therefore
+    thrown away with it. The engine-in-vault assumption on the resolver side is out of Task 1b's
+    scope (report §6.3); this is how a test lives with it hermetically until it is not."""
+    src = Path(repo)
+    dst = Path(root)
+    (dst / "bin").symlink_to(src / "bin")
+    (dst / "plainkeep").symlink_to(src / "plainkeep")
+    return mark_vault(dst)
+
+
 def hermetic_config(tmp) -> str:
     """A `PLAINKEEP_CONFIG_HOME` that is guaranteed to hold no registry.
 

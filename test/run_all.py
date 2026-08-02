@@ -9,6 +9,7 @@ separate because it needs a model and network.
 Usage:  python3 test/run_all.py
 """
 from __future__ import annotations
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -83,7 +84,54 @@ def _suite_notes(out: str) -> list[str]:
             for line in out.splitlines() if line.startswith(SUITE_NOTE_PREFIX)]
 
 
+# --- the hermeticity gate -------------------------------------------------------------------------
+# Every suite must call `lib.hermetic.seal()` (read that module for why). This gate is here rather
+# than in the seal itself because the failure it prevents is a suite that never calls it: since Task
+# 1b, a suite invoking plainkeep with no PLAINKEEP_HOME resolves through the marker walk-up and the
+# registry default to the developer's REAL vault, and writes into it with exit 0. Nothing about that
+# run looks wrong.
+#
+# The gate is STATIC, and deliberately so: it catches the next suite someone adds, on the run that
+# adds it, instead of on the run where it silently files a note into real notes. It runs BEFORE any
+# suite, and it is fatal — a batch that skipped it would be a batch whose greenness means less.
+#
+# It does NOT make a direct `python3 test/run_foo.py` hermetic; the seal in the suite does that, and
+# that is the point of putting it there. This only proves the seal is present everywhere.
+#
+# Matched by pattern rather than by an exact line, because a suite may legitimately import more from
+# the module than `seal` (`scratch_root` is the other lever) — a gate that fails on the import LIST
+# would be teaching people to write the import a particular way instead of to be hermetic.
+SEAL_CALL = "seal()"
+SEAL_IMPORT = "from lib.hermetic import seal"
+SEAL_IMPORT_RE = re.compile(r"^from lib\.hermetic import .*\bseal\b", re.M)
+SEAL_CALL_RE = re.compile(r"^seal\(\)", re.M)
+
+
+def _unsealed() -> list[str]:
+    out = []
+    for f in sorted(HERE.glob("run_*.py")):
+        if f.name == Path(__file__).name:
+            continue
+        src = f.read_text(encoding="utf-8")
+        if not SEAL_IMPORT_RE.search(src) or not SEAL_CALL_RE.search(src):
+            out.append(f.name)
+    return out
+
+
 def main() -> int:
+    unsealed = _unsealed()
+    if unsealed:
+        print(f"{BOLD}{RED}NOT HERMETIC\033[0m — these suites never call lib.hermetic.seal(), so a "
+              "plainkeep invocation in them with no PLAINKEEP_HOME resolves to the developer's REAL "
+              "vault:")
+        for name in unsealed:
+            print(f"  - {name}")
+        print("\nAdd, after the imports:\n"
+              f"    {SEAL_IMPORT}\n"
+              f"    {SEAL_CALL}   # hermetic: an empty throwaway registry, never the developer's "
+              "real vault\n")
+        return 1
+
     print(f"\033[1m{'='*60}\nOffline design-validation suites\n{'='*60}\033[0m\n")
     statuses = []
     for label, script in SUITES:

@@ -24,6 +24,8 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from lib.hermetic import seal
+seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lib.retrieval import Index, get_embedder  # noqa: E402

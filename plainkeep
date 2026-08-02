@@ -141,9 +141,31 @@ pk_floor() {
   # resolver is the single source of truth; the dispatcher just asks it for the run.py to exec. The
   # ENGINE half of that precedence is now this tree; the PLUGIN half is still under $PLAINKEEP_HOME,
   # which is why resolver.py reads both and derives neither from the other.
-  local CMD
-  CMD="$("$PY" "$ENGINE/bin/lib/resolver.py" "$VERB" 2>/dev/null || true)"
+  #
+  # `--dispatch` answers three lines in the ONE spawn this already paid for: the run.py, the PACK the
+  # verb came from (empty for an engine verb), and the PYTHONPATH the child must get (likewise).
+  local OUT CMD PACK PP
+  OUT="$("$PY" "$ENGINE/bin/lib/resolver.py" --dispatch "$VERB" 2>/dev/null || true)"
+  CMD="$(printf '%s\n' "$OUT" | sed -n '1p')"
+  PACK="$(printf '%s\n' "$OUT" | sed -n '2p')"
+  PP="$(printf '%s\n' "$OUT" | sed -n '3p')"
   [ -n "$CMD" ] && [ -f "$CMD" ] || { echo "plainkeep: verb '$VERB' has no run.py" >&2; exit 4; }
+
+  # SDK COMPATIBILITY (Phase 2 Task 3, ADR-018). A PLUGIN verb — and only a plugin verb — is spawned
+  # with the engine's own `bin/` on PYTHONPATH, plus the vault's dependency overlay ahead of it. That
+  # is what makes an UNMODIFIED pre-Task-2 plugin work: its `sys.path.insert(0, $PLAINKEEP_HOME/bin)`
+  # now names a directory a vault does not have, CPython skips a nonexistent sys.path entry, and
+  # `from lib import api` resolves from the engine tree instead. Nothing new is built, so nothing can
+  # drift from what it forwards to.
+  #
+  # An ENGINE verb gets neither variable: it self-locates through `__file__`, and putting the engine
+  # on PYTHONPATH for all 35 of them would hand `<engine>/bin` to every child they spawn for nothing.
+  # The values are computed by resolver.py (bin/lib/pluginenv.py holds the rule), never composed here
+  # — a shell that knows the policy is a third copy of it.
+  if [ -n "$PACK" ]; then
+    export PLAINKEEP_PLUGIN_PACK="$PACK"
+    export PYTHONPATH="$PP"
+  fi
   exec "$PY" "$CMD" "$@"
 }
 

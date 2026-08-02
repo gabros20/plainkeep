@@ -18,9 +18,10 @@ import path from "node:path";
 import type { CoreResult } from "./cli.js";
 import { completeIntercept } from "./complete.js";
 import { EXIT_NOT_FOUND, EXIT_OK, mainCli } from "./guardrail.js";
-import { runPy } from "./resolver.js";
+import { spawnEnv } from "./pluginenv.js";
+import { runPy, sourceOf } from "./resolver.js";
 import { bareTtyLaunchesUi, uiIntercept } from "./ui.js";
-import { discoverRoot, requireHome } from "./vaultroot.js";
+import { discoverRoot, requireEngine, requireHome } from "./vaultroot.js";
 
 // Exit codes for a spawn that never became a child. OFF the frozen gate protocol (0/2/3/4/5) by
 // design — these are the shell's own conventions, and the floor reaches them through bash's `exec`
@@ -378,15 +379,27 @@ function restoreBlockingStdio(py: string): void {
   }
 }
 
-function spawnVerb(py: string, script: string, args: string[], home: string): CoreResult {
+function spawnVerb(
+  py: string,
+  script: string,
+  args: string[],
+  home: string,
+  extraEnv: Record<string, string> = {},
+): CoreResult {
   restoreBlockingStdio(py);
   // PLAINKEEP_HOME is the canonical root; PLAINKEEP_VAULT_ID travels with it (Task 1b) so a verb, a
   // plugin or a scheduled job can assert WHICH vault it woke up in without re-reading the marker.
   // It is read from process.env rather than threaded through, because dispatch() sets both together
   // and an interception's fall-through reaches this same function.
+  //
+  // `extraEnv` is the PLUGIN SPAWN CONTRACT (Phase 2 Task 3) and is EMPTY for an engine verb —
+  // pluginenv.ts decides it, spawnPythonVerb() computes it. It is applied after PLAINKEEP_HOME so
+  // the two are one object literal rather than two mutations of process.env: the core must not carry
+  // a plugin's PYTHONPATH in its OWN environment, where an interception or a second spawn in the
+  // same process would inherit it.
   const r = spawnSync(py, [script, ...args], {
     stdio: "inherit",
-    env: { ...process.env, PLAINKEEP_HOME: home },
+    env: { ...process.env, PLAINKEEP_HOME: home, ...extraEnv },
   });
   return classifySpawnOutcome(r as SpawnOutcome, py);
 }
@@ -522,7 +535,12 @@ export function spawnPythonVerb(verb: string, args: string[]): CoreResult {
   // dispatch() has already assigned process.env.PLAINKEEP_HOME, so this re-derivation returns that
   // same value — and an interception reached through any other caller still gets a coherent home.
   const home = resolveHome();
-  return spawnVerb(pickPython(home), script, args, home);
+  // The plugin spawn contract. `sourceOf` re-resolves rather than being threaded out of runPyFile():
+  // the resolver reads PLAINKEEP_HOME/PLAINKEEP_PATH per call by design, and a cached source is a
+  // second answer that can disagree with the script that is about to be exec'd. The floor pays the
+  // same resolution once, in resolver.py's `--dispatch`.
+  const extra = spawnEnv(requireEngine(), home, sourceOf(verb), process.env);
+  return spawnVerb(pickPython(home), script, args, home, extra);
 }
 
 // The dispatcher contract end to end. Order is the floor's and is not negotiable: the gate runs

@@ -25,6 +25,7 @@ ENGINE_BIN = Path(__file__).resolve().parents[1]          # bin/ — ships with 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # importable as `lib.resolver` AND top-level
 import vaultroot  # noqa: E402
+import pluginenv  # noqa: E402
 
 
 def _ops_home() -> Path:
@@ -155,9 +156,42 @@ def shadowed() -> list[tuple[str, str]]:
     return out
 
 
+def _dispatch_lines(verb: str) -> list[str] | None:
+    """The bash floor's whole answer, in ONE spawn: the run.py to exec, WHICH PACK it belongs to
+    (empty for an engine verb), and the `PYTHONPATH` the child must be given (likewise empty).
+
+    The third line is computed HERE, not in the shell, because it is policy: which entries, in which
+    order, merged with the caller's own value (pluginenv.spawn_env). This process inherits the
+    floor's environment, so the merge it does is the merge the floor would have done — and the floor
+    is left with `export PYTHONPATH="$LINE3"`, which cannot drift from the rule. The compiled core
+    ports the same two functions (cli/src/core/dispatch.ts) and the parity oracle compares the child
+    env both dispatchers actually produce.
+
+    A separate flag rather than extra lines on the bare `resolver.py <verb>` form: that form is the
+    resolver differential's own subject (`--core-resolve` prints exactly one path), and widening it
+    would change what the oracle compares in order to serve a caller that is not it.
+    """
+    r = resolve(verb)
+    if r is None:
+        return None
+    d, source = r
+    p = d / "run.py"
+    if not p.exists():
+        return None
+    env = pluginenv.spawn_env(ENGINE_BIN.parent, _ops_home(), source)
+    return [str(p), pluginenv.pack_of(source) or "", env.get("PYTHONPATH", "")]
+
+
 if __name__ == "__main__":
     # Dispatcher helper: print the resolved run.py path (empty + exit 4 if the verb has none).
-    v = sys.argv[1] if len(sys.argv) > 1 else ""
+    args = sys.argv[1:]
+    if args and args[0] == "--dispatch":
+        lines = _dispatch_lines(args[1] if len(args) > 1 else "")
+        if lines is None:
+            raise SystemExit(4)
+        print("\n".join(lines))
+        raise SystemExit(0)
+    v = args[0] if args else ""
     p = run_py(v)
     if p:
         print(p)

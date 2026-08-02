@@ -95,9 +95,6 @@ def hashes(root: Path) -> dict[str, str]:
     return out
 
 
-_hub_n = [0]
-
-
 def hub(name: str) -> Path:
     """A fresh `~/files/clients/<name>/in`, created the only way the wall now allows."""
     d = ROOTS / "files" / "clients" / name / "in"
@@ -376,13 +373,13 @@ def _race(arrive, rounds: int) -> tuple[int, int, int]:
         srcs = [staged("brief.pdf", f"ORIGINAL-{i}".encode()) for i in range(RACE_N)]
         barrier = threading.Barrier(RACE_N)
 
-        def worker(p=None):
+        def worker(p):
             barrier.wait()
             try:
                 arrive(p, d)
             except Exception:
                 pass          # a loser is the caller's problem; this measures BYTES, not exceptions
-        threads = [threading.Thread(target=worker, kwargs={"p": s}) for s in srcs]
+        threads = [threading.Thread(target=worker, args=(s,)) for s in srcs]
         for t in threads:
             t.start()
         for t in threads:

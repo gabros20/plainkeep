@@ -79,6 +79,16 @@ def canonical(p) -> str:
     return os.path.realpath(os.path.abspath(os.path.expanduser(str(p))))
 
 
+def _entry_id(p: str):
+    """`p`'s identity as the filesystem knows it — `(st_dev, st_ino)` — or None when it is not there
+    (which never compares equal to anything, so a missing path is simply not a match)."""
+    try:
+        st = os.stat(p)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
 def _same_entry(a: str, b: str) -> bool:
     """Do these two spellings name ONE directory entry? Asked of the FILESYSTEM (st_dev, st_ino),
     not of the strings.
@@ -118,39 +128,51 @@ def path_within(inner: str, outer: str) -> bool:
     reading as OUTSIDE `/x/vaultdir` on a case-folding volume — see `_same_entry`. The stat pair is
     paid only when the string comparison has already answered "no".
 
-    **The boundary is located by COMPONENT COUNT, never by string length.** That is the whole reason
-    this is not a slice: `outer` and `inner`'s matching ancestor may be two spellings of one
-    directory, and the two folds behave differently under `len()`. Case is length-PRESERVING, so a
-    character slice happened to land on the boundary and identity got its chance. Unicode
-    normalisation is NOT — NFC `café` is 4 characters, NFD `café` is 5 — so `inner[:len(outer)]` cut
-    the wrong place, `inner[len(outer)]` read a letter instead of the separator, and the function
-    answered False for a path that was genuinely inside, BEFORE identity was ever consulted. Counting
-    `/`-separated components is invariant under both folds by construction: no normalisation form and
-    no case ever changes how many separators a path has. So the ancestor of `inner` at `outer`'s depth
-    is picked positionally and handed to the FILESYSTEM, which is the only party that knows whether
-    two spellings are one directory.
+    **Nothing here is located by slicing the strings.** The boundary used to be found with
+    `inner[len(outer)] != "/"` and `_same_entry(inner[:len(outer)], outer)`, which quietly assumed
+    that two spellings of one directory have the same LENGTH. Case does — so the slice landed on the
+    separator and identity got its chance. Unicode normalisation does not: NFC `café` is 4 characters
+    and NFD `café` is 5, so the slice cut mid-name, the character where the separator should have been
+    was a letter, and the function answered False for a path that was genuinely inside, BEFORE
+    identity was ever consulted. Counting `/`-separated components instead would fix that one and
+    still assume the two spellings sit at the same DEPTH, which macOS firmlinks break: `/Users/x` and
+    `/System/Volumes/Data/Users/x` are one directory (measured: identical `st_dev`/`st_ino`) that
+    `realpath` does NOT collapse, because a firmlink is not a symlink.
+
+    So the boundary is not computed at all. Every ancestor of `inner` is handed to the FILESYSTEM in
+    turn until one of them IS `outer` or the walk reaches the root. No spelling, no length, no depth,
+    no fold enters into it — the only question ever asked is "are these two names the same directory
+    entry", and only the volume the paths live on can answer that. The walk is paid only after the
+    string comparison has already said "no", and it is bounded by `inner`'s depth (single digits).
 
     No `.lower()` and no `unicodedata.normalize()` on purpose, for `_same_entry`'s reason: either fold
     is WRONG on a volume that does not perform it, and would merge two genuinely distinct directories
     into one — a false "inside" verdict. `stat` answers for the volume the paths actually live on.
 
-    Residue, stated rather than left to be discovered: identity needs both sides to EXIST. For a pair
-    where the ancestor at `outer`'s depth is missing, only the string comparison speaks, so two
-    spellings of one NON-EXISTENT path still read as different. The one caller
-    (`enginetree.disjointness_verdict`) compares a validated vault root against the running engine
-    root — both exist by construction — so this is unreachable there; a future caller that asks about
-    paths not yet created inherits it."""
+    Residue, stated rather than left to be discovered:
+
+      * **Identity needs the paths to EXIST.** For an `inner` whose ancestors are all missing, only
+        the string comparison speaks, so two spellings of one NON-EXISTENT path read as different.
+        The one caller (`enginetree.disjointness_verdict`) compares a validated vault root against the
+        running engine root — both exist by construction — so this is unreachable there; a future
+        caller asking about paths not yet created inherits it.
+      * **TOCTOU.** The answer describes the tree as it was during the walk. Nothing here holds a lock,
+        and nothing downstream re-asks."""
     outer = outer.rstrip("/") or "/"
     sep = "" if outer == "/" else "/"
     if inner == outer or inner.startswith(outer + sep):
         return True
-    outer_parts = outer.split("/")
-    inner_parts = inner.rstrip("/").split("/")
-    if len(inner_parts) < len(outer_parts):
-        return False                      # `inner` is shallower than `outer` — it cannot be inside it
-    # `inner`'s own ancestor at `outer`'s depth, or `inner` itself when the depths match. The FS then
-    # says whether that ancestor and `outer` are one directory entry, whatever they are spelled like.
-    return _same_entry("/".join(inner_parts[:len(outer_parts)]), outer)
+    target = _entry_id(outer)
+    if target is None:                    # `outer` is not there; only the string answer above stands
+        return False
+    p = inner.rstrip("/") or "/"
+    while True:
+        if _entry_id(p) == target:
+            return True
+        parent = os.path.dirname(p)
+        if parent == p:                   # the root (or a relative path's floor) — nowhere left to go
+            return False
+        p = parent
 
 
 # --- the marker ---------------------------------------------------------------------------------

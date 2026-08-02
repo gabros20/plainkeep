@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from lib.hermetic import seal
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
@@ -359,11 +360,100 @@ def case_template_and_discovery() -> None:
               and "not in the registry" in (data["selection_error"] or ""), r.stdout)
 
 
+# --------------------------------------------------------------------------------------------
+# D. Containment — every axis on which two names can be ONE directory, at unit level
+# --------------------------------------------------------------------------------------------
+def case_containment_axes() -> None:
+    """`path_within` / `same_path`, asked directly, across every way one directory gets two spellings.
+
+    This is the third round of one bug. The symlink axis was closed first, then the CASE axis, and
+    each fix was written against the axis in front of it: r1 compared canonical strings (case slipped
+    through), r2 added `st_dev`/`st_ino` identity but located the boundary with a LENGTH-BASED SLICE,
+    which case survives (it preserves length) and Unicode normalisation does not (NFC `café` is 4
+    characters, NFD `café` is 5). Testing the axis that was just fixed is what let the next one ship
+    twice, so this case enumerates them together and each one has a direction in both senses.
+
+    Unit level on purpose: `run_discovery.py` proves the same properties through the real dispatcher,
+    which is the proof that counts, but it cannot cheaply cover a spelling the fixture does not
+    have — and a bypass that only shows up under an accented HOME needs to be cheap to add."""
+    vr = load_vaultreg()
+    with tempfile.TemporaryDirectory(prefix="pk-within-") as td:
+        base = os.path.realpath(td)
+        nfc = unicodedata.normalize("NFC", "café")
+        nfd = unicodedata.normalize("NFD", "café")
+        outer = os.path.join(base, nfc, "install", "engine", "4.0.0-dev")
+        os.makedirs(os.path.join(outer, "bin", "share"))
+        os.makedirs(os.path.join(base, nfc, "install", "engine", "4.0.0-dev-notes"))
+        o_nfd = os.path.join(base, nfd, "install", "engine", "4.0.0-dev")
+        upper = outer.replace("4.0.0-dev", "4.0.0-DEV")
+
+        normalising_fs = os.path.isdir(o_nfd)
+        folding_fs = os.path.isdir(upper)
+        cases = [
+            ("plain: a directory under it", os.path.join(outer, "bin", "share"), outer, True),
+            ("plain: a sibling sharing a prefix",
+             os.path.join(base, nfc, "install", "engine", "4.0.0-dev-notes"), outer, False),
+            ("plain: an unrelated tree", "/tmp", outer, False),
+            ("plain: something SHALLOWER than outer", base, outer, False),
+            ("outer does not exist", os.path.join(outer, "bin"), os.path.join(base, "nope"), False),
+            # A doubled separator changes neither the entry nor the verdict — the walk never counts
+            # anything, so a caller that hands over a not-quite-canonical spelling is not surprised.
+            ("a doubled separator in outer", os.path.join(outer, "bin"),
+             outer.replace("/install", "//install"), True),
+        ]
+        if normalising_fs:
+            cases += [
+                ("UNICODE: NFD inner, NFC outer", os.path.join(o_nfd, "bin", "share"), outer, True),
+                ("UNICODE: NFC inner, NFD outer", os.path.join(outer, "bin", "share"), o_nfd, True),
+                ("UNICODE: the container, spelled NFD", o_nfd, os.path.join(base, nfc), True),
+                ("UNICODE: the same directory, both spellings", outer, o_nfd, True),
+                ("UNICODE: the sibling is still OUT, spelled NFD",
+                 os.path.join(base, nfd, "install", "engine", "4.0.0-dev-notes"), outer, False),
+            ]
+        if folding_fs:
+            cases += [
+                ("CASE: outer spelled UPPER", os.path.join(outer, "bin"), upper, True),
+                ("CASE: inner spelled UPPER", os.path.join(upper, "bin"), outer, True),
+            ]
+        for name, i, o, want in cases:
+            check(f"path_within · {name}", vr.path_within(i, o) is want,
+                  f"got {vr.path_within(i, o)} want {want}  inner={i!r} outer={o!r}")
+        if normalising_fs:
+            check("same_path · NFC and NFD name one directory", vr.same_path(outer, o_nfd))
+        if folding_fs:
+            check("same_path · two cases name one directory", vr.same_path(outer, upper))
+        if not (normalising_fs and folding_fs):
+            print("SUITE-NOTE: this filesystem distinguishes "
+                  + " and ".join([x for x in ("NFC from NFD" if not normalising_fs else "",
+                                              "upper from lower" if not folding_fs else "") if x])
+                  + " — those axes were SKIPPED here because the alternate spellings name nothing. "
+                    "macOS's default APFS volume folds both, and is where the bug lived.")
+
+        # DEPTH is an axis too, and it is the one a component-count boundary would still have missed.
+        # macOS firmlinks give one directory two names at DIFFERENT depths (`/Users/x` and
+        # `/System/Volumes/Data/Users/x`), and `realpath` does not collapse them because a firmlink is
+        # not a symlink. Probed rather than assumed: it is skipped where the pair is not one inode.
+        home = os.path.expanduser("~")
+        alias = "/System/Volumes/Data" + home
+        try:
+            aliased = os.path.isdir(alias) and os.stat(alias).st_ino == os.stat(home).st_ino
+        except OSError:
+            aliased = False
+        if aliased:
+            check("path_within · DEPTH: a firmlink alias of the same directory, read-only probe",
+                  vr.path_within(os.path.join(home, "Documents"), alias),
+                  f"inner={os.path.join(home, 'Documents')!r} outer={alias!r}")
+        else:
+            print("SUITE-NOTE: the firmlink depth axis was SKIPPED — no /System/Volumes/Data alias "
+                  "of $HOME on this machine. It is a read-only stat probe where it exists.")
+
+
 def main() -> int:
     case_roundtrip()
     case_fail_closed()
     case_atomic()
     case_template_and_discovery()
+    case_containment_axes()
 
     print(f"{BOLD}Vault marker + registry (ADR-014 Task 1a) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

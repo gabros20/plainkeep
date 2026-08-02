@@ -314,6 +314,19 @@ def cmd_init(argv):
             f.write_text(text, encoding="utf-8")
             made.append(rel)
 
+    # THE CLAIM THIS ACTION IS NAMED FOR, checked before identity is written. `_init_refusals`
+    # refused a target that ALREADY carried engine code; this asks whether anything above put some
+    # there — the difference between a rule that is stated and one the product consults (ADR-019).
+    # Placed here rather than at the end so a violation refuses with nothing registered, which is a
+    # state an operator can simply delete.
+    leaked = enginetree.engine_paths_in(target)
+    if leaked:
+        output.fail(output.EXIT_UNEXPECTED,
+                    f"init produced engine paths inside {target}: {', '.join(leaked)}",
+                    hint="a vault is data — this is a bug in `vault init`; the directory was "
+                         "created but NOT marked or registered, so removing it is safe",
+                    verb="vault")
+
     # --- identity: the marker, then the registry entry. Same two writes `register` makes, in the
     # same order and through the same module, so there is one spelling of what a vault IS.
     marker = vaultreg.new_marker_doc()
@@ -326,9 +339,10 @@ def cmd_init(argv):
 
     manifest_ok, manifest_detail = _generate_manifest(target)
 
-    # --- and the assertion the whole action is named for. `init` claims to produce a data-only
-    # vault; this is the claim being checked against the filesystem by the code that made it, on
-    # every real run, rather than only in a suite (ADR-019 D1).
+    # ...and asked once more at the end, because `_generate_manifest` dispatches into the vault and
+    # a dispatch is the one thing between the check above and here that writes into it. Reported
+    # rather than refused this time: the vault is registered by now, so a refusal would leave the
+    # operator with a registry entry and an exit code instead of a directory they can delete.
     leaked = enginetree.engine_paths_in(target)
 
     data = {"id": marker["id"], "name": name, "path": str(target), "created": made,

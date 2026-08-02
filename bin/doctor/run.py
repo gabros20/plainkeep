@@ -198,8 +198,15 @@ def main(argv):
         else:
             ok(f"engine: pinned uv not provisioned yet ({uv}) — `plainkeep setup` fetches it")
         epy = provision.engine_python(paths.ENGINE)
-        ok(f"engine: interpreter {epy}" if epy
-           else "engine: no provisioned interpreter yet (the stdlib floor is the contract)")
+        if epy:
+            # The COUNT, not the list: it is the cheap signal that distinguishes "synced with no
+            # extras" (the base project declares nothing, so zero is correct and expected) from
+            # "synced with [search]" — and it is read from the `.dist-info` directories on disk
+            # rather than by running pip, which a uv-managed environment does not have.
+            n = len(provision.installed_dists(paths.ENGINE))
+            ok(f"engine: interpreter {epy} ({n} distribution(s) from the delivered lock)")
+        else:
+            ok("engine: no provisioned interpreter yet (the stdlib floor is the contract)")
         sysuv = provision.system_uv()
         if sysuv:
             ok(f"engine: a system uv at {sysuv} is IGNORED — the engine runs its own pinned uv "

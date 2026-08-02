@@ -25,8 +25,17 @@ WIKI = PLAINKEEP_HOME / "wiki"
 BIN = PLAINKEEP_HOME / "bin"
 TASK_STATUSES = ("inbox", "active", "waiting", "done")
 
-# The sibling roots (§2) — never inside ~/plainkeep. PLAINKEEP_ROOTS_HOME lets tests redirect them off real ~/.
-ROOTS_HOME = Path(os.environ.get("PLAINKEEP_ROOTS_HOME") or os.environ.get("HOME") or Path.home())
+# The sibling roots (§2) — never inside ~/plainkeep. PLAINKEEP_ROOTS_HOME lets tests redirect them
+# off the real ~/.
+#
+# The precedence MIRRORS `lib/wall.py`'s HOME, PLAINKEEP_TEST_HOME included, and that is load-bearing
+# rather than tidy: `wall.HOME` anchors the write wall's ~/files segment and this anchors where the
+# verbs actually put files, so the two disagreeing does not produce a wrong path — it produces a
+# DENY on a correct one. Harmless while `files ingest` sat outside the wall (Task 1c put it behind
+# the seam); a real divergence for anyone with PLAINKEEP_TEST_HOME exported, from that point on.
+ROOTS_HOME = Path(os.environ.get("PLAINKEEP_TEST_HOME")
+                  or os.environ.get("PLAINKEEP_ROOTS_HOME")
+                  or os.environ.get("HOME") or Path.home())
 WORK_ROOT = ROOTS_HOME / "work"
 FILES_ROOT = ROOTS_HOME / "files"
 WORK_KINDS = ("products", "labs", "tools")   # clients/ is nested <client>/<project>; archive/ is special

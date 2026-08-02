@@ -421,6 +421,40 @@ def _parse_route(rest):
     return paths.FILES_ROOT / "inbox", None, None, leftover
 
 
+# How many `-2`, `-3`, … names an arriving original may try before ingest gives up. The loop it
+# replaced was unbounded, which was survivable only because it never really contended for a name;
+# a bounded loop that reports an honest failure is the right shape once it does.
+UNIQUIFY_LIMIT = 100
+
+
+def _arrive(src: Path, dest_dir: Path) -> Path:
+    """Move `src` into `dest_dir` under a name nothing else holds, overwriting nothing. Returns the
+    destination.
+
+    `dest_dir` is `~/files/<hub>/in/` for a routed ingest, and that tree is APPEND-ONLY (Task 1c):
+    an original ARRIVES by atomic creation, and no existing one is ever replaced. So there is
+    deliberately NO `dest.exists()` test here — an exists()-test followed by a move is not a guard,
+    it is the bug: another arrival takes the name in between and one file's bytes silently become
+    the other's (measured at BASE 5436ec6: 217 of 320 originals lost under 16-way concurrency).
+
+    Each candidate name is ATTEMPTED instead. `vaultio.move_create_only` fails EEXIST from
+    `link(2)`/`O_EXCL` itself, so the collision answer and the move are one indivisible step, and
+    `FileExistsError` — not a stat — is what sends us to the next name."""
+    try:
+        vaultio.mkdir(dest_dir, parents=True, exist_ok=False)
+    except FileExistsError:
+        pass   # already there. The append-only wall admits a create, not an exist_ok write.
+    for i in range(1, UNIQUIFY_LIMIT + 1):
+        cand = dest_dir / (src.name if i == 1 else f"{src.stem}-{i}{src.suffix}")
+        try:
+            return vaultio.move_create_only(src, cand)
+        except FileExistsError:
+            continue
+    output.fail(output.EXIT_UNEXPECTED,
+                f"{UNIQUIFY_LIMIT} names from '{src.name}' onward are taken in {dest_dir} — "
+                f"'{src.name}' was NOT moved and nothing there was touched", verb="files")
+
+
 def cmd_ingest(argv, dry=False, extract=False):
     dest_dir, hub_slug, hub_note, rest = _parse_route(argv)
     if hub_slug and hub_note is None:
@@ -470,16 +504,7 @@ def cmd_ingest(argv, dry=False, extract=False):
                 events.append(f"    {GREEN}would link{RESET} -> [[{hub_slug}]]"); linked += 1
             continue
 
-        # NOT behind the wall — see test/run_pathwall.py EXEMPT. `--client` routes here into
-        # ~/files/<hub>/in/, and the wall DENIES every write under in/ ("originals are read-only
-        # evidence"). Ingest is how an original ARRIVES; the uniquifying loop just below is what
-        # keeps it from ever overwriting one.
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        dest = dest_dir / src.name
-        i = 2
-        while dest.exists():
-            dest = dest_dir / f"{src.stem}-{i}{src.suffix}"; i += 1
-        shutil.move(str(src), str(dest))
+        dest = _arrive(src, dest_dir)
         note = _shadow(dest, src.name, sha, hub_slug)
         paths.append_journal(f"files ingest {src.name} -> {dest}" + (f" [[{hub_slug}]]" if hub_slug else ""))
         events.append(f"  {GREEN}filed{RESET}: {src.name} -> ~/files/{where}/  ({note.relative_to(paths.PLAINKEEP_HOME)})")

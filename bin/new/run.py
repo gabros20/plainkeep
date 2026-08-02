@@ -128,7 +128,14 @@ def main(argv):
                                f"would create client '{name}' (wiki/clients/{slug}.md + {tree}/)  (dry run — nothing written)")
         hub = _hub("clients", "client", slug, name)
         for sub in ("in", "out", "work"):
-            (tree / sub).mkdir(parents=True, exist_ok=True)  # in/ is walled — see run_pathwall EXEMPT
+            # `exist_ok=False` makes each of these an ATOMIC create, which is the only write shape
+            # the append-only wall admits for `in/` (Task 1c) — `new client` creates the empty
+            # container, it never puts an original in it. An already-present tree is not an error:
+            # nothing is mutated either way, and this has always tolerated one.
+            try:
+                vaultio.mkdir(tree / sub, parents=True, exist_ok=False)
+            except FileExistsError:
+                pass
         paths.append_journal(f"new client: {slug}")
         data = {"type": "client", "slug": slug, "hub": str(hub.relative_to(paths.PLAINKEEP_HOME)), "tree": str(tree)}
 

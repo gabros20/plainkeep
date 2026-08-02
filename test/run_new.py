@@ -23,6 +23,10 @@ def check(name, cond, detail=""):
 
 def run(opshome, roots, *args):
     env = {**os.environ, "PLAINKEEP_HOME": str(opshome), "PLAINKEEP_ROOTS_HOME": str(roots)}
+    # `new client`'s in/out/work mkdir goes through the write seam since Task 1c, and the wall's
+    # ~/files anchor and `paths.FILES_ROOT` both read PLAINKEEP_TEST_HOME first — an inherited one
+    # would relocate this fixture out from under the assertions (as run_pathwall.py notes).
+    env.pop("PLAINKEEP_TEST_HOME", None)
     return subprocess.run([sys.executable, str(REPO / "bin" / "new" / "run.py"), *args],
                           capture_output=True, text=True, env=env)
 

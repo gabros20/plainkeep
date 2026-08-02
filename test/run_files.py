@@ -21,6 +21,11 @@ def check(name, cond, detail=""):
 
 def run(ops, roots, *args, extra=None):
     env = {**os.environ, "PLAINKEEP_HOME": str(ops), "PLAINKEEP_ROOTS_HOME": str(roots), **(extra or {})}
+    # Ingest goes through the write seam since Task 1c, and the wall's ~/files anchor and
+    # `paths.FILES_ROOT` both read PLAINKEEP_TEST_HOME ahead of PLAINKEEP_ROOTS_HOME. An inherited
+    # one would relocate this fixture out from under the assertions below (run_pathwall.py pops it
+    # for the same reason).
+    env.pop("PLAINKEEP_TEST_HOME", None)
     return subprocess.run([sys.executable, str(REPO / "bin" / "files" / "run.py"), *args],
                           capture_output=True, text=True, env=env)
 

@@ -182,21 +182,14 @@ EXEMPT: dict[str, dict[str, str]] = {
         'shutil.copytree(TEMPLATE, repo)': "same ~/work project tree",
         'p.write_text(t, encoding="utf-8")':
             "_fill() substituting template placeholders INSIDE the ~/work repo just created",
-        '(tree / sub).mkdir(parents=True, exist_ok=True)':
-            "`new client` creates in/out/work — and in/ is the walled originals directory",
     },
-    # The sharpest one, and it is a CONTRADICTION rather than an omission: the wall's model says
-    # "~/files/**/in/ originals are read-only evidence" (guardrail._in_originals, validated case
-    # `originals-in-readonly`), while `files ingest --client` and `new client` exist precisely to
-    # PUT an original into in/. Creating a new original is not modifying evidence, but the rule as
-    # validated does not draw that line, and a wiring commit is the wrong place to redraw it.
-    "bin/files/run.py": {
-        'dest_dir.mkdir(parents=True, exist_ok=True)':
-            "ingest arrival directory — may be ~/files/<hub>/in/, which the wall denies",
-        'shutil.move(str(src), str(dest))':
-            "the ingest move itself; the verb's own uniquifying loop is what guarantees it never "
-            "overwrites an existing original",
-    },
+    # `bin/files/run.py` and `new client`'s in/out/work `mkdir` USED to sit here, and they were the
+    # sharpest entries on the list — a CONTRADICTION rather than an omission: the wall said
+    # "~/files/**/in/ originals are read-only evidence" while `files ingest --client` existed
+    # precisely to put an original there, so the only verb that writes an original was the one verb
+    # the wall never saw. Phase 2 Task 1c redrew the rule (append-only: an original ARRIVES by
+    # atomic creation, an existing one is never touched) and both sites went behind the seam.
+    # They are GONE rather than reworded, and the stale-exemption check below is what proves it.
     "bin/lib/vaultreg.py": {
         'self.path.parent.mkdir(parents=True, exist_ok=True)':
             "the REGISTRY's config directory ($XDG_CONFIG_HOME/plainkeep) — it lives outside every "

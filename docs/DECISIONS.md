@@ -1306,9 +1306,13 @@ mutation-tested; the numbers are from this machine (macOS arm64, CPython 3.12 / 
    removed with the version it describes. ADR-017's `seal_problems` says in so many words that a
    mode check cannot catch an edit whose author put the mode back; this is the thing that entry said
    was "not shipped". `provision.sync()` checks the two files it is about to hand to uv BEFORE uv
-   reads them, so **a tampered lock fails its checksum rather than installing**. Pinned by a test that
-   performs exactly the hot patch the seal admits it misses and asserts the seal stays quiet while
-   the checksums name the file. It still does not prove the SOURCE was authentic: `install()` digests
+   reads them, so **a tampered lock fails its checksum rather than installing** — and **both**
+   provisioning paths enforce it: `--core-provision sync` runs the same narrow check
+   (`provision.ts:deliveredDigestProblems`), because on a machine with no system python3 the core IS
+   the provisioning path, and a gate only the Python side held would hold exactly on the machines
+   that do not need it. Pinned by a test that performs exactly the hot patch the seal admits it
+   misses — asserting the seal stays quiet while the checksums name the file — and by three more
+   that drive the real binary. It still does not prove the SOURCE was authentic: `install()` digests
    what it was handed.
 
 10. **`uv sync --frozen` does not check the lock against the project — measured, and it changes the

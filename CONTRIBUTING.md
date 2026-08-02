@@ -14,6 +14,35 @@ python3 test/run_<suite>.py      # one suite
 
 All suites must stay green. CI (`.github/workflows/ci.yml`) runs `run_all.py` on every push/PR.
 
+## Run the engine you just edited — the edit→install→run loop
+
+**Since ADR-017 there is no `./plainkeep <verb>` loop.** This checkout is the engine SOURCE and (if
+you registered it) a data vault, and one directory cannot be both: dispatching through the
+checkout's own launcher against the checkout is refused with **exit 5**, naming the installer as the
+remediation. What runs your edits is an INSTALLED engine, and an installed engine is a read-only
+snapshot — so an edit is not live until you re-install it.
+
+```sh
+python3 bin/lib/enginetree.py --install . --force   # ~0.2 s; re-points `current` atomically
+plainkeep <verb>                                    # the INSTALLED launcher, put on PATH by script/setup
+```
+
+`--force` is required because re-installing the same `VERSION` must REPLACE the tree rather than
+refuse it — which is exactly the contributor case. If `plainkeep` is not on PATH, invoke the
+launcher by path: `"$(python3 bin/lib/enginetree.py --print current)"/plainkeep <verb>`.
+
+To iterate without touching your real install, point the install ROOT somewhere disposable — the
+variable is read by the installer surface only, never by a dispatch:
+
+```sh
+export PLAINKEEP_ENGINE_HOME=/tmp/pk-dev
+python3 bin/lib/enginetree.py --install . --force
+"$(python3 bin/lib/enginetree.py --print current)"/plainkeep <verb>
+```
+
+The checkout can still be ACTED ON as a vault — `plainkeep status` from an installed engine against
+this directory works fine. What is refused is dispatching *through this checkout's own launcher*.
+
 ## Add a verb — one folder
 
 > [!IMPORTANT]
@@ -42,10 +71,12 @@ hand:
    **`dry_run`** for mutating verbs — shapes in [`docs/machine-contract.md`](docs/machine-contract.md).
    Emit through `lib.output` (`emit` / `emit_rows` / `fail`), never hand-rolled JSON.
 3. **Register the group** in `bin/lib/manifest.py` `GROUPS` (optional but tidy).
-4. **`plainkeep help`** — regenerates `plainkeep.json`. Confirm the verb appears.
+4. **Re-install, then `plainkeep help`** — `python3 bin/lib/enginetree.py --install . --force` first
+   (see the loop above; the installed tree is a snapshot, so an un-installed verb does not exist to
+   the dispatcher), then `plainkeep help` regenerates `plainkeep.json`. Confirm the verb appears.
 5. **`test/run_<verb>.py`** — cover it against a temp `PLAINKEEP_HOME` (and `PLAINKEEP_ROOTS_HOME`
    for the sibling roots). Add it to `test/run_all.py`.
-6. **`plainkeep doctor`** — should stay all-green.
+6. **`plainkeep doctor`** — should stay all-green (again: through the installed launcher).
 
 ### Conventions
 

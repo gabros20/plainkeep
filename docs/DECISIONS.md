@@ -948,11 +948,12 @@ mutation-tested rather than argued.
 2. **`PLAINKEEP_ENGINE` is an OUTPUT, never an input, and that is how D2's rule is satisfied.** The
    engine root is derived from where the code is — `Path(__file__).resolve().parents[2]` in
    `bin/lib/enginetree.py`, `realpath(execPath)/../..` in the core, a `$0` symlink chain ending in
-   `cd -P` in the bash floor — and **nothing that decides where to load code from ever reads the
-   variable**. Both dispatchers OVERWRITE it at their entry point, before any flag branch and before
-   discovery. The alternative — read it and validate it — was rejected: a validated variable is still
-   a variable, and the failure it admits (a caller naming a well-formed engine tree of their choosing)
-   is exactly the one D2 forbids.
+   `cd -P` in the bash floor. **Scoped claim: inside a dispatch — from either dispatcher's entry
+   point onward — nothing that decides where to load code from reads the variable.** Both dispatchers
+   OVERWRITE it at their entry point, before any flag branch and before discovery, and every child
+   spawn inherits the replaced value. The alternative — read it and validate it — was rejected: a
+   validated variable is still a variable, and the failure it admits (a caller naming a well-formed
+   engine tree of their choosing) is exactly the one D2 forbids.
 
    Its consumers are the processes that genuinely cannot self-locate: a PLUGIN verb under
    `<vault>/plugins/<pack>/<verb>/`, a frontend script, a scheduled job. `templates/verb/run.py` — the
@@ -960,12 +961,50 @@ mutation-tested rather than argued.
    `$PLAINKEEP_HOME/bin`, so without this variable every scaffolded plugin would have died on its
    import the moment the engine moved.
 
+   **The scope is not decoration — two paths in the engine's own owned set sit OUTSIDE it, and both
+   ship.** An earlier draft of this entry stated the claim universally; it is not universally true,
+   and the exceptions are named here rather than left for a reader to find:
+
+   - **`frontends/raycast/*.sh` read `PLAINKEEP_ENGINE`** (`quick-capture.sh:20` and the same line in
+     `search.sh`, `task-add.sh`, `task-list.sh`, `status-inline.sh`). These are top-level ENTRY
+     points, not dispatcher children — nothing has overwritten the variable yet when they run, so the
+     value they read is genuinely the caller's. `command -v plainkeep` is consulted first, so the
+     exposure is limited to a machine with no `plainkeep` on PATH; and what a raycast script does with
+     the value is `exec` a launcher, which then activates its own engine from `$0`. It is a launcher
+     shim choosing which launcher, not a resolver choosing which code to import.
+   - **`PLAINKEEP_CORE_BIN` is the unhardened sibling, and on the core path it wins.** `plainkeep:170`
+     takes `PK_CORE="${PLAINKEEP_CORE_BIN:-$ENGINE/.local/bin/plainkeep-core}"` and `exec`s it, and
+     the core self-locates its engine from `execPath` (`cli/src/core/vaultroot.ts:92-104`) — so
+     substituting the binary substitutes the ENGINE, silently, after the floor has already exported
+     the correct one. Measured: with `PLAINKEEP_CORE=require`, dispatching `/tmp/…/engine/current/
+     plainkeep vault status --json` under `PLAINKEEP_CORE_BIN=<repo>/.local/bin/plainkeep-core`
+     reports `engine_root` = the REPO, and `engine_env_matches: true` — because the substituted core
+     re-exported its own answer over the floor's. Under `PLAINKEEP_CORE=off` the floor never execs a
+     core and the substitution is inert. `PLAINKEEP_CORE_BIN` predates this task (Phase 1) and the
+     test harness depends on it, so it is DISCLOSED, not removed. Hardening it — or at minimum making
+     `vault status` report a substituted core — is a follow-up this entry registers.
+
+   Neither exception weakens what D2 actually requires (*the core REPLACES any inherited
+   `PLAINKEEP_ENGINE`*), which is met and mutation-tested in both dispatchers (M5/M6). They bound the
+   claim, which is a different and smaller thing than satisfying it.
+
 3. **The ownership manifest is executable, not descriptive.** `enginetree.OWNED_TREES` /
    `OWNED_FILES` is simultaneously what `--install` copies and what `verify()` checks; an install
    that fails verification is never renamed into place and never activated. Measured against the
    tree at implementation time: **35 verb directories** (each with `run.py` AND `cmd.json`) and
    **24 `bin/lib` modules** — the plan section's "×34 / ×19" was stale before this task began, and
    the counts are pinned in the suite so a silent shrink reddens.
+
+   The strength of the proof is **not uniform across the set**, and the difference is worth naming.
+   Every owned path is proved PRESENT in an installed tree. Every one of them is additionally proved
+   RESOLVED FROM it — a test that fails if the code reads the repository instead — *except*
+   `frontends/raycast/*.sh`, where only presence is proved (`run_core_parity.py:1394`) plus a lint of
+   the sources in the repo (`run_terminal.py:62-73`). No test dispatches a raycast script out of an
+   installed engine. That is a deliberate stopping point rather than an oversight: a raycast script is
+   a launcher SHIM that `exec`s `plainkeep` — it is not imported, and the engine it ends up running is
+   chosen by the launcher's own self-location, not by where the shim was read from. Presence is
+   therefore close to the whole of the available claim; "resolved from" is a property these five files
+   do not really have.
 
 4. **An installed engine is read-only (dirs 0555, files 0444/0555).** That is the property that makes
    "immutable" mean something: the manual this task rewrote used to describe editing engine files in
@@ -1006,7 +1045,9 @@ was scoped to move; `bin/lib/enginetree.py --install|--activate|--verify|--print
 
 **Consequences.**
 - **It buys** the thing Phase 2 exists for: a vault is data. A vault holding only notes now
-  dispatches (all 271 checks in `test/run_discovery.py` run against data-only vaults), an engine
+  dispatches (`test/run_discovery.py`'s fixture helper `dispatchable_vault` no longer installs an
+  engine, so the DEFAULT fixture across its 271 checks is data-only — the exception is section J's
+  disjointness cases, which deliberately build overlapping trees in order to be refused), an engine
   upgrade is not a merge into somebody's notes, and a rollback is re-activating a previous version.
   It also closes a hole nobody had named: `resolver.ts` derived engine `bin/` as `<home>/bin`, so a
   vault that happened to carry `bin/capture/` had it resolved as an `engine` verb — the one source a
@@ -1014,7 +1055,19 @@ was scoped to move; `bin/lib/enginetree.py --install|--activate|--verify|--print
 - **It costs a break for anyone dispatching a vault's own launcher against that vault**, which is
   what `script/setup` produced before this task and therefore what every existing install looks
   like. It is exit 5 with a remediation naming the installer, not a silent misresolution — but it is
-  a break, and re-running `script/setup` is the migration.
+  a break, and re-running `script/setup` is the migration. Precisely: what is refused is dispatching
+  **through a tree's own launcher against that tree**. The checkout can still be ACTED ON as a vault
+  — `~/.local/share/plainkeep/engine/current/plainkeep status` against it exits 0 (measured) — so
+  "the checkout cannot be its own vault" overstates it, and "a PATH-symlink problem" understates it:
+  `./plainkeep <verb>` from the checkout is exit 5 whether or not `plainkeep` is on PATH at all.
+- **It costs contributors their edit→run loop**, which is the same break wearing work clothes and is
+  the one this repo pays daily. An installed engine is a read-only SNAPSHOT (D4), so editing
+  `bin/<verb>/run.py` changes nothing a dispatch can see until the tree is re-installed, and the
+  `./plainkeep help` gesture that used to close the loop is now exit 5. The replacement loop is
+  `python3 bin/lib/enginetree.py --install . --force` (~0.2 s, re-points `current` atomically) then
+  the installed launcher; `--force` exists precisely because re-installing the SAME version is the
+  contributor case rather than an error. Written down in `CONTRIBUTING.md` ("Run the engine you just
+  edited") and `test/README.md`, both of which shipped broken instructions until the r1 fix wave.
 - **CPython cannot write `__pycache__` into a read-only tree**, so an installed engine re-compiles
   the `bin/lib` modules it imports on every invocation. **Measured** — macOS arm64 / CPython 3.12,
   the same tree installed twice (once sealed, once `--writable`), both warmed three times, then 25

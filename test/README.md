@@ -163,8 +163,16 @@ test/
 ## The first real implementation
 Stage-1 search now exists for real (not just modeled): `../plainkeep` (dispatcher) + `../bin/index/`,
 `../bin/search/`, `../bin/lib/indexlib.py` (FTS5 + wikilink-graph engine), over `../content/`.
-Try it: `./plainkeep index` then `./plainkeep search "webhook retry"`. `run_search_impl.py` is its test.
-Rebuild rule: `rm -rf .index && ./plainkeep index`.
+Try it — **not** with `./plainkeep`. Since ADR-017 the checkout's own launcher refuses to dispatch
+against the checkout (exit 5: a vault is data, an engine is code). Install the engine, then run it:
+
+```sh
+python3 ../bin/lib/enginetree.py --install .. --force
+PK="$(python3 ../bin/lib/enginetree.py --print current)/plainkeep"
+"$PK" index && "$PK" search "webhook retry"
+```
+
+`run_search_impl.py` is its test. Rebuild rule: `rm -rf .index && "$PK" index`.
 
 ## Requirements
 Python 3.10+ (stdlib only). For the simulation: the `claude` CLI on `PATH` (or pass your own

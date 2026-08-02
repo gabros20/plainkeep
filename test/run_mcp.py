@@ -11,10 +11,11 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from lib.hermetic import seal
-from lib.vaultfx import mark_engine_vault
+from lib.vaultfx import dispatchable_vault
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -45,7 +46,20 @@ def main() -> int:
         vault = Path(td) / "plainkeep"
         shutil.copytree(REPO, vault,
                         ignore=shutil.ignore_patterns(".git", ".index", ".logs", "__pycache__", "*.pyc"))
-        ops = vault / "plainkeep"
+        # THE ENGINE IS A SEPARATE TREE (Phase 2 Task 2), installed through the real installer and
+        # invoked through `current/`. The vault's own `plainkeep` is no longer a launcher a dispatch
+        # may use — pointing it at its own directory is engine == data, refused with exit 5 — and
+        # every tool call this suite drives re-enters through the dispatcher, so getting this wrong
+        # fails the whole protocol rather than one check.
+        engine_home = Path(td) / "engine-install"
+        inst = subprocess.run(
+            [sys.executable, str(REPO / "bin" / "lib" / "enginetree.py"), "--install", str(REPO)],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAINKEEP_ENGINE_HOME": str(engine_home)})
+        if inst.returncode != 0:
+            print("engine install failed:", inst.returncode, inst.stdout, inst.stderr)
+            return 1
+        ops = engine_home / "engine" / "current" / "plainkeep"
         (vault / "wiki" / "notes" / "widget.md").write_text(
             "---\ntype: note\ntitle: Widget design\nstatus: active\ntags: [demo]\n---\n"
             "# Widget design\n\nThe widget subsystem is the heart of the demo.\n", encoding="utf-8")
@@ -108,8 +122,8 @@ def main() -> int:
     # and with the checkout as the root that line landed in the developer's own vault.
     with tempfile.TemporaryDirectory() as td:
         sh = Path(td)
-        mark_engine_vault(sh, REPO)
-        setup = subprocess.run([str(sh / "plainkeep"), "mcp", "--setup"], capture_output=True,
+        _, launcher = dispatchable_vault(sh, REPO)
+        setup = subprocess.run([str(launcher), "mcp", "--setup"], capture_output=True,
                                text=True, env={**os.environ, "PLAINKEEP_HOME": str(sh)})
     check("--setup prints the `claude mcp add plainkeep` line",
           "claude mcp add plainkeep --" in setup.stdout and setup.stdout.rstrip().endswith("plainkeep mcp"),

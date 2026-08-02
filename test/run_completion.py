@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 from lib.hermetic import seal
-from lib.vaultfx import mark_engine_vault
+from lib.vaultfx import dispatchable_vault
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -151,12 +151,13 @@ def main() -> int:
     # repo — i.e. the developer's own registered vault, whose audit log this check then appended to
     # on every green run. Measured: `.logs/plainkeep.log` in the real vault gained a line per run.
     #
-    # `mark_engine_vault` and not a bare marked directory: both dispatchers still look for the
-    # engine under the selected root (report §6.3). See test/lib/vaultfx.py.
+    # `dispatchable_vault` gives back a plain marked vault plus the SOURCE CHECKOUT's launcher —
+    # since Phase 2 Task 2 the engine is a separate tree, and a vault that carried one would now be
+    # refused (engine == data, exit 5). See test/lib/vaultfx.py.
     with tempfile.TemporaryDirectory() as td:
         dh = Path(td)
-        mark_engine_vault(dh, REPO)
-        d = subprocess.run([str(REPO / "plainkeep"), "__complete", "wiki"],
+        _, launcher = dispatchable_vault(dh, REPO)
+        d = subprocess.run([str(launcher), "__complete", "wiki"],
                            capture_output=True, text=True,
                            env={**os.environ, "PLAINKEEP_HOME": str(dh)})
     check("dispatcher runs __complete (guardrail: read)", d.returncode == 0 and "open" in d.stdout, d.stdout + d.stderr)

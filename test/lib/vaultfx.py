@@ -41,24 +41,22 @@ def mark_vault(root) -> str:
     return vid
 
 
-def mark_engine_vault(root, repo) -> str:
-    """A marked fixture vault that also CARRIES THE ENGINE, by symlink. Returns the vault id.
+def dispatchable_vault(root, repo) -> tuple[str, Path]:
+    """A marked fixture vault plus the LAUNCHER to dispatch it with. Returns `(vault_id, launcher)`.
 
-    For the handful of checks that run the REAL dispatcher (`REPO/plainkeep …`) rather than a verb's
-    `run.py`. Both dispatchers still look for the engine UNDER the selected root — the floor's
-    `$PK/bin/lib/guardrail.py`, the core's `opsHome()` — so those checks cannot point at a bare
-    marked directory; they used to point at the checkout instead, which is the developer's own
-    registered vault and which they appended an audit line to on every green run.
+    Replaces Task 1b's `mark_engine_vault`, which symlinked `bin/` and the shim INTO the fixture
+    because both dispatchers looked for the engine under the selected root. Phase 2 Task 2 moved the
+    engine out, and that layout is now REFUSED: engine root == data root is denied with exit 5. So
+    the fixture is a plain marked vault and the launcher is the SOURCE CHECKOUT's — a real engine,
+    disjoint from the temp vault by construction.
 
-    Symlinking `bin/` and the `plainkeep` shim satisfies the resolver without copying the tree, and
-    every path the dispatch WRITES (the audit log, an index, a note) is under `root` and therefore
-    thrown away with it. The engine-in-vault assumption on the resolver side is out of Task 1b's
-    scope (report §6.3); this is how a test lives with it hermetically until it is not."""
-    src = Path(repo)
-    dst = Path(root)
-    (dst / "bin").symlink_to(src / "bin")
-    (dst / "plainkeep").symlink_to(src / "plainkeep")
-    return mark_vault(dst)
+    The hermeticity that helper was written for is unchanged and is the reason this returns a
+    launcher rather than letting each caller reach for `REPO / "plainkeep"` and forget: every path a
+    dispatch WRITES (the audit log, an index, a note) is under `root` and thrown away with it,
+    because PLAINKEEP_HOME is `root`. Pointing PLAINKEEP_HOME at the checkout instead — which is what
+    these call sites did before Task 1b — appended to the developer's own vault on every green run.
+    """
+    return mark_vault(Path(root)), Path(repo) / "plainkeep"
 
 
 def hermetic_config(tmp) -> str:

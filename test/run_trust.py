@@ -124,7 +124,7 @@ def test_exit_codes():
     # that log line used to land in the developer's own vault.
     with tempfile.TemporaryDirectory() as td:
         dh = Path(td)
-        vaultfx.mark_engine_vault(dh, REPO)
+        vaultfx.dispatchable_vault(dh, REPO)
         denv = {**os.environ, "PLAINKEEP_HOME": str(dh)}
         d = subprocess.run([str(REPO / "plainkeep"), "serch"], capture_output=True, text=True, env=denv)
         check("dispatcher unknown verb → exit 4 (did-you-mean: search)",

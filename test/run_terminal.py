@@ -78,15 +78,21 @@ def main() -> int:
     check("docs/mobile-and-capture.md exists", (REPO / "docs" / "mobile-and-capture.md").exists())
 
     with tempfile.TemporaryDirectory() as td:
-        h = Path(td)
+        # THE ENGINE IS A SEPARATE TREE BESIDE the vault (Phase 2 Task 2). It used to be mirrored
+        # INTO the fixture vault, because the dispatcher tied `bin/` to PLAINKEEP_HOME; that is the
+        # assumption this phase deletes, and a vault that CONTAINS its engine is refused with exit 5
+        # — which is why the vault moved down a level too, into `<td>/vault`. `<td>` itself would
+        # have contained the engine. What the fixture still needs is unchanged: a real engine to
+        # re-enter through, so `plainkeep open` and `search --open` are exercised honestly.
+        h = Path(td) / "vault"
+        h.mkdir()
         env = {**os.environ, "PLAINKEEP_HOME": str(h), "PLAINKEEP_ROOTS_HOME": str(h), "PLAINKEEP_NO_OPEN": "1"}
-        # the `plainkeep` dispatcher ties bin/ to PLAINKEEP_HOME (run_mcp.py pattern) — mirror the engine into the
-        # fixture vault so dispatcher re-entry (`plainkeep open`, search `--open`) is exercised honestly.
-        shutil.copytree(BIN, h / "bin")
-        shutil.copy2(PLAINKEEP, h / "plainkeep"); os.chmod(h / "plainkeep", 0o755)
+        engine = Path(td) / "engine"
+        shutil.copytree(BIN, engine / "bin")
+        shutil.copy2(PLAINKEEP, engine / "plainkeep"); os.chmod(engine / "plainkeep", 0o755)
+        (engine / "VERSION").write_text((REPO / "VERSION").read_text(encoding="utf-8"), encoding="utf-8")
         vaultfx.mark_vault(h)   # Task 1b: the dispatcher validates the root before it dispatches
-        (h / "VERSION").write_text((REPO / "VERSION").read_text(encoding="utf-8"), encoding="utf-8")
-        home_bin = h / "plainkeep"
+        home_bin = engine / "plainkeep"
         # seed: a wiki note, a task, a files asset (shadow note), a search-only note
         note(h, "notes/alpha-widget.md", "Alpha Widget", "the alpha widget doc")
         note(h, "notes/gamma-doc.md", "Gamma Doc", "gamma content about frobnication")

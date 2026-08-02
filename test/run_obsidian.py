@@ -99,8 +99,19 @@ def main() -> int:
     # engine boundary: .obsidian/ must NOT be engine-owned; templates/ is user-owned too
     eng = (REPO / "script" / "engine.txt").read_text(encoding="utf-8")
     check(".obsidian NOT in engine.txt (user-owned)", ".obsidian" not in eng)
-    check("templates/ NOT engine-owned (user config pack survives updates)",
-          not re.search(r"(?m)^templates\b", eng))
+    # `templates/` is a MIXED directory, and this check says which half is which rather than
+    # refusing the whole word. `templates/obsidian`, `templates/wiki`, `templates/project-repo` and
+    # `templates/tax-formula.md` are the user's config pack and must survive an update untouched —
+    # that is what this has always been about. `templates/verb` is the plugin SCAFFOLD, which the
+    # ownership table assigns to the engine (ADR-017): it renders a `run.py` whose bootstrap line has
+    # to match the engine that will run it, so a copy left stale in somebody's vault scaffolds
+    # plugins that cannot find `lib`. It was in NEITHER manifest until Phase 2 Task 2, which is
+    # exactly how that would have happened.
+    check("the templates/ user pack is NOT engine-owned (it survives updates)",
+          not re.search(r"(?m)^templates/?$", eng)
+          and not re.search(r"(?m)^templates/(obsidian|wiki|project-repo|tax-formula)", eng), eng)
+    check("...but templates/verb IS engine-owned (it is a code scaffold, not user config)",
+          bool(re.search(r"(?m)^templates/verb$", eng)), eng)
     check("docs/obsidian-compat.md IS engine-owned", "docs/obsidian-compat.md" in eng)
     gi = (REPO / ".gitignore").read_text(encoding="utf-8")
     for pat in (".obsidian/workspace*.json", ".obsidian/cache", ".trash/", ".smart-env/"):

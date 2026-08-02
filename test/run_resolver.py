@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 from lib.hermetic import seal
-from lib.vaultfx import mark_engine_vault
+from lib.vaultfx import dispatchable_vault
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -39,10 +39,15 @@ def _mk_verb(d: Path, verb: str, risk: str = "read", run: str | None = None):
 
 
 # A runnable plugin verb that re-enters lib via PLAINKEEP_HOME (dispatcher-exported).
+# A plugin verb bootstraps `lib` through $PLAINKEEP_ENGINE, not $PLAINKEEP_HOME (Phase 2 Task 2 —
+# the same line `templates/verb/run.py` scaffolds). It read PLAINKEEP_HOME while the engine lived in
+# the vault; a vault has no `bin/` to import from now, and the dispatcher exports the engine root
+# for exactly this case. Keeping the old line here would have made this suite the last place in the
+# repo that still believed the engine was in the vault.
 _GREET = (
     "import os, sys\n"
     "from pathlib import Path\n"
-    "sys.path.insert(0, str(Path(os.environ['PLAINKEEP_HOME']) / 'bin'))\n"
+    "sys.path.insert(0, str(Path(os.environ['PLAINKEEP_ENGINE']) / 'bin'))\n"
     "from lib import output\n"
     "def main(argv):\n"
     "    _, argv = output.parse_argv(argv)\n"
@@ -112,20 +117,22 @@ def _dispatch_and_gate():
     because both dispatchers look for the engine under the selected root (report §6.3) and a bare
     temp dir has no `bin/lib`. The cost was that the four dispatches below appended four lines to the
     developer's own audit log on every green run, and that a crash between `_mk_verb` and the
-    `finally` left a plugin pack in their vault. `mark_engine_vault` gives the root an engine by
-    symlink, so the pack, the manifest and the log are all inside a directory that is deleted.
+    `finally` left a plugin pack in their vault. `dispatchable_vault` gives back a marked temp root
+    plus the checkout's launcher, so the pack, the manifest and the log are all inside a directory
+    that is deleted — and since Phase 2 Task 2 that IS the shipped shape: the engine is its own tree
+    and the vault holds only the plugin packs this suite is about.
     """
     with tempfile.TemporaryDirectory() as td:
         home = Path(td) / "vault"
         home.mkdir(parents=True)
-        mark_engine_vault(home, REPO)
+        _, launcher = dispatchable_vault(home, REPO)
         pack = home / "plugins" / "_restest"
         _mk_verb(pack / "greetplug", "greetplug", risk="read", run=_GREET)
         _mk_verb(pack / "needsyes", "needsyes", risk="confirm", run=_NEEDS)
         env = {**os.environ, "PLAINKEEP_HOME": str(home)}
 
         def ops(*args):
-            return subprocess.run([str(home / "plainkeep"), *args], capture_output=True, text=True, env=env)
+            return subprocess.run([str(launcher), *args], capture_output=True, text=True, env=env)
 
         r = ops("greetplug")
         check("plugin verb dispatches through ./plainkeep (exit 0)", r.returncode == 0, r.stdout + r.stderr)

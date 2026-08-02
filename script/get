@@ -88,10 +88,17 @@ if [ "$DEMO" = 1 ]; then
   # the registry lives OUTSIDE every vault — in the real ~/.config unless it is redirected. `rm -rf`
   # on one directory is this mode's whole promise, so the registry entry has to be in there with
   # everything else.
-  SETUP_ENV="PLAINKEEP_ROOTS_HOME='$DEMO_DIR' PLAINKEEP_BIN_DIR='$DEMO_DIR/.bin' PLAINKEEP_COMP_DIR='$DEMO_DIR/.comp' PLAINKEEP_CONFIG_HOME='$DEMO_DIR/.config' PLAINKEEP_HOME='$VAULT'"
+  # PLAINKEEP_ENGINE_HOME goes in the demo dir for the same reason (Phase 2 Task 2): setup now
+  # INSTALLS the engine, and its default install root is `~/.local/share/plainkeep`, i.e. outside the
+  # one directory this mode promises you can delete. Everything the demo creates has to be under
+  # `$DEMO_DIR` or the promise is false.
+  SETUP_ENV="PLAINKEEP_ROOTS_HOME='$DEMO_DIR' PLAINKEEP_BIN_DIR='$DEMO_DIR/.bin' PLAINKEEP_COMP_DIR='$DEMO_DIR/.comp' PLAINKEEP_CONFIG_HOME='$DEMO_DIR/.config' PLAINKEEP_ENGINE_HOME='$DEMO_DIR/.engine' PLAINKEEP_HOME='$VAULT'"
+  # The launcher the demo invokes is the INSTALLED one, not `$VAULT/plainkeep`: the vault and the
+  # engine may not be the same tree, and `$VAULT/plainkeep` against `$VAULT` is refused with exit 5.
+  DEMO_PK="$DEMO_DIR/.engine/engine/current/plainkeep"
   run "env $SETUP_ENV '$VAULT/script/setup' --full --yes --no-commit $REF_ARG --upstream '$REPO_URL'"
   say "3. seed example notes so search/week have something to show"
-  run "env $SETUP_ENV '$VAULT/plainkeep' capture 'demo: try plainkeep search, plainkeep week, plainkeep task add'"
+  run "env $SETUP_ENV '$DEMO_PK' capture 'demo: try plainkeep search, plainkeep week, plainkeep task add'"
   if [ "$DRY" != 1 ]; then
     mkdir -p "$VAULT/wiki/notes"
     cat > "$VAULT/wiki/notes/demo-welcome.md" <<'NOTE'
@@ -113,12 +120,13 @@ This is a throwaway demo vault. Try:
 Delete the one directory printed below to walk away — nothing else on your machine was touched.
 NOTE
   fi
-  run "env $SETUP_ENV '$VAULT/plainkeep' index"
+  run "env $SETUP_ENV '$DEMO_PK' index"
   echo
   say "demo ready. everything is under ONE directory:"
-  echo "  vault:  $VAULT"
-  echo "  try:    PLAINKEEP_HOME='$VAULT' '$VAULT/plainkeep' search demo"
-  echo "          PLAINKEEP_HOME='$VAULT' '$VAULT/plainkeep' week"
+  echo "  vault:  $VAULT   (your notes)"
+  echo "  engine: $DEMO_DIR/.engine/engine/current   (the code, installed separately)"
+  echo "  try:    PLAINKEEP_HOME='$VAULT' '$DEMO_PK' search demo"
+  echo "          PLAINKEEP_HOME='$VAULT' '$DEMO_PK' week"
   say "walk away (deletes the whole demo, touches nothing else):"
   echo "  rm -rf '$DEMO_DIR'"
   exit 0

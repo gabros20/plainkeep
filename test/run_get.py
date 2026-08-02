@@ -72,18 +72,24 @@ def main() -> int:
         r = run(["--demo", "--yes"], demo)
         vault = demo / "plainkeep"
         check("demo exits 0", r.returncode == 0, r.stdout[-400:] + r.stderr[-400:])
-        check("demo clones a vault with the plainkeep binary", (vault / "plainkeep").exists())
+        # The demo installs an ENGINE beside the vault, inside the same throwaway dir (Task 2) —
+        # the whole promise of `--demo` is that deleting one directory removes everything, and the
+        # engine's default install root is outside it.
+        demo_engine = demo / ".engine" / "engine" / "current"
+        check("demo installs an engine INSIDE the throwaway dir", (demo_engine / "plainkeep").is_file(),
+              str(sorted(p.name for p in demo.iterdir())))
+        check("demo's vault carries the cloned template", (vault / "bin").is_dir())
         check("demo seeds an example note", (vault / "wiki" / "notes" / "demo-welcome.md").exists())
         check("demo roots live inside the throwaway dir (not ~/)",
               (demo / "work").is_dir() and (demo / "files").is_dir())
         check("demo prints the one dir to delete to walk away", f"rm -rf '{demo}'" in r.stdout)
 
         env = {**os.environ, "PLAINKEEP_HOME": str(vault)}
-        s = subprocess.run([str(vault / "plainkeep"), "search", "demo", "--json"],
+        s = subprocess.run([str(demo_engine / "plainkeep"), "search", "demo", "--json"],
                            capture_output=True, text=True, env=env)
         rows = [ln for ln in s.stdout.splitlines() if ln.strip()]
         check("demo search returns hits", s.returncode == 0 and len(rows) > 1, s.stdout[:120])
-        w = subprocess.run([str(vault / "plainkeep"), "week"], capture_output=True, text=True, env=env)
+        w = subprocess.run([str(demo_engine / "plainkeep"), "week"], capture_output=True, text=True, env=env)
         check("demo week runs", w.returncode == 0, w.stderr)
 
     print(f"{BOLD}script/get — install funnel (Part 5.4) — {len(results)} checks{RESET}\n")

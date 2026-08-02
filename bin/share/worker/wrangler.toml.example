@@ -2,9 +2,11 @@ name = "plainkeep-share"
 main = "worker.js"
 compatibility_date = "2024-11-01"
 
-# Vault-local: copy this file to wrangler.toml (gitignored) and paste your namespace id.
-#   cp wrangler.toml.example wrangler.toml
-#   wrangler kv namespace create PLAINKEEP_SHARE
+# Vault-local: copy this file to <vault>/.share/wrangler.toml (gitignored) and paste your namespace
+# id. It does NOT belong beside this file — this directory ships with the engine, which is installed
+# read-only, and the copy would be refused by the path-wall as a write outside the vault.
+#   cp wrangler.toml.example ~/plainkeep/.share/wrangler.toml
+#   wrangler kv namespace create PLAINKEEP_SHARE --config ~/plainkeep/.share/wrangler.toml
 [[kv_namespaces]]
 binding = "PLAINKEEP_SHARE"
 id = "PASTE_KV_NAMESPACE_ID_HERE"

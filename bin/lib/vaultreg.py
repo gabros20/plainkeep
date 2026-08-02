@@ -70,8 +70,59 @@ class VaultError(Exception):
 def canonical(p) -> str:
     """The one spelling of a path this module ever stores or compares. Registry entries are written
     canonical and matched canonical-to-canonical — never against the caller's spelling, which on
-    macOS differs from the resolved form for anything under /tmp or /var."""
+    macOS differs from the resolved form for anything under /tmp or /var.
+
+    It returns the path's REAL spelling, which is what may be stored, exported and printed. It is NOT
+    a comparison key: `realpath` normalises symlinks and `..` but never CASE, and the default macOS
+    APFS volume is case-insensitive. Compare with `same_path` / `path_within` below, never with `==`
+    or `startswith`."""
     return os.path.realpath(os.path.abspath(os.path.expanduser(str(p))))
+
+
+def _same_entry(a: str, b: str) -> bool:
+    """Do these two spellings name ONE directory entry? Asked of the FILESYSTEM (st_dev, st_ino),
+    not of the strings.
+
+    This is the axis `canonical()` cannot normalise. `realpath` resolves symlinks and `..`, so two
+    spellings that differ only in CASE — or in Unicode normalisation, HFS+'s other fold — survive it
+    unchanged and compare unequal for a pair that is one directory. macOS's default APFS volume folds
+    case, so this is the ordinary configuration rather than an exotic one.
+
+    Identity is used rather than a `.lower()` fold because a fold is wrong in the other direction: on
+    a case-SENSITIVE volume `/x/Foo` and `/x/foo` are two directories, and folding would merge them.
+    `stat` answers for the volume the paths actually live on, whichever that is, and needs no platform
+    sniffing. A path that does not exist answers False, which leaves the caller with plain string
+    equality — the behaviour there has always been."""
+    try:
+        sa, sb = os.stat(a), os.stat(b)
+    except OSError:
+        return False
+    return (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
+
+
+def same_path(a, b) -> bool:
+    """Do two CANONICAL paths name one directory? String equality first (the overwhelmingly common
+    case, and free), identity second."""
+    a, b = str(a), str(b)
+    return a == b or _same_entry(a, b)
+
+
+def path_within(inner: str, outer: str) -> bool:
+    """`inner` IS `outer` or lives under it, on a path boundary.
+
+    Both sides must already be canonical. The boundary requirement is what keeps `…/4.0.0-dev-notes`
+    from reading as inside `…/4.0.0-dev`; the identity fallback is what keeps `/x/VAULTDIR/sub` from
+    reading as OUTSIDE `/x/vaultdir` on a case-folding volume — see `_same_entry`. The stat pair is
+    paid only when the string comparison has already answered "no"."""
+    outer = outer.rstrip("/") or "/"
+    sep = "" if outer == "/" else "/"
+    if inner == outer or inner.startswith(outer + sep):
+        return True
+    if len(inner) < len(outer):
+        return False
+    if len(inner) > len(outer) and inner[len(outer)] != "/":
+        return False                      # not on a path boundary — a sibling sharing a prefix
+    return _same_entry(inner[:len(outer)], outer)
 
 
 # --- the marker ---------------------------------------------------------------------------------
@@ -190,8 +241,13 @@ def validate_registry(data, f) -> dict:
                 val = canonical(val)
             # Duplicates are a REFUSAL, not a last-wins: two entries claiming one name/path/id means
             # the file is ambiguous, and guessing which the user meant is how a vault gets written to
-            # by accident.
-            if val in seen[key]:
+            # by accident. Paths are compared with `same_path` rather than `==` for the reason stated
+            # there: canonical is not a comparison key, and `/x/Vault` and `/x/vault` are one
+            # directory on the default macOS volume. `==` read them as two entries and let BOTH into
+            # the registry, which is the ambiguity this check exists to refuse.
+            dup = (any(same_path(val, s) for s in seen[key]) if key == "path"
+                   else val in seen[key])
+            if dup:
                 raise VaultError(f"vault registry has a duplicate {key} {val!r}: {f}")
             seen[key].add(val)
         out.append({**v, "path": canonical(v["path"])})
@@ -262,14 +318,14 @@ def find(reg: dict, selector: str) -> dict | None:
     if sel.startswith("/") or sel.startswith("~") or sel.startswith("."):
         c = canonical(sel)
         for v in reg["vaults"]:
-            if v["path"] == c:
+            if same_path(v["path"], c):
                 return v
     return None
 
 
 def entry_for_path(reg: dict, path) -> dict | None:
     c = canonical(path)
-    return next((v for v in reg["vaults"] if v["path"] == c), None)
+    return next((v for v in reg["vaults"] if same_path(v["path"], c)), None)
 
 
 def suggest_name(path) -> str:

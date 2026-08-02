@@ -7,7 +7,9 @@
 # (test/, ref/) that a lean vault drops are never re-introduced, because they aren't listed here.
 #
 # One path per line; blank lines and #comments ignored.
-# Note: bin/share/worker/wrangler.toml is NOT in upstream (per-vault); see wrangler.toml.example.
+# Note: the share worker's wrangler.toml is NOT in upstream (per-vault); see wrangler.toml.example.
+# It lives at `<vault>/.share/wrangler.toml`, not beside worker.js: `bin/` is engine-owned and an
+# installed engine is sealed read-only, so per-vault config cannot be written there (Task 2 r2).
 #
 # THIS IS NOT THE INSTALL MANIFEST, and the two are deliberately different sets (Phase 2 Task 2).
 # `enginetree.OWNED_TREES`/`OWNED_FILES` is what an installed ENGINE TREE contains — the code that

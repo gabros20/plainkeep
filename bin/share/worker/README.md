@@ -32,14 +32,19 @@ Expiry is native KV `expirationTtl` (1:1 from `--expires`, so there is no cleanu
 
 ## Deploy (once)
 
-`wrangler.toml` is **per-vault** (gitignored). The engine ships `wrangler.toml.example` only — `script/update` never overwrites your KV namespace id.
+`wrangler.toml` is **per-vault** (gitignored) and lives in the VAULT, at `<vault>/.share/wrangler.toml`
+— not in this directory. This directory is engine-owned and an installed engine is sealed read-only,
+so a per-vault file written beside `worker.js` could not be written at all. The engine ships
+`wrangler.toml.example` only; `script/update` never overwrites your KV namespace id.
+
+`plainkeep share init` prints these with your own paths filled in.
 
 ```sh
-cd bin/share/worker
-cp wrangler.toml.example wrangler.toml
-wrangler kv namespace create PLAINKEEP_SHARE     # paste the id into wrangler.toml
-wrangler deploy
-wrangler secret put PUBLISH_TOKEN          # optional but recommended — see below
+cp <engine>/bin/share/worker/wrangler.toml.example ~/plainkeep/.share/wrangler.toml
+wrangler kv namespace create PLAINKEEP_SHARE --config ~/plainkeep/.share/wrangler.toml   # paste the id in
+cd <engine>/bin/share/worker
+wrangler deploy --config ~/plainkeep/.share/wrangler.toml
+wrangler secret put PUBLISH_TOKEN --config ~/plainkeep/.share/wrangler.toml   # optional but recommended
 plainkeep share init --endpoint https://plainkeep-share.<subdomain>.workers.dev
 ```
 

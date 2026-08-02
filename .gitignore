@@ -41,7 +41,11 @@ skills/**/.system/
 .claude/shell-snapshots/
 .claude/history.jsonl
 
-# Per-vault Cloudflare Worker deploy config (KV namespace id). Synced template ships wrangler.toml.example only.
+# Per-vault Cloudflare Worker deploy config (KV namespace id). Synced template ships
+# wrangler.toml.example only. It lives in the VAULT (`.share/wrangler.toml`) since Phase 2 Task 2 —
+# the engine tree it used to sit in is installed read-only and cannot hold per-vault config. The old
+# path stays listed so a checkout that still has one does not start showing up as untracked.
+.share/wrangler.toml
 bin/share/worker/wrangler.toml
 
 # plainkeep-cli (cli/): TS source for the core binary + absorbed TUI is template-only (NOT in

@@ -331,8 +331,20 @@ def cmd_revoke(argv):
 
 # --------------------------------------------------------------------------- init
 
+# THE CODE IS ENGINE-OWNED; THE CONFIG IS VAULT-OWNED, and since Phase 2 Task 2 those are two
+# different trees. `bin/share/worker/` ships with the engine (`enginetree.OWNED_TREES` names `bin`,
+# and `verify()` names `worker.js` outright) and an installed engine is sealed 0555 — but
+# `wrangler.toml` is PER-VAULT data, which `script/engine.txt` has always said ("bin/share/worker/
+# wrangler.toml is NOT in upstream (per-vault)"). Under Phase 1 both halves sat inside the vault and
+# the distinction cost nothing. After the engine moved out, writing the config beside its own source
+# meant writing into the sealed engine: the path-wall refused it (correctly — the path escapes the
+# three roots) and `share init --yes`, the only way to configure the worker, could not run at all.
+#
+# So the two halves are anchored separately: the worker source stays where the engine put it, and the
+# config joins `.share/config.json` in the vault it belongs to. `wrangler` is told where to find it
+# with `--config`; nothing is written into the engine.
 WORKER_DIR = Path(__file__).resolve().parent / "worker"
-WRANGLER_TOML = WORKER_DIR / "wrangler.toml"
+WRANGLER_TOML = SHARE_DIR / "wrangler.toml"
 WRANGLER_EXAMPLE = WORKER_DIR / "wrangler.toml.example"
 
 
@@ -341,8 +353,8 @@ def _ensure_wrangler_toml() -> None:
         return
     if not WRANGLER_EXAMPLE.is_file():
         output.fail(output.EXIT_UNEXPECTED, "missing wrangler.toml.example in worker dir",
-                    hint=f"re-run script/update from upstream; expected {WRANGLER_EXAMPLE}", verb="share")
-    import shutil
+                    hint=f"reinstall the engine; expected {WRANGLER_EXAMPLE}", verb="share")
+    vaultio.mkdir(SHARE_DIR)
     vaultio.copy2(WRANGLER_EXAMPLE, WRANGLER_TOML)
 
 
@@ -396,13 +408,15 @@ def cmd_init(argv):
     if endpoint:
         _merge_config(endpoint=endpoint)  # merge, never clobber an existing publish_token
     steps = [
-        f"cd {WORKER_DIR}",
-        "cp wrangler.toml.example wrangler.toml   # once per vault; file is gitignored",
-        "wrangler kv namespace create PLAINKEEP_SHARE",
-        "# paste the namespace id into wrangler.toml, then:",
-        "wrangler deploy",
+        # The engine tree is READ-ONLY, so none of these run inside it: the config is copied OUT of
+        # the engine's example and into the vault, and every wrangler call is pointed back at it.
+        f"cp {WRANGLER_EXAMPLE} {WRANGLER_TOML}   # once per vault; lives in the vault, not the engine",
+        f"wrangler kv namespace create PLAINKEEP_SHARE --config {WRANGLER_TOML}",
+        f"# paste the namespace id into {WRANGLER_TOML}, then:",
+        f"cd {WORKER_DIR} && wrangler deploy --config {WRANGLER_TOML}",
         'python3 -c "import secrets; print(secrets.token_urlsafe(24))" | wrangler secret put '
-        "PUBLISH_TOKEN   # then put the same value in .share/config.json as publish_token",
+        f"PUBLISH_TOKEN --config {WRANGLER_TOML}   # then put the same value in .share/config.json "
+        "as publish_token",
         "plainkeep share init --endpoint https://<your-worker>.workers.dev",
         "# canonical flow: once wrangler.toml has its KV id, just re-run `plainkeep share init --yes` —",
         "# it deploys, generates + sets PUBLISH_TOKEN, and mirrors it into .share/config.json.",
@@ -422,12 +436,15 @@ def cmd_init(argv):
         output.fail(output.EXIT_UNEXPECTED,
                     "wrangler.toml still has placeholder KV id",
                     hint=f"edit {WRANGLER_TOML} after `wrangler kv namespace create PLAINKEEP_SHARE`", verb="share")
-    r = subprocess.run(["wrangler", "deploy"], cwd=str(WORKER_DIR))
+    # `--config` on every call: the cwd is the engine's worker directory (that is where worker.js
+    # is), and the config it would otherwise pick up beside it does not exist there any more.
+    r = subprocess.run(["wrangler", "deploy", "--config", str(WRANGLER_TOML)], cwd=str(WORKER_DIR))
     deployed = r.returncode == 0
     token_set = bool(_config().get("publish_token"))
     if deployed and not token_set:
         token = secrets.token_urlsafe(24)
-        sr = subprocess.run(["wrangler", "secret", "put", "PUBLISH_TOKEN"], cwd=str(WORKER_DIR),
+        sr = subprocess.run(["wrangler", "secret", "put", "PUBLISH_TOKEN",
+                             "--config", str(WRANGLER_TOML)], cwd=str(WORKER_DIR),
                             input=token, text=True)
         if sr.returncode == 0:
             _merge_config(publish_token=token)  # preserve endpoint; mirror the worker secret locally

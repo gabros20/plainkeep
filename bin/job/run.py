@@ -62,8 +62,15 @@ def _plist(name, job) -> str:
     # environment where nothing will be there to explain it. The plist keeps naming an ABSOLUTE
     # launcher (a scheduled job must never depend on discovery or on PATH) and both roots are baked
     # in absolutely: the engine's launcher as the program, the validated vault as PLAINKEEP_HOME.
+    #
+    # `stable_launcher()`, not `launcher()`, and the difference is the whole point: a plist is a
+    # PERSISTED artefact. `launcher()` spells the version (`…/engine/4.0.0-dev/plainkeep`) because
+    # ENGINE_ROOT resolves through `current`, so a plist written with it keeps running the OLD engine
+    # after the next `--activate` — silently — and becomes the 2am ENOENT above the moment that
+    # version is pruned. `current` is the name that survives an engine update.
     toks = job["command"].split()
-    args = [str(enginetree.launcher()), *toks[1:]] if toks and toks[0] == "plainkeep" else toks
+    args = ([str(enginetree.stable_launcher()), *toks[1:]]
+            if toks and toks[0] == "plainkeep" else toks)
     pa = "".join(f"\n      <string>{a}</string>" for a in args)
     s = job["schedule"]
     if "interval_minutes" in s:

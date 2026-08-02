@@ -187,7 +187,9 @@ EXEMPT: dict[str, dict[str, str]] = {
             "task's repo (guardrail.py's WORK branch), and `new project` has no task context",
         'shutil.copytree(TEMPLATE, repo)': "same ~/work project tree",
         'p.write_text(t, encoding="utf-8")':
-            "_fill() substituting template placeholders INSIDE the ~/work repo just created",
+            "_fill() substituting template placeholders in the tree just created — the ~/work repo "
+            "for `new project`, and for `new verb` the `.pk-scaffolding-*` staging leaf under the "
+            "vault's own plugins/local/, which `vaultio.copytree` already classified on the way in",
     },
     # `bin/files/run.py` and `new client`'s in/out/work `mkdir` USED to sit here, and they were the
     # sharpest entries on the list — a CONTRADICTION rather than an omission: the wall said
@@ -212,6 +214,12 @@ EXEMPT: dict[str, dict[str, str]] = {
     #
     # It is also not agent-reachable: `enginetree.install()` has no verb, is not in the frozen SDK
     # (`lib/api.py`), and is invoked by `script/setup` and the test harness only.
+    #
+    # TWO OF THESE KEYS ARE LOOSE, and a reviewer should know which. Matching is `text.startswith(k)`,
+    # and `d.parent.mkdir(...)` / `root.mkdir(...)` are not enginetree-specific text: any future line
+    # in this file beginning with either is licensed automatically, whatever `d` or `root` has come to
+    # mean by then. The other four name a distinctive receiver or argument. Nothing enforces this —
+    # it is a note about where the discipline has to come from the reader.
     "bin/lib/enginetree.py": {
         'd.parent.mkdir(parents=True, exist_ok=True)':
             "the installed engine tree's parent directories — engine code, outside every vault",
@@ -307,6 +315,9 @@ PINNED_DELETES: dict[str, set[str]] = {
     # `vaultroot.validate()`. Nothing an agent can reach calls any of them.
     "bin/lib/enginetree.py": {"shutil.rmtree(d, ignore_errors=True)",
                               "shutil.rmtree(staging, ignore_errors=True)",
+                              # the age-gated sweep of ABANDONED `.incoming-<version>.<pid>` trees;
+                              # same destination, same structural answer
+                              "shutil.rmtree(p, ignore_errors=True)",
                               # the staged tree becomes the version directory; the version
                               # directory it would overwrite was removed by remove_version() first
                               "os.rename(staging, dst)",
@@ -314,6 +325,14 @@ PINNED_DELETES: dict[str, set[str]] = {
                               # is created beside it and renamed over the old one
                               "tmp.unlink()",
                               "os.replace(tmp, link)"},
+    # `new verb` scaffolds through a `.pk-scaffolding-<verb>.<pid>` staging leaf and renames it into
+    # place, so that a scaffold which fails halfway (it did — the engine seal made every copied file
+    # read-only, and `_fill` could not substitute) leaves nothing behind instead of an unwritable verb
+    # full of `{{name}}` that the resolver then dispatched. The removal targets that leaf and only it:
+    # it is `paths.PLAINKEEP_HOME / "plugins" / "local" / ".pk-scaffolding-*"`, which cannot resolve
+    # under `~/files/**/in/` — plugins/ is a vault-owned code tree, not an originals tree. The move
+    # INTO place goes through the seam (`vaultio.replace`), which classifies both ends.
+    "bin/new/run.py": {"shutil.rmtree(staging, ignore_errors=True)"},
     "bin/plugin/run.py": {"shutil.rmtree(staging, ignore_errors=True)",
                           "shutil.rmtree(dest, ignore_errors=True)"},
     "bin/repo/run.py": {"shutil.rmtree(nm); freed += 1"},

@@ -10,8 +10,10 @@ verb" into a one-command, guardrailed act instead of hand-wiring the surface. Us
 user-owned plugins/ tree (Part 2.1), never in bin/ (the `script/update` boundary). Slugs are globally
 unique and IDENTICAL across wiki ↔ ~/work ↔ ~/files (§2).
 """
+import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -58,9 +60,8 @@ def _new_verb(rest, dry=False):
         return output.emit({"dry_run": True, "type": "verb", "name": name, "risk": risk, "code": f"{rel}/run.py"}, "new",
                            human=lambda _: f"would scaffold verb '{name}' ({rel}/, risk: {risk})  (dry run — nothing written)")
     vaultio.mkdir(dest.parent)
-    vaultio.copytree(VERB_TEMPLATE, dest)
-    _fill(dest, {"{{name}}": name, "{{risk}}": risk,
-                 "{{summary}}": summary or f"TODO: describe {name}"})
+    _scaffold_from_template(dest, {"{{name}}": name, "{{risk}}": risk,
+                                   "{{summary}}": summary or f"TODO: describe {name}"})
     from lib.manifest import write_manifest  # regenerate plainkeep.json so `plainkeep help` shows the new verb
     write_manifest()
     paths.append_journal(f"new verb: {name} (risk {risk})")
@@ -74,6 +75,42 @@ def _new_verb(rest, dry=False):
               + ("" if risk != "confirm" else "  (confirm-class → runs with --yes until you lower risk)"))
 
     return output.emit(data, "new", human=render)
+
+
+def _scaffold_from_template(dest: Path, repl: dict) -> None:
+    """Render `templates/verb/` into `dest` — STAGED, MODE-NORMALISED, then moved into place.
+
+    Two things make the obvious `copytree` + `_fill` wrong here, and both only bite through a
+    NORMALLY INSTALLED engine — which is why the suite, which scaffolds out of the writable
+    repository checkout, never saw either:
+
+    1. MODE. `templates/verb` is engine-owned, and `enginetree.install()` seals the engine tree at
+       0444/0555. `shutil.copytree` PRESERVES source modes, so the scaffold landed in the user's
+       vault read-only and `_fill`'s `write_text` could not substitute a single placeholder. Every
+       copied file is normalised here; the executable bit is the only one carried across.
+    2. ATOMICITY. That failure happened halfway, leaving an unwritable `plugins/local/<name>/` whose
+       files still held `{{name}}` — and the resolver DISPATCHED it, exit 0, printing the raw
+       template text. A half-created verb the resolver happily serves is worse than a refusal. So
+       the tree is built under a dot-prefixed sibling and renamed in only once it is complete: what
+       appears under the verb's name is finished, or nothing appears at all.
+
+    The staging leaf is pid-unique and lives in `plugins/local/`, i.e. inside the vault and inside
+    the wall — the same shape `enginetree.install()` and `bin/plugin/run.py` already use."""
+    staging = dest.parent / f".pk-scaffolding-{dest.name}.{os.getpid()}"
+    if staging.exists():
+        shutil.rmtree(staging, ignore_errors=True)
+    try:
+        vaultio.copytree(VERB_TEMPLATE, staging)
+        for p in [staging, *staging.rglob("*")]:
+            if p.is_dir():
+                p.chmod(0o755)
+            elif p.is_file():
+                p.chmod(0o755 if (p.stat().st_mode & stat.S_IXUSR) else 0o644)
+        _fill(staging, repl)
+        vaultio.replace(staging, dest)
+    except BaseException:
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
 
 
 def _all_slugs() -> set:

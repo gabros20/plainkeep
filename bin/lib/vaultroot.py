@@ -78,10 +78,27 @@ except ImportError:      # loaded top-level / exec'd standalone with bin/lib on 
     _LIB = os.path.dirname(os.path.abspath(__file__))
     if _LIB not in sys.path:
         sys.path.insert(0, _LIB)
-    import enginetree   # type: ignore
-    import output      # type: ignore
-    import vaultreg    # type: ignore
-    import wall        # type: ignore
+    try:
+        import enginetree   # type: ignore
+        import output      # type: ignore
+        import vaultreg    # type: ignore
+        import wall        # type: ignore
+    except ImportError as _e:
+        # THE PROBE CANNOT SPEAK IF THIS BLOCK DIES. `enginetree.require_intact()` is the refusal
+        # ADR-014 D2 promises for an incomplete engine ("absent/unverified → refuse"), and it runs
+        # from `require_engine()` BELOW these imports — so an engine missing `output.py`, `wall.py`
+        # or `vaultreg.py` produced a raw Python traceback and exit 1 instead, from the one seam both
+        # dispatchers share. There is no `output` to format with here, by construction, so the text
+        # is written by hand and kept word-for-word identical to `require_intact()`'s.
+        _r = os.path.dirname(_LIB)
+        _r = os.path.dirname(_r)
+        sys.stderr.write(
+            f"plainkeep: the plainkeep engine at {_r} is incomplete ({_e})\n"
+            f"  reinstall it:\n"
+            f"    python3 {os.path.abspath(__file__).replace('vaultroot.py', 'enginetree.py')} "
+            f"--install <source-checkout>\n")
+        raise SystemExit(2)      # EXIT_USAGE, the code require_intact()'s VaultError carries — and
+        #                          output.py is the module that would have told us so
 
 VaultError = vaultreg.VaultError
 
@@ -220,7 +237,11 @@ def validate(candidate, *, how: str, require_registered: bool = False,
         # A registry entry pointing somewhere else means the vault MOVED (or this is a copy of it).
         # Substituting the registered path would act on the wrong notes and rescanning the disk to
         # find the "real" one is exactly the guess ADR-014 forbids, so this is loud.
-        if entry["path"] != root:
+        # `same_path`, not `==`: canonical is not a comparison key (see vaultreg), and on the default
+        # macOS volume a vault registered as `/x/vault` and reached as `/x/Vault` is ONE directory.
+        # `!=` called that a moved vault and pushed the operator at `vault rebind` for a vault that
+        # had not moved.
+        if not vaultreg.same_path(entry["path"], root):
             raise VaultError(f"{how} names {root}, but vault '{entry['name']}' (id {vid}) is "
                              f"registered at {entry['path']}",
                              hint=f"if it moved: plainkeep vault rebind {entry['name']} {root} --yes")

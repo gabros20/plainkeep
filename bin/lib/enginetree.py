@@ -84,6 +84,14 @@ CURRENT_NAME = "current"
 # describes an intention rather than a disposition. These two tuples are what `install()` copies and
 # what `verify()` checks, so the table IS the installer.
 #
+# ADDING AN ENGINE-OWNED PATH TOUCHES MORE THAN THESE TWO TUPLES, and the other places are worth
+# naming here rather than leaving a reader to find them by reading to the end of `verify()`:
+#   * `verify()`'s NAMED_LIB_MODULES and NAMED_CONTENT below — a directory that exists is not the
+#     same as a directory that carries what makes it owned, so the load-bearing files are named;
+#   * `DISPATCH_PROBE` above, IF the new path is one a dispatch cannot run without;
+#   * `script/engine.txt`, the update boundary's own manifest (its header states how the two differ);
+#   * `test/run_core_parity.py`'s EXPECTED_ENGINE_* count pins.
+#
 # `templates/` is a mixed directory — `templates/obsidian`, `templates/wiki`, `templates/project-repo`
 # and `templates/tax-formula.md` are USER data that lives in the vault and that an update must never
 # overwrite. Only `templates/verb` is a code scaffold, so only it is named here.
@@ -100,22 +108,67 @@ OWNED_FILES = (
 
 # Directories under `bin/` that are NOT verbs, so `verify()` does not demand a run.py of them.
 NON_VERB_BIN_DIRS = ("lib",)
+# Excluded from the verb walk by NAME rather than by a `__`-prefix rule. The prefix rule was meant
+# for this one directory and also swallowed `bin/__complete/`, which is a REAL verb carrying both a
+# run.py and a cmd.json: it could vanish from an installed engine and `verify()`, `--verify` and
+# `doctor` would all still call the tree complete. Excluding by name is the narrowest spelling of
+# what was actually meant, and it makes `_verb_dirs` agree with the parity suite's count (which
+# excludes `lib` and nothing else).
+NON_VERB_BIN_NAMES = frozenset(NON_VERB_BIN_DIRS) | {"__pycache__"}
 
 # The dispatch-critical files, probed on EVERY invocation by `require_intact()`. Deliberately the
-# cheap half of `verify()`: four stats, not the ~150 the full manifest walk costs. The full walk runs
-# at INSTALL time (where a broken tree must never be left behind) and in `plainkeep doctor`.
+# cheap half of `verify()` — and the number is MEASURED, by counting `Path.stat` on a real installed
+# tree: 6 for `require_intact()` against 146 for the full walk. It used to read "four stats", and it
+# was 40: `_verb_dirs()` built and sorted the whole list to answer "is there at least one", which
+# `_has_verb_dir()` now short-circuits. The full walk runs at INSTALL time (where a broken tree must
+# never be left behind) and in `plainkeep doctor`.
+#
+# WHICH four is the question, not how few. `bin/lib/vaultroot.py` used to head this list and was
+# tautological: the only product caller is `vaultroot.require_engine()`, which runs INSIDE
+# vaultroot.py, so the file cannot be missing while the check runs. Meanwhile the modules vaultroot
+# imports at module scope — `output`, `wall`, `vaultreg`, `enginetree` — died with a raw traceback
+# before the probe could speak, which is the failure mode ADR-014 D2's "absent/unverified → refuse"
+# exists to prevent. `output.py` takes the tautological slot (it is what a refusal is PRINTED with,
+# so its absence is the one that produces the worst output), and vaultroot's sibling-import block
+# refuses in the same words when one of the others is gone.
 DISPATCH_PROBE = (
-    "bin/lib/vaultroot.py",             # the floor and the core both spawn this first
-    "bin/lib/guardrail.py",             # ...then this, as the gate
-    "bin/lib/resolver.py",              # ...then this, to find the verb
+    "bin/lib/output.py",                # the refusal itself is printed with this
+    "bin/lib/vaultreg.py",              # ...VaultError and the canonical/compare pair live here
+    "bin/lib/guardrail.py",             # ...the gate
+    "bin/lib/resolver.py",              # ...how a verb is found
     "VERSION",                          # manifest.py's <engine>/VERSION
 )
 
 
 def launcher(root: Path | None = None) -> Path:
-    """The `plainkeep` launcher inside an engine tree. What a scheduled job or a frontend must
-    invoke, now that `$PLAINKEEP_HOME/plainkeep` is not a thing that exists."""
+    """The `plainkeep` launcher inside an engine tree — THIS engine tree, version and all.
+
+    For spawning something NOW. For a path that gets written down, use `stable_launcher()`."""
     return (root or ENGINE_ROOT) / "plainkeep"
+
+
+def stable_launcher() -> Path:
+    """The launcher path to BAKE INTO an artefact that outlives this invocation — a launchd plist, an
+    MCP client's server config, anything persisted.
+
+    `ENGINE_ROOT` resolves THROUGH `current` on purpose (see above), so `launcher()` always spells the
+    version: `…/engine/4.0.0-dev/plainkeep`. That is right for a spawn and wrong for a record. A plist
+    written with a version-pinned path keeps running the OLD engine after the next `--activate`,
+    silently, and becomes ENOENT the moment that version is pruned — at 2am, in a sanitized launchd
+    environment, which is the failure `_plist`'s own comment says the absolute path exists to avoid.
+    `current` is the name that survives an engine update, and it is already what `script/setup`
+    symlinks onto PATH and what both refusal hints tell an operator to run.
+
+    Falls back to the version-pinned path when there is no `current` to point at — a contributor
+    running `./plainkeep` out of a checkout has no install root, and a persisted path that exists is
+    worth more than a stable one that does not."""
+    link = current_link()
+    try:
+        if link.is_symlink() and (link / "plainkeep").is_file():
+            return link / "plainkeep"
+    except OSError:
+        pass
+    return launcher()
 
 
 def engine_bin(root: Path | None = None) -> Path:
@@ -147,20 +200,31 @@ def current_link() -> Path:
 
 
 def installed_versions() -> list[str]:
+    """Every INSTALLED version. Dot-prefixed names are excluded because they are the installer's own
+    namespace, not versions: a `SIGKILL` mid-copy leaves `.incoming-<v>.<pid>` behind, and listing it
+    as an installed version made `--print versions` report debris and `--activate` willing to point
+    `current` at a half-copied tree."""
     try:
         return sorted(p.name for p in versions_dir().iterdir()
-                      if p.is_dir() and not p.is_symlink())
+                      if p.is_dir() and not p.is_symlink() and not p.name.startswith("."))
     except OSError:
         return []
 
 
 def active_engine() -> Path | None:
-    """What `current` points at, resolved — or None when nothing is activated."""
+    """What `current` points at, resolved — or None when nothing is activated OR when the link
+    dangles.
+
+    `os.path.realpath` does not require the target to exist, so a `current` left pointing at a tree
+    that is gone used to print a path and exit 0 — from the one diagnostic an operator reaches for
+    when the launcher answers "no such file or directory". `is_dir()` is what makes the answer mean
+    "there is an engine there"."""
     link = current_link()
     try:
         if not link.is_symlink():
             return None
-        return Path(os.path.realpath(link))
+        p = Path(os.path.realpath(link))
+        return p if p.is_dir() else None
     except OSError:
         return None
 
@@ -169,18 +233,91 @@ def active_engine() -> Path | None:
 def _verb_dirs(root: Path) -> list[Path]:
     try:
         return sorted(d for d in (root / "bin").iterdir()
-                      if d.is_dir() and d.name not in NON_VERB_BIN_DIRS
-                      and not d.name.startswith("__"))
+                      if d.is_dir() and d.name not in NON_VERB_BIN_NAMES)
     except OSError:
         return []
 
 
-def verify(root: Path) -> list[str]:
+def _has_verb_dir(root: Path) -> bool:
+    """Is there at least ONE verb directory? Short-circuits, so the per-invocation probe stops at the
+    first hit instead of building and sorting the whole list (36 `is_dir()` calls for an answer that
+    the first entry settles)."""
+    try:
+        return any(d.is_dir() for d in (root / "bin").iterdir()
+                   if d.name not in NON_VERB_BIN_NAMES)
+    except OSError:
+        return False
+
+
+# The `bin/lib` modules an installed tree has to carry, and the content paths that make an owned
+# DIRECTORY owned — see the note above OWNED_TREES: these two lists are the other half of the
+# manifest, and a new engine-owned path may belong in one of them.
+NAMED_LIB_MODULES = ("vaultroot.py", "vaultreg.py", "enginetree.py", "guardrail.py", "resolver.py",
+                     "manifest.py", "output.py", "paths.py", "wall.py", "vaultio.py")
+NAMED_CONTENT = ("bin/ui/version.txt", "bin/share/worker/worker.js",
+                 "templates/verb/run.py", "templates/verb/cmd.json",
+                 "skills/operate-plainkeep/SKILL.md")
+
+# The seal problem, as one exact string: `install()` matches on it to tell "this tree is complete but
+# was never sealed" (repairable by re-sealing) from every other kind of incompleteness (not).
+_UNSEALED = "engine tree is WRITABLE — it was not sealed, or the seal was removed"
+
+# What the seal check stats. A sample rather than a walk, one path per owned tree plus the two roots,
+# because `_chmod_tree` seals FILES first and then directories bottom-up: a seal that stopped partway
+# leaves something in this set writable. `--verify <root>` on a suspect tree is the exhaustive answer.
+_SEAL_SAMPLE = ("VERSION", "plainkeep", "bin", "bin/lib", "bin/lib/enginetree.py",
+                "templates/verb/run.py", "skills/operate-plainkeep/SKILL.md", "frontends/raycast")
+
+
+def _looks_installed(root: Path) -> bool:
+    """Is `root` a tree reachable under a VERSION NAME, i.e. one `install()` produced?
+
+    The seal is a property of an INSTALLED engine and of nothing else: a contributor's checkout is
+    writable by definition, and so is `install()`'s own `.incoming-*` staging before the seal is
+    applied. Asked of the layout (`<anything>/engine/<version>/`) rather than of `versions_dir()`,
+    because `versions_dir()` reads the environment and a doctor run with a different
+    `PLAINKEEP_ENGINE_HOME` would then skip the check silently — the one outcome a seal check must
+    not have."""
+    return root.parent.name == VERSIONS_DIRNAME and not root.name.startswith(".")
+
+
+def seal_problems(root: Path) -> list[str]:
+    """Is the tree still read-only? Empty means yes (or that it is not an installed tree at all).
+
+    The module header claims immutability is ENFORCED rather than asserted. It was enforced at
+    install time only: nothing on any later path asked whether the tree was still read-only, so a
+    `SIGKILL` in the window between the rename and the seal — the window the rename-first order
+    necessarily creates — left a fully writable engine that `--verify` called OK, `doctor` called
+    complete, and every dispatch accepted. This is the question that was never asked."""
+    if not _looks_installed(root):
+        return []
+    for rel in _SEAL_SAMPLE:
+        p = root / rel
+        try:
+            if p.exists() and (p.stat().st_mode & stat.S_IWUSR):
+                return [_UNSEALED]
+        except OSError:
+            continue
+    try:
+        if root.stat().st_mode & stat.S_IWUSR:
+            return [_UNSEALED]
+    except OSError:
+        pass
+    return []
+
+
+def verify(root: Path, *, check_seal: bool = True) -> list[str]:
     """Every way `root` fails to be a complete engine tree, as a list of one-line problems.
 
-    Empty means the whole ownership manifest is present. Called by `install()` (which refuses to
-    activate an incomplete tree) and by `plainkeep doctor`. It walks the tree, so it is NOT what a
-    dispatch runs — `require_intact()` is."""
+    Empty means the whole ownership manifest is present AND — for a tree installed under a version
+    name — that the tree is still sealed. Called by `install()` (which refuses to leave an incomplete
+    tree behind) and by `plainkeep doctor`. It walks the tree, so it is NOT what a dispatch runs —
+    `require_intact()` is.
+
+    `check_seal=False` is for the two callers that ask about COMPLETENESS only: `install()` verifying
+    its own staging (not yet sealed, by construction) and `activate()` (an engine installed
+    `--writable` is a deliberate dev shape and is still activatable — `--verify` and `doctor` are
+    where that gets reported)."""
     problems: list[str] = []
     for rel in OWNED_FILES:
         if not (root / rel).is_file():
@@ -191,8 +328,7 @@ def verify(root: Path) -> list[str]:
     if not (root / "bin" / "lib").is_dir():
         problems.append("missing engine tree: bin/lib/")
     else:
-        for mod in ("vaultroot.py", "vaultreg.py", "enginetree.py", "guardrail.py", "resolver.py",
-                    "manifest.py", "output.py", "paths.py", "wall.py", "vaultio.py"):
+        for mod in NAMED_LIB_MODULES:
             if not (root / "bin" / "lib" / mod).is_file():
                 problems.append(f"missing engine module: bin/lib/{mod}")
     verbs = _verb_dirs(root)
@@ -202,16 +338,16 @@ def verify(root: Path) -> list[str]:
         for f in ("run.py", "cmd.json"):
             if not (d / f).is_file():
                 problems.append(f"verb {d.name!r} is missing bin/{d.name}/{f}")
-    # The four paths the ownership table assigns to the engine that are neither bin/ nor VERSION, and
+    # The five paths the ownership table assigns to the engine that are neither bin/ nor VERSION, and
     # that no task moved before this one. Named individually because "the directory exists" is not
     # what makes them owned — their CONTENT is what an installed tree has to carry.
-    for rel in ("bin/ui/version.txt", "bin/share/worker/worker.js",
-                "templates/verb/run.py", "templates/verb/cmd.json",
-                "skills/operate-plainkeep/SKILL.md"):
+    for rel in NAMED_CONTENT:
         if not (root / rel).is_file():
             problems.append(f"missing engine file: {rel}")
     if not any((root / "frontends" / "raycast").glob("*.sh")):
         problems.append("missing engine files: frontends/raycast/*.sh")
+    if check_seal:
+        problems.extend(seal_problems(root))
     return problems
 
 
@@ -233,7 +369,7 @@ def require_intact(root: Path | None = None) -> None:
                 f"the plainkeep engine at {r} is incomplete (no {rel})",
                 hint="reinstall it:\n"
                      f"    python3 {Path(__file__).resolve()} --install <source-checkout>")
-    if not _verb_dirs(r):
+    if not _has_verb_dir(r):
         raise VaultError(
             f"the plainkeep engine at {r} carries no verb directory under bin/",
             hint="reinstall it:\n"
@@ -242,8 +378,14 @@ def require_intact(root: Path | None = None) -> None:
 
 # --- disjointness (ADR-014 D3, ACTIVATED in this task) --------------------------------------------
 def _is_within(inner: str, outer: str) -> bool:
-    """`inner` IS `outer` or lives under it, on a path boundary. Both must already be canonical."""
-    return inner == outer or inner.startswith(outer.rstrip("/") + "/")
+    """`inner` IS `outer` or lives under it, on a path boundary. Both must already be canonical.
+
+    The comparison itself lives in `vaultreg` beside `canonical()`, deliberately: the reason a
+    canonical path is not a comparison key (case folding, Unicode normalisation) is a fact about
+    `canonical()`, so the rule belongs where `canonical()` is and every consumer of it inherits the
+    same answer rather than each re-deriving one. This module keeps the name because the docstring
+    below explains what the comparison is FOR."""
+    return vaultreg.path_within(inner, outer)
 
 
 def disjointness_verdict(data_root: str, engine_root: Path | None = None) -> str | None:
@@ -257,11 +399,15 @@ def disjointness_verdict(data_root: str, engine_root: Path | None = None) -> str
 
     Both sides are canonicalized before comparing, for `wall._anchored`'s reason: on macOS `/tmp/v`
     and `/private/tmp/v` are one directory under two names, and comparing spellings answers "disjoint"
-    for a pair that is not."""
+    for a pair that is not. Canonicalizing is NECESSARY and not SUFFICIENT — it normalises symlinks
+    and `..` but never case, and the default macOS volume folds case, so `/x/VAULTDIR` and
+    `/x/vaultdir` survived it as two spellings and this function answered "disjoint" for one
+    directory. Both comparisons below therefore go through `vaultreg`'s identity-aware pair rather
+    than through `==` / `startswith`."""
     eng = str(engine_root or ENGINE_ROOT)
     eng = vaultreg.canonical(eng)
     data = vaultreg.canonical(data_root)
-    if data == eng:
+    if vaultreg.same_path(data, eng):
         return (f"it IS the engine tree ({eng}) — a vault is data and an engine is code, and one "
                 f"directory cannot be both")
     if _is_within(data, eng):
@@ -272,23 +418,56 @@ def disjointness_verdict(data_root: str, engine_root: Path | None = None) -> str
 
 
 # --- installing ------------------------------------------------------------------------------------
+def check_version_name(v: str, where: str) -> str:
+    """A version is a SINGLE DIRECTORY NAME under `versions_dir()`, and this is what makes that true.
+
+    It used to guard only the value read out of a source's `VERSION` file, while `--version` — a
+    caller-supplied string that composes into the same destination — reached `versions_dir() / v`
+    unchecked. That is path injection, and it was not theoretical: `--version ..` resolved
+    `remove_version()` to `rmtree(<install root>)` and deleted everything the shared XDG data
+    directory held besides `engine/`; `--version current` made `remove_version()` walk THROUGH the
+    active symlink and strip the seal off the running engine.
+
+    Validated rather than sanitised, on purpose: a rewrite ("strip the slashes and carry on") has to
+    be right about every spelling that can reach a path, and being wrong about one is silent. A
+    refusal only has to be right about being suspicious."""
+    if not v:
+        raise VaultError(f"{where} is empty — an engine tree is installed BY VERSION")
+    if "/" in v or os.sep in v or v in (".", ".."):
+        raise VaultError(f"{where} is not usable as a version directory name: {v!r}")
+    if v.startswith("."):
+        # Dot-prefixed names are the installer's own namespace (`.incoming-*`, `.current.incoming.*`)
+        # and are excluded from `installed_versions()`; a version that hid there would be installable
+        # and then invisible.
+        raise VaultError(f"{where} may not begin with a dot — that is the installer's own "
+                         f"namespace: {v!r}")
+    if v == CURRENT_NAME:
+        raise VaultError(f"{where} is the reserved name of the active-engine symlink: {v!r}",
+                         hint=f"`{CURRENT_NAME}` names whichever version is active — install under a "
+                              f"version name and point it there with --activate")
+    return v
+
+
 def read_version(src: Path) -> str:
     try:
         v = (src / "VERSION").read_text(encoding="utf-8").strip()
     except OSError as e:
         raise VaultError(f"cannot read {src / 'VERSION'} ({e})")
-    if not v:
-        raise VaultError(f"{src / 'VERSION'} is empty — an engine tree is installed BY VERSION")
-    if "/" in v or v in (".", ".."):
-        raise VaultError(f"{src / 'VERSION'} is not usable as a directory name: {v!r}")
-    return v
+    return check_version_name(v, str(src / "VERSION"))
 
 
 def _chmod_tree(root: Path, *, writable: bool) -> None:
     """Make an installed tree read-only (or writable again, to replace it).
 
     Bottom-up when locking, so a directory is not sealed before its children are; top-down when
-    unlocking, so a sealed directory can be descended into at all."""
+    unlocking, so a sealed directory can be descended into at all.
+
+    SEALING RAISES; unsealing does not. Both directions used to swallow every `OSError` with a bare
+    `pass`, which meant a seal that half-failed reported success and left a tree that could be
+    hot-patched — the one property this whole module exists to establish, off, with nothing said. A
+    failed UNSEAL is different: it is only ever a prelude to `rmtree`, which will fail loudly on its
+    own if the tree really is unremovable, and refusing there would turn a cleanup path into a dead
+    end."""
     entries = list(root.rglob("*"))
     dirs = [p for p in entries if p.is_dir() and not p.is_symlink()]
     files = [p for p in entries if p.is_file() and not p.is_symlink()]
@@ -304,16 +483,23 @@ def _chmod_tree(root: Path, *, writable: bool) -> None:
             except OSError:
                 pass
         return
+    failed: list[str] = []
     for f in files:
         try:
             f.chmod(0o555 if (f.stat().st_mode & stat.S_IXUSR) else 0o444)
-        except OSError:
-            pass
+        except OSError as e:
+            failed.append(f"{f}: {e}")
     for d in sorted([root, *dirs], key=lambda p: len(p.parts), reverse=True):
         try:
             d.chmod(0o555)
-        except OSError:
-            pass
+        except OSError as e:
+            failed.append(f"{d}: {e}")
+    if failed:
+        raise VaultError(
+            f"could not seal the engine tree at {root} ({len(failed)} path(s) stayed writable):\n  "
+            + "\n  ".join(failed[:5]),
+            hint="an engine that can be written can be hot-patched, which is the one thing an "
+                 "installed engine must not be — the tree was NOT left in place")
 
 
 def _copy_owned(src: Path, dst: Path) -> None:
@@ -343,12 +529,40 @@ def _copy_owned(src: Path, dst: Path) -> None:
         shutil.copy2(core, d)
 
 
+# How old an abandoned staging tree must be before an unrelated install sweeps it. A `SIGKILL` mid
+# copy leaves one behind and nothing else will ever remove it; a CONCURRENT install must not have its
+# staging removed underneath it, which is the bug the pid suffix fixes and an eager sweep would undo.
+# A day is far past any real copy and far short of "never".
+STALE_STAGING_SECONDS = 24 * 60 * 60
+
+
+def _sweep_stale_staging(root: Path, version: str) -> None:
+    """Remove ABANDONED `.incoming-<version>.<pid>` trees — never a live one. Best effort: a staging
+    directory this process cannot clean is not a reason to refuse to install."""
+    import time
+    cutoff = time.time() - STALE_STAGING_SECONDS
+    for p in root.glob(f".incoming-{version}.*"):
+        try:
+            if not p.is_dir() or p.is_symlink() or p.stat().st_mtime > cutoff:
+                continue
+            _chmod_tree(p, writable=True)
+            shutil.rmtree(p, ignore_errors=True)
+        except (OSError, VaultError):
+            continue
+
+
 def remove_version(version: str) -> None:
     """Delete one installed version. Only ever called on a tree this module installed, and only to
     replace it: an installed engine is immutable, so `--install --force` removes and rewrites rather
-    than patching in place."""
+    than patching in place.
+
+    The name is re-validated here and not only at the caller, because this is the destructive end:
+    `remove_version("..")` resolved to `rmtree(<install root>)` and `remove_version("current")` walked
+    THROUGH the active symlink to unseal the running engine. A symlink is never a version and is
+    never removed as one."""
+    version = check_version_name(version, "version to remove")
     d = versions_dir() / version
-    if not d.is_dir():
+    if d.is_symlink() or not d.is_dir():
         return
     _chmod_tree(d, writable=True)
     shutil.rmtree(d, ignore_errors=True)
@@ -358,29 +572,46 @@ def install(src: Path, *, version: str | None = None, force: bool = False,
             activate_it: bool = True, writable: bool = False) -> Path:
     """Install the engine-owned set from a source checkout into `<install root>/engine/<version>/`.
 
-    Staged then renamed: the tree is built under a `.incoming-<version>` sibling, VERIFIED there, and
-    only moved into its final name once complete. A half-copied engine is never reachable under a
-    version name, which matters because `current` may be pointed at it a line later."""
+    Staged then renamed: the tree is built under a `.incoming-<version>.<pid>` sibling, VERIFIED
+    there, and only moved into its final name once complete. A half-copied engine is never reachable
+    under a version name, which matters because `current` may be pointed at it a line later.
+
+    THE OLD TREE IS NOT REMOVED UNTIL A VERIFIED REPLACEMENT EXISTS. `--force` used to `rmtree` it on
+    the way IN, before the copy that can fail — a source missing an owned path, `^C`, ENOSPC, a
+    concurrent run — and the cleanup below then removed the debris and re-raised, leaving no engine at
+    all and a dangling `current`. `script/setup` runs `--install --force` unconditionally and is also
+    what an operator runs to REPAIR a broken install, so the failure window was on the repair path.
+    The removal now happens one line before the rename: the exposure shrinks from the whole copy to
+    an `rmtree` plus a `rename`."""
     src = Path(os.path.abspath(os.path.expanduser(str(src))))
-    version = version or read_version(src)
+    version = check_version_name(version, "--version") if version else read_version(src)
     root = versions_dir()
     dst = root / version
-    if dst.exists():
-        if not force:
-            raise VaultError(f"engine {version} is already installed at {dst}",
-                             hint="an installed engine is immutable — pass --force to replace it, "
-                                  "or bump VERSION")
-        remove_version(version)
-    staging = root / f".incoming-{version}"
-    if staging.exists():
-        _chmod_tree(staging, writable=True)
-        shutil.rmtree(staging, ignore_errors=True)
+    if dst.exists() and not force:
+        # An INTERRUPTED install leaves a tree that is complete but unsealed (the rename must precede
+        # the seal — see below), and the only thing that used to move it forward was `--force`, i.e.
+        # the destructive branch. Re-running the same install now REPAIRS it instead: the seal is the
+        # one property that can be restored without touching content, so it is, and everything else
+        # still refuses.
+        problems = verify(dst)
+        if problems == [_UNSEALED] and not writable:
+            _chmod_tree(dst, writable=False)
+            if activate_it:
+                activate(version)
+            return dst
+        raise VaultError(f"engine {version} is already installed at {dst}",
+                         hint="an installed engine is immutable — pass --force to replace it, "
+                              "or bump VERSION")
+    # PID-UNIQUE, like `activate()`'s `.current.incoming.<pid>`: two installs of one version used to
+    # share a staging name, and the second `rmtree`'d the first one's tree mid-copy. Both then failed.
+    staging = root / f".incoming-{version}.{os.getpid()}"
     root.mkdir(parents=True, exist_ok=True)
+    _sweep_stale_staging(root, version)
     staging.mkdir()
     staged = True
     try:
         _copy_owned(src, staging)
-        problems = verify(staging)
+        problems = verify(staging, check_seal=False)     # not sealed yet, by construction
         if problems:
             raise VaultError(
                 f"refusing to install an incomplete engine from {src}:\n  "
@@ -392,7 +623,10 @@ def install(src: Path, *, version: str | None = None, force: bool = False,
         # entry), so a tree sealed at 0555 cannot be moved into place at all — measured, EACCES on
         # macOS. The property the staging dance exists for is unaffected: what lands under the
         # version name is already complete and already verified, and only its permissions change
-        # afterwards.
+        # afterwards. The window it opens — a rename that lands and a seal that does not — is what
+        # `verify()`'s mode check and the repair branch above exist to make visible and fixable.
+        if dst.exists():
+            remove_version(version)
         os.rename(staging, dst)
         staged = False
         if not writable:
@@ -413,11 +647,14 @@ def activate(version: str) -> Path:
     """Point `current` at `<version>`, atomically. A symlink cannot be rewritten in place, so a
     uniquely named one is created beside it and `os.replace`d over the old — an invocation that
     starts mid-switch sees one engine or the other, never nothing."""
+    version = check_version_name(version, "--activate")
     dst = versions_dir() / version
     if not dst.is_dir():
         raise VaultError(f"engine {version} is not installed ({dst} does not exist)",
                          hint="install it first: --install <source-checkout>")
-    problems = verify(dst)
+    # COMPLETENESS, not the seal: an engine installed `--writable` is a deliberate dev shape and is
+    # still a complete engine. `--verify` and `doctor` are where a missing seal gets reported.
+    problems = verify(dst, check_seal=False)
     if problems:
         raise VaultError(f"refusing to activate an incomplete engine at {dst}:\n  "
                          + "\n  ".join(problems))
@@ -500,6 +737,13 @@ def main(argv: list[str]) -> int:
     except VaultError as e:
         sys.stderr.write("plainkeep: " + e.message + (f"\n  {e.hint}" if e.hint else "") + "\n")
         return e.code
+    except OSError as e:
+        # ENOSPC, EACCES, a source that vanished mid-copy, a destination on a full volume. The
+        # protocol reserves 1 for EXIT_UNEXPECTED and these genuinely are — but a Python traceback is
+        # not the refusal shape any other surface in this codebase produces, and this one is reached
+        # by `script/setup`, where the operator's next move depends on reading the error.
+        sys.stderr.write(f"plainkeep: {cmd} failed: {e}\n")
+        return output.EXIT_UNEXPECTED
     print(_USAGE, file=sys.stderr)
     return output.EXIT_USAGE
 

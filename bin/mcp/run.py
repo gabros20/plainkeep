@@ -37,8 +37,13 @@ def _dispatcher_bin() -> str:
     It was `$PLAINKEEP_HOME/plainkeep`, i.e. the vault-local shim. A data vault has no
     launcher of its own, and deriving one from the data root would mean an MCP client's
     tool call re-enters through whatever executable happens to sit in the notes it is
-    acting on."""
-    return str(enginetree.launcher())
+    acting on.
+
+    The STABLE spelling, because this value is written into somebody else's config file and read back
+    on every launch for as long as that client is installed. The version-pinned path `launcher()`
+    returns would keep an MCP client on the engine that happened to be active the day `--setup` ran,
+    and break outright once that version is pruned."""
+    return str(enginetree.stable_launcher())
 
 
 # ── tool generation (from the plainkeep surface = plainkeep.json/3) ────────────────────────────

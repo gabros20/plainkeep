@@ -26,6 +26,7 @@ import atexit
 import errno
 import hashlib
 import importlib.util
+import json
 import os
 import re
 import shutil
@@ -112,19 +113,49 @@ def staged(name: str, data: bytes) -> Path:
 
 @contextmanager
 def no_hardlinks():
-    """Force the CROSS-DEVICE branch by making `link(2)` report EXDEV.
+    """Force the CROSS-DEVICE branch by making `link(2)` report EXDEV — ACROSS DIRECTORIES only.
 
     This exercises the branch, not a second volume: the suite mounts nothing. What it does prove is
-    that the fallback's create-only guarantee is `O_EXCL`'s and not a leftover of `os.link`."""
+    that the fallback's create-only guarantee is `O_EXCL`'s and not a leftover of `os.link`.
+
+    A link between two names in the SAME directory is left working on purpose. EXDEV means "these
+    two paths are on different volumes", and the staging leaf `_create_only_copy` links onto the
+    destination sits beside it — a real EXDEV there is impossible, so faking one would be simulating
+    a filesystem that cannot exist and would test the wrong branch."""
     real = os.link
 
     def fake(src, dst, **kw):
-        raise OSError(errno.EXDEV, "forced cross-device link")
+        if Path(src).parent != Path(dst).parent:
+            raise OSError(errno.EXDEV, "forced cross-device link")
+        return real(src, dst, **kw)
     os.link = fake
     try:
         yield
     finally:
         os.link = real
+
+
+@contextmanager
+def no_hardlinks_at_all():
+    """A filesystem with NO hard links (exFAT, some FUSE mounts): every `link(2)` reports EPERM.
+
+    This is the only configuration in which `_create_only_copy` cannot stage, so it is the only one
+    that reaches `_direct_create_only_copy` — the shape whose partial-write window is documented and
+    deliberately kept as the fallback rather than the norm."""
+    real = os.link
+
+    def fake(src, dst, **kw):
+        raise OSError(errno.EPERM, "filesystem has no hard links")
+    os.link = fake
+    try:
+        yield
+    finally:
+        os.link = real
+
+
+def arriving_debris(d: Path) -> list[str]:
+    """Staging leaves left under `in/`. Append-only means anything here is permanent."""
+    return sorted(p.name for p in d.iterdir() if p.name.startswith(".pk-arriving-"))
 
 
 @contextmanager
@@ -205,6 +236,58 @@ def case_directory() -> None:
     _refuses("directory at the destination", d, d / "brief.pdf")
 
 
+# ==============================================================================================
+# A2. The ARRIVED LEAF is an inode the vault OWNS — nothing outside `in/` can still write to it.
+#
+# `link(2)` hands out a second NAME for one inode, and on macOS it FOLLOWS a symlink. So both shapes
+# below used to file something the vault did not own: the other name stayed outside `in/`, stayed
+# writable by anything, and a later write through it edited the "original" with no verb, no wall, no
+# exit code and no trace — leaving the shadow note's sha256 a lie. Reproduced end-to-end before the
+# fix. These assert the byte-level consequence, not the mechanism that now prevents it.
+# ==============================================================================================
+def _stays_put(label: str, d: Path, leaf: Path, outside: Path, was: bytes) -> None:
+    """Write through `outside` — the handle the world beyond the vault kept — and assert the arrived
+    leaf did not move a byte. This is the assertion the whole finding reduces to."""
+    before = hashes(d)
+    outside.write_bytes(b"TAMPERED CONTRACT AMOUNT")
+    check(f"{label}: the leaf is not a second name for the outside file (own inode, st_nlink=1)",
+          leaf.stat().st_ino != outside.stat().st_ino and leaf.stat().st_nlink == 1,
+          f"leaf nlink={leaf.stat().st_nlink}")
+    check(f"{label}: writing through the outside name changed NOTHING under in/",
+          before == hashes(d), f"before={before} after={hashes(d)}")
+    check(f"{label}: the original still holds the bytes it arrived with", leaf.read_bytes() == was)
+
+
+def case_symlink_source() -> None:
+    """The drop-folder shape: `ln -s ~/scans/real-brief.pdf ~/drop/brief.pdf`, then ingest the link."""
+    d = hub("symlink-source")
+    target = staged("real-brief.pdf", b"THE SIGNED ORIGINAL")
+    link = target.parent / "brief.pdf"
+    link.symlink_to(target)
+    leaf = vaultio.move_create_only(link, d / "brief.pdf")
+    check("symlink source: it ARRIVES (refusing would be sound, and would break an ordinary case)",
+          leaf.is_file() and not leaf.is_symlink() and leaf.read_bytes() == b"THE SIGNED ORIGINAL")
+    check("symlink source: the LINK is gone and its target is untouched — never ours to delete",
+          not link.is_symlink() and target.is_file())
+    _stays_put("symlink source", d, leaf, target, b"THE SIGNED ORIGINAL")
+
+
+def case_hardlinked_source() -> None:
+    """A source that already carried a second hard link — a backup tool, a de-duplicated download."""
+    d = hub("shared-source")
+    src = staged("brief.pdf", b"THE SIGNED ORIGINAL")
+    alias = src.parent / "alias.pdf"
+    os.link(src, alias)
+    check("shared source: the fixture really is shared before ingest (st_nlink=2)",
+          src.stat().st_nlink == 2)
+    leaf = vaultio.move_create_only(src, d / "brief.pdf")
+    check("shared source: it arrives", leaf.is_file()
+          and leaf.read_bytes() == b"THE SIGNED ORIGINAL")
+    check("shared source: the name we were handed is gone; the other one is not ours to remove",
+          not src.exists() and alias.is_file())
+    _stays_put("shared source", d, leaf, alias, b"THE SIGNED ORIGINAL")
+
+
 def case_cross_device() -> None:
     d = hub("xdev")
     src = staged("brief.pdf", b"ACROSS THE DEVICE")
@@ -226,6 +309,68 @@ def case_cross_device() -> None:
     check("cross-device branch: O_EXCL refuses an occupied destination too",
           isinstance(err, FileExistsError), repr(err))
     check("cross-device branch: nothing under in/ changed", before == hashes(d))
+    check("cross-device branch: no staging leaf survives (append-only makes debris permanent)",
+          arriving_debris(d) == [], str(arriving_debris(d)))
+
+
+def case_no_hardlinks_at_all() -> None:
+    """The one filesystem shape that cannot stage — no hard links anywhere — so `O_EXCL` is applied
+    straight to the destination. Create-only still holds; the partial-write window is the documented
+    price, which is why this is the fallback and not the shape."""
+    d = hub("nolinks")
+    src = staged("brief.pdf", b"ON A FILESYSTEM WITHOUT LINKS")
+    with no_hardlinks_at_all():
+        dst = vaultio.move_create_only(src, d / "brief.pdf")
+    check("no-hardlinks branch: the direct O_EXCL copy still creates the leaf",
+          dst.is_file() and dst.read_bytes() == b"ON A FILESYSTEM WITHOUT LINKS")
+    check("no-hardlinks branch: the source is gone and no staging leaf is left",
+          not src.exists() and arriving_debris(d) == [])
+
+    src2 = staged("brief.pdf", b"A SECOND ARRIVAL")
+    before = hashes(d)
+    err = None
+    try:
+        with no_hardlinks_at_all():
+            vaultio.move_create_only(src2, d / "brief.pdf")
+    except BaseException as e:   # noqa: BLE001
+        err = e
+    check("no-hardlinks branch: O_EXCL still refuses an occupied destination",
+          isinstance(err, FileExistsError), repr(err))
+    check("no-hardlinks branch: nothing under in/ changed", before == hashes(d))
+
+
+def case_destination_never_partial() -> None:
+    """The destination NAME never exists in a half-written state.
+
+    `_create_only_copy` fills a staging leaf and links it onto `dst` only once the bytes are there
+    and verified, so a copy that dies mid-way cannot leave a truncated "original" — which under
+    append-only would be PERMANENT, because nothing may ever replace that name. Cleanup after the
+    fact cannot be told from never-creating-it by walking the tree afterwards, so this OBSERVES the
+    destination from inside the copy, at the moment the old shape would have had it short."""
+    d = hub("never-partial")
+    src = staged("brief.pdf", b"AN ORIGINAL ARRIVING SLOWLY")
+    dst = d / "brief.pdf"
+    seen: list[bool] = []
+    real = shutil.copyfileobj
+
+    def observing(inp, out, *a, **kw):
+        out.write(inp.read(4))          # four REAL bytes: whatever holds them is genuinely partial
+        out.flush()
+        seen.append(dst.exists())       # ...and at this instant, is the destination name occupied?
+        return real(inp, out, *a, **kw)
+
+    shutil.copyfileobj = observing
+    try:
+        with no_hardlinks():
+            vaultio.move_create_only(src, dst)
+    finally:
+        shutil.copyfileobj = real
+    check("never partial: the destination name did NOT exist while the copy was still running",
+          seen == [False], f"observations={seen} (True = a truncated 'original' was visible)")
+    check("never partial: and it holds every byte once the copy is done",
+          dst.is_file() and dst.read_bytes() == b"AN ORIGINAL ARRIVING SLOWLY",
+          f"bytes={dst.read_bytes()!r}")
+    check("never partial: no staging leaf is left behind", arriving_debris(d) == [])
 
 
 def case_partial_copy_cleanup() -> None:
@@ -247,6 +392,8 @@ def case_partial_copy_cleanup() -> None:
     check("partial copy: the rest of in/ is untouched", before == hashes(d))
     check("partial copy: the source still holds all of its bytes",
           src.read_bytes() == b"WOULD HAVE BEEN AN ORIGINAL")
+    check("partial copy: no staging leaf survives the failure either",
+          arriving_debris(d) == [], str(arriving_debris(d)))
 
 
 def case_container_mkdir() -> None:
@@ -411,6 +558,90 @@ def case_uniquify_limit() -> None:
 
 
 # ==============================================================================================
+# C2. The SOURCE side of the wall. `~/files/**/in/` is append-only in BOTH directions — an original
+# is never DELETED either, which `classify({"kind": "delete", …})` has said since Task 1c and which
+# the validated case `originals-in-delete-denied` pins. The wall was DESTINATION-only, so that case
+# had no seam that could enforce it: `move_create_only` unlinked its source unconditionally, and
+# ingesting a path already under `in/` renamed an existing original to `-2` (exit 0, "filed") or
+# moved it out of the hub entirely. Real verb, real processes — `output.fail` exits the one it
+# refuses — plus the PRIMITIVE on its own, because a guard that lives only in the verb is the same
+# defect one layer up.
+# ==============================================================================================
+def case_source_under_originals() -> None:
+    d = _hub_with_names_taken("srcguard", 0)
+    # Written directly and with NO shadow note on purpose: `_find_by_hash` short-circuits a
+    # previously-INGESTED original before `_arrive` is ever reached, so it shields this by accident.
+    # The exposed shape is the hand-filed original, and a guard that needs a wiki note is not a guard.
+    (d / "brief.pdf").write_bytes(b"THE HAND-FILED ORIGINAL")
+    (d / "scan.pdf").write_bytes(b"ANOTHER HAND-FILED ORIGINAL")
+    other = _hub_with_names_taken("srcguard2", 0)
+    before, before_other = hashes(d), hashes(other)
+
+    r = _ingest(d / "brief.pdf", "srcguard")           # 1. renames the original in place
+    said = r.stdout + r.stderr
+    check("source wall: ingesting a path ALREADY under in/ is refused with EXIT_DENY (5)",
+          r.returncode == 5, f"rc={r.returncode} out={r.stdout.strip()[:300]} "
+                             f"err={r.stderr.strip()[:300]}")
+    check("source wall: the refusal names the wall rather than a stray errno",
+          "guardrail" in said.lower(), f"said={said.strip()[:300]}")
+    check("source wall: not one byte under in/ changed, and no `brief-2.pdf` appeared",
+          before == hashes(d), f"before={before} after={hashes(d)}")
+
+    r2 = _ingest(d / "scan.pdf", "srcguard2")          # 2. moves it out of the hub entirely
+    check("source wall: moving an original from one hub's in/ to another is refused too (5)",
+          r2.returncode == 5, f"rc={r2.returncode} err={r2.stderr.strip()[:300]}")
+    check("source wall: both hubs are byte-identical afterwards",
+          before == hashes(d) and before_other == hashes(other),
+          f"src={hashes(d)} dst={hashes(other)}")
+
+    # 3. The PRIMITIVE, with no verb in front of it. `move_create_only` is the seam; if the guard
+    #    lived in `files ingest` instead, the next caller would reintroduce the finding for free.
+    worker = STAGE / "worker.py"
+    worker.write_text(WORKER.format(binpath=str(REPO / "bin")), encoding="utf-8")
+    dest = hub("srcguard3")
+    r3 = subprocess.run([sys.executable, str(worker), "create_only", str(dest / "brief.pdf"),
+                         str(d / "brief.pdf")], capture_output=True, text=True, env=os.environ)
+    check("source wall: `vaultio.move_create_only` refuses it directly — the seam is in the "
+          "primitive, not the verb", r3.returncode == 5,
+          f"rc={r3.returncode} err={r3.stderr.strip()[:300]}")
+    check("source wall: the primitive created nothing at the destination and removed nothing",
+          not (dest / "brief.pdf").exists() and before == hashes(d))
+
+
+def case_unmovable_source() -> None:
+    """`_arrive` used to catch only `FileExistsError`, so every other `OSError` escaped as a raw
+    TRACEBACK: exit 1 because that is Python's default, not because the protocol produced it, and
+    under `--json` a stack trace on stderr with NO error envelope. `move_create_only` raises
+    deliberately when the source cannot be unlinked after the destination exists, so this is a
+    reachable branch."""
+    d = _hub_with_names_taken("unmovable", 0)
+    ro = Path(tempfile.mkdtemp(dir=STAGE))
+    src = ro / "brief.pdf"
+    src.write_bytes(b"IN A NON-WRITABLE DIRECTORY")
+    os.chmod(ro, 0o555)          # the source cannot be unlinked; the destination still can arrive
+    try:
+        r = _ingest(src, "unmovable")
+        said = r.stdout + r.stderr
+        check("unmovable source: exit 1 comes from the protocol, and no traceback reaches the caller",
+              r.returncode == 1 and "Traceback" not in said, f"rc={r.returncode} said={said[-300:]}")
+        check("unmovable source: the message says what failed and that nothing was overwritten",
+              "could not file" in said and "overwritten" in said, f"said={said.strip()[:300]}")
+        rj = subprocess.run(
+            [sys.executable, str(REPO / "bin" / "files" / "run.py"), "ingest", str(src),
+             "--client", "unmovable", "--json"], capture_output=True, text=True, env=os.environ)
+        env = {}
+        for line in rj.stdout.splitlines():
+            if line.startswith("{"):
+                env = json.loads(line)
+        check("unmovable source: --json gets an error ENVELOPE, not a stack trace",
+              env.get("ok") is False and env.get("error", {}).get("code") == 1
+              and "Traceback" not in rj.stderr,
+              f"rc={rj.returncode} stdout={rj.stdout.strip()[:300]} err={rj.stderr.strip()[:300]}")
+    finally:
+        os.chmod(ro, 0o755)
+
+
+# ==============================================================================================
 # D. The race. Two shapes, one harness — the legacy one has to LOSE or the harness is not racing.
 # ==============================================================================================
 RACE_N, RACE_ROUNDS = 16, 5
@@ -535,8 +766,10 @@ def _run(case) -> None:
 
 def main() -> int:
     for case in (case_create, case_existing_file, case_symlink_live, case_symlink_dangling,
-                 case_directory, case_cross_device, case_partial_copy_cleanup,
-                 case_container_mkdir, case_wall_refuses_non_atomic, case_uniquify_limit,
+                 case_directory, case_symlink_source, case_hardlinked_source, case_cross_device,
+                 case_no_hardlinks_at_all, case_destination_never_partial,
+                 case_partial_copy_cleanup, case_container_mkdir, case_wall_refuses_non_atomic,
+                 case_uniquify_limit, case_source_under_originals, case_unmovable_source,
                  case_race_ab, case_race_real_verb):
         _run(case)
 

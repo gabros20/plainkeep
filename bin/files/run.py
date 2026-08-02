@@ -450,6 +450,16 @@ def _arrive(src: Path, dest_dir: Path) -> Path:
             return vaultio.move_create_only(src, cand)
         except FileExistsError:
             continue
+        except OSError as e:
+            # Every OTHER OSError is a real failure of the move, and the exit-code protocol has no
+            # room for a traceback: `--json` would get a stack trace on stderr and no error
+            # envelope. `move_create_only` deliberately raises rather than tidying up (a source it
+            # could not unlink, a source that changed under it), so this is a reachable branch, not
+            # a defensive one.
+            output.fail(output.EXIT_UNEXPECTED,
+                        f"could not file '{src.name}' into {dest_dir}: {e}",
+                        hint="nothing that was already there was overwritten, replaced or removed",
+                        verb="files")
     output.fail(output.EXIT_UNEXPECTED,
                 f"{UNIQUIFY_LIMIT} names from '{src.name}' onward are taken in {dest_dir} — "
                 f"'{src.name}' was NOT moved and nothing there was touched", verb="files")

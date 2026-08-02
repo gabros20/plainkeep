@@ -221,6 +221,71 @@ EXEMPT: dict[str, dict[str, str]] = {
 }
 
 
+# --------------------------------------------------------------------------------------------
+# F. The DELETE ratchet, which is a different question from the write ratchet above.
+#
+# `_is_raw_write` has no pattern for a removal or a rename, and that is how Task 1c's quality review
+# found `move_create_only` unlinking its own source: the wall was destination-only, the validated
+# case `originals-in-delete-denied` had no seam, and ingesting a path already under `~/files/**/in/`
+# renamed an existing original with exit 0. `vaultio._guard_delete` is now that seam.
+#
+# These sites are PINNED rather than exempted, and they are deliberately NOT folded into `EXEMPT`
+# above: every entry there is a write the wall as written would DENY, and `classify` answers CONFIRM
+# — not DENY — for a delete anywhere outside an originals tree. Calling them exemptions would say
+# something false. What the pin buys is that a NEW raw removal in `bin/` cannot appear without a
+# reviewer looking at it and answering the only question that matters: can this path resolve under
+# `~/files/**/in/`? For every line below the answer is no — vault notes, ~/work trees, the registry
+# file, a plugin staging dir, a downloaded asset — and the one site that COULD is behind the seam.
+RAW_DELETE = re.compile(r"(\w+)?\.(unlink|rmdir|rename)\s*\(|\bos\.(remove|rename|unlink|rmdir)\s*\("
+                        r"|\bshutil\.rmtree\s*\(")
+
+PINNED_DELETES: dict[str, set[str]] = {
+    "bin/archive/run.py": {"shutil.rmtree(repo)"},
+    "bin/backup/run.py": {"out.unlink(missing_ok=True)", "stale.unlink(missing_ok=True)"},
+    "bin/lib/setuplib.py": {"shutil.rmtree(venv, ignore_errors=True)",
+                            "asset_path.unlink(missing_ok=True)",
+                            "checksums_path.unlink(missing_ok=True)"},
+    "bin/lib/vaultreg.py": {"self.path.unlink(missing_ok=True)"},
+    "bin/plugin/run.py": {"shutil.rmtree(staging, ignore_errors=True)",
+                          "shutil.rmtree(dest, ignore_errors=True)"},
+    "bin/repo/run.py": {"shutil.rmtree(nm); freed += 1"},
+    "bin/sweep/run.py": {"b.rmdir()"},
+    "bin/task/run.py": {"f.rename(new)"},
+    "bin/triage/run.py": {"p.unlink()"},
+    "bin/week/run.py": {"f.rename(dest / f.name)"},
+}
+
+
+def scan_raw_deletes() -> dict[str, dict[int, str]]:
+    found: dict[str, dict[int, str]] = {}
+    for f in sorted((REPO / "bin").rglob("*.py")):
+        rel = str(f.relative_to(REPO))
+        if rel == "bin/lib/vaultio.py":       # the seam itself; its one source unlink is classified
+            continue
+        for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
+            code = line.split("#", 1)[0]
+            if RAW_DELETE.search(code):
+                found.setdefault(rel, {})[i] = line.strip()
+    return found
+
+
+def case_delete_ratchet() -> None:
+    found = scan_raw_deletes()
+    new = [f"{rel}:{ln}  {text}" for rel, lines in found.items() for ln, text in lines.items()
+           if text not in PINNED_DELETES.get(rel, set())]
+    check("delete ratchet: no raw removal or rename in bin/ that is not on the pinned list",
+          not new, "\n        " + "\n        ".join(new[:40]))
+    gone = [f"{rel}: {t}" for rel, texts in PINNED_DELETES.items() for t in texts
+            if t not in set(found.get(rel, {}).values())]
+    check("delete ratchet: no stale pins (a removed site must leave the list)", not gone, str(gone))
+
+    # And the seam the pin exists to protect: vaultio's source removal is CLASSIFIED, not raw.
+    seam = (REPO / "bin" / "lib" / "vaultio.py").read_text(encoding="utf-8")
+    check("delete ratchet: vaultio classifies the source it unlinks (`kind: delete`)",
+          '"kind": "delete"' in seam and "_guard_delete" in seam,
+          "the source side of move_create_only is unguarded again")
+
+
 def scan_raw_writes() -> dict[str, dict[int, str]]:
     found: dict[str, dict[int, str]] = {}
     for f in sorted((REPO / "bin").rglob("*.py")):
@@ -256,6 +321,7 @@ def main() -> int:
     case_symlink_escape()
     case_sdk_journal()
     case_ratchet()
+    case_delete_ratchet()
 
     print(f"{BOLD}Path-wall enforcement (bin/lib/vaultio.py) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

@@ -37,6 +37,13 @@ operator to edit `bin/<verb>/run.py` in place. The cost is stated rather than hi
 write `__pycache__` into a read-only tree, so every invocation re-compiles the lib modules it
 imports. Measured, and carried in the Task 2 report.
 
+`verify()` then asks, on every `--verify` and every `doctor`, whether the tree is still complete and
+still read-only. **Neither question is "is this the code that was installed".** The seal check reads
+MODES, so it catches the seal being gone — an interrupted install, a `chmod` someone forgot to undo —
+and it cannot catch an edit whose author put the mode back. Immutability here is enforced against
+accident and against casual hot-patching; authenticating content would need digests kept outside the
+tree, which is not shipped. `seal_problems` says so where the check itself is.
+
 **What the engine OWNS** is enumerated in `OWNED_TREES`/`OWNED_FILES` below and verified, because a
 manifest nothing executes is paperwork. `install()` refuses to leave behind a tree that fails
 `verify()`, and `require_intact()` — which both dispatchers run on every invocation through
@@ -262,11 +269,16 @@ NAMED_CONTENT = ("bin/ui/version.txt", "bin/share/worker/worker.js",
 # was never sealed" (repairable by re-sealing) from every other kind of incompleteness (not).
 _UNSEALED = "engine tree is WRITABLE — it was not sealed, or the seal was removed"
 
-# What the seal check stats. A sample rather than a walk, one path per owned tree plus the two roots,
-# because `_chmod_tree` seals FILES first and then directories bottom-up: a seal that stopped partway
-# leaves something in this set writable. `--verify <root>` on a suspect tree is the exhaustive answer.
-_SEAL_SAMPLE = ("VERSION", "plainkeep", "bin", "bin/lib", "bin/lib/enginetree.py",
-                "templates/verb/run.py", "skills/operate-plainkeep/SKILL.md", "frontends/raycast")
+# What the seal check stats when the caller has NOT already walked the tree. One path per owned tree
+# plus the two roots — because `_chmod_tree` seals FILES first and then directories bottom-up, so a
+# seal that stopped partway leaves something in this set writable — plus every named lib module,
+# because the sample used to reach exactly one file under `bin/lib/` (this one) and every module a
+# hot patch would actually go for (`guardrail.py`, `vaultroot.py`, `resolver.py`, `wall.py`) was
+# unsampled. Ten extra `stat` calls. `verify()` does not use this list at all: it hands over the modes
+# it has already paid for, which covers all 35 verb entry points as well — see `seal_problems`.
+_SEAL_SAMPLE = ("VERSION", "plainkeep", "bin", "bin/lib",
+                *(f"bin/lib/{m}" for m in NAMED_LIB_MODULES),
+                *NAMED_CONTENT, "frontends/raycast")
 
 
 def _looks_installed(root: Path) -> bool:
@@ -281,29 +293,51 @@ def _looks_installed(root: Path) -> bool:
     return root.parent.name == VERSIONS_DIRNAME and not root.name.startswith(".")
 
 
-def seal_problems(root: Path) -> list[str]:
+def _mode_of(p: Path) -> int | None:
+    """`p`'s `st_mode`, or None when it is not there. ONE `stat` answering both of the questions
+    `verify()` asks about a path: is it present and of the right kind, and is it still sealed."""
+    try:
+        return p.stat().st_mode
+    except OSError:
+        return None
+
+
+def seal_problems(root: Path, *, modes: list[int] | None = None) -> list[str]:
     """Is the tree still read-only? Empty means yes (or that it is not an installed tree at all).
 
     The module header claims immutability is ENFORCED rather than asserted. It was enforced at
     install time only: nothing on any later path asked whether the tree was still read-only, so a
     `SIGKILL` in the window between the rename and the seal — the window the rename-first order
     necessarily creates — left a fully writable engine that `--verify` called OK, `doctor` called
-    complete, and every dispatch accepted. This is the question that was never asked."""
+    complete, and every dispatch accepted. This is the question that was never asked.
+
+    **What this proves, exactly: NOT that the tree is authentic.** A writable file is evidence that
+    the seal is gone. A read-only one is not evidence that the content is the content that was
+    installed — anyone who can `chmod u+w` a file to edit it can `chmod u-w` it afterwards, and
+    nothing here would know, because nothing here reads content. `verify()` answers COMPLETE and this
+    answers SEALED; neither answers AUTHENTIC. So this is an integrity check against ACCIDENT — an
+    interrupted install, a seal that stopped partway, a `chmod -R u+w` someone ran to make one edit
+    and never undid — and it is NOT a defence against a deliberate patch. What stands against that is
+    that the tree is not writable in the first place, and reinstalling from a source of record.
+    Content authentication would need digests recorded OUTSIDE the tree; this task does not ship them,
+    and a check that samples modes must not be read as if it did.
+
+    Within that limit the check is no longer a sample where it matters. `modes` is the list of
+    `st_mode`s the caller has ALREADY collected while asking its own questions: `verify()` passes the
+    one it built walking the manifest, which makes this exhaustive over every path `verify()` touched
+    — the named lib modules, all 35 verb `run.py`/`cmd.json` pairs, the named content — at no extra
+    syscall. Passing nothing falls back to `_SEAL_SAMPLE`, for a caller that has not walked the tree.
+    """
     if not _looks_installed(root):
         return []
-    for rel in _SEAL_SAMPLE:
-        p = root / rel
-        try:
-            if p.exists() and (p.stat().st_mode & stat.S_IWUSR):
-                return [_UNSEALED]
-        except OSError:
-            continue
-    try:
-        if root.stat().st_mode & stat.S_IWUSR:
-            return [_UNSEALED]
-    except OSError:
-        pass
-    return []
+    if modes is None:
+        modes = [m for m in (_mode_of(root / rel) for rel in _SEAL_SAMPLE) if m is not None]
+    if any(m & stat.S_IWUSR for m in modes):
+        return [_UNSEALED]
+    # The root itself is in neither list: `verify()` asks about paths INSIDE the tree, and the sample
+    # is written relative to it.
+    m = _mode_of(root)
+    return [_UNSEALED] if m is not None and m & stat.S_IWUSR else []
 
 
 def verify(root: Path, *, check_seal: bool = True) -> list[str]:
@@ -317,37 +351,55 @@ def verify(root: Path, *, check_seal: bool = True) -> list[str]:
     `check_seal=False` is for the two callers that ask about COMPLETENESS only: `install()` verifying
     its own staging (not yet sealed, by construction) and `activate()` (an engine installed
     `--writable` is a deliberate dev shape and is still activatable — `--verify` and `doctor` are
-    where that gets reported)."""
+    where that gets reported).
+
+    Every presence question below goes through `_mode_of`, which is the same one `stat` the old
+    `is_file()`/`is_dir()` calls each performed — the mode is now KEPT rather than thrown away, and
+    handed to `seal_problems`. That is what makes the seal check exhaustive over this walk instead of
+    a nine-path sample that reached one file under `bin/lib/`: the manifest and the seal are two
+    questions about the same paths, so they cost one traversal, not two."""
     problems: list[str] = []
+    modes: list[int] = []                 # every st_mode this walk has already paid for
+
+    def kind_of(p: Path) -> str:
+        m = _mode_of(p)
+        if m is None:
+            return "-"
+        modes.append(m)
+        return "f" if stat.S_ISREG(m) else "d" if stat.S_ISDIR(m) else "?"
+
     for rel in OWNED_FILES:
-        if not (root / rel).is_file():
+        if kind_of(root / rel) != "f":
             problems.append(f"missing engine file: {rel}")
     for rel in OWNED_TREES:
-        if not (root / rel).is_dir():
+        if kind_of(root / rel) != "d":
             problems.append(f"missing engine tree: {rel}/")
-    if not (root / "bin" / "lib").is_dir():
+    if kind_of(root / "bin" / "lib") != "d":
         problems.append("missing engine tree: bin/lib/")
     else:
         for mod in NAMED_LIB_MODULES:
-            if not (root / "bin" / "lib" / mod).is_file():
+            if kind_of(root / "bin" / "lib" / mod) != "f":
                 problems.append(f"missing engine module: bin/lib/{mod}")
     verbs = _verb_dirs(root)
     if not verbs:
         problems.append("bin/ carries no verb directory at all")
     for d in verbs:
         for f in ("run.py", "cmd.json"):
-            if not (d / f).is_file():
+            if kind_of(d / f) != "f":
                 problems.append(f"verb {d.name!r} is missing bin/{d.name}/{f}")
     # The five paths the ownership table assigns to the engine that are neither bin/ nor VERSION, and
     # that no task moved before this one. Named individually because "the directory exists" is not
     # what makes them owned — their CONTENT is what an installed tree has to carry.
     for rel in NAMED_CONTENT:
-        if not (root / rel).is_file():
+        if kind_of(root / rel) != "f":
             problems.append(f"missing engine file: {rel}")
-    if not any((root / "frontends" / "raycast").glob("*.sh")):
+    scripts = sorted((root / "frontends" / "raycast").glob("*.sh"))
+    if not scripts:
         problems.append("missing engine files: frontends/raycast/*.sh")
+    for s in scripts:                     # they are executable engine code; the seal covers them too
+        kind_of(s)
     if check_seal:
-        problems.extend(seal_problems(root))
+        problems.extend(seal_problems(root, modes=modes))
     return problems
 
 

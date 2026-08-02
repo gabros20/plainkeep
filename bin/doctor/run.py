@@ -148,7 +148,12 @@ def main(argv):
         for p in engine_problems:
             fail(f"engine: {p}")
     else:
-        ok(f"engine: complete tree at {paths.ENGINE}")
+        # "complete and sealed", never "intact": `verify()` reads the manifest and the modes, not the
+        # contents, so this row says every owned path is present and none of them is writable. It does
+        # NOT say the code is the code that was installed — an edit that restores the mode leaves no
+        # trace a mode check can see (`enginetree.seal_problems` carries the full statement). The row
+        # is worded to promise exactly what was measured, because an operator reads it as assurance.
+        ok(f"engine: complete and sealed tree at {paths.ENGINE}")
     # This row reports the rule that is ENFORCED, by calling the same function the enforcement calls.
     # It used to compare equality only, which is a weaker spelling: `disjointness_verdict` (ADR-017
     # D5) covers THREE shapes — identical, data inside engine, engine inside data — and the two

@@ -20,6 +20,7 @@ Offline, stdlib only.
 from __future__ import annotations
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -173,6 +174,46 @@ def case_the_seal_is_verified(tmp: Path) -> None:
     r = et(root, "--verify", str(REPO))
     check("the source CHECKOUT is not judged against the seal",
           "WRITABLE" not in (r.stdout + r.stderr), r.stdout + r.stderr)
+
+    # ...and the check is not a SAMPLE where it matters. `chmod -R` above is the accident; a targeted
+    # unseal is the case the nine-path sample missed, and the paths it missed were the whole point of
+    # sealing — every lib module except this one, every verb entry point, the scaffold template, the
+    # Raycast scripts. One file at a time, each restored before the next, so a pass cannot be carried
+    # by a previous one.
+    targets = ["bin/lib/guardrail.py", "bin/lib/vaultroot.py", "bin/lib/resolver.py",
+               "bin/lib/wall.py", "bin/lib/vaultio.py", "bin/capture/run.py", "bin/capture/cmd.json",
+               "bin/doctor/run.py", "templates/verb/run.py", "skills/operate-plainkeep/SKILL.md",
+               "bin/ui/version.txt"]
+    targets += [str(p.relative_to(eng)) for p in sorted((eng / "frontends" / "raycast").glob("*.sh"))]
+    for rel in targets:
+        p = eng / rel
+        p.chmod(p.stat().st_mode | stat.S_IWUSR)
+        r = et(root, "--verify", str(eng))
+        p.chmod(p.stat().st_mode & ~stat.S_IWUSR)
+        check(f"a targeted unseal of {rel} is reported by --verify",
+              r.returncode == EXIT_DENY and "WRITABLE" in (r.stdout + r.stderr),
+              f"rc={r.returncode} {r.stdout}{r.stderr}")
+    # ...and it is a real patch that the mode was hiding, not a mode curiosity: with the file
+    # writable the content CHANGES and the tree still has to be judged unsealed.
+    gr = eng / "bin" / "lib" / "guardrail.py"
+    gr.chmod(gr.stat().st_mode | stat.S_IWUSR)
+    with gr.open("a", encoding="utf-8") as fh:
+        fh.write("\n# HOT-PATCHED\n")
+    r = et(root, "--verify", str(eng))
+    check("...and a tree whose write wall has actually been patched is not called OK",
+          r.returncode == EXIT_DENY and "WRITABLE" in (r.stdout + r.stderr),
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    # The honest limit, pinned so nobody reads the checks above as authentication: put the mode back
+    # and the patch is INVISIBLE. `verify()` proves complete and sealed, never authentic — the
+    # statement lives in `seal_problems`' docstring and in doctor's row, and this is the measurement
+    # behind it.
+    gr.chmod(gr.stat().st_mode & ~stat.S_IWUSR)
+    r = et(root, "--verify", str(eng))
+    check("...and the LIMIT: a patch with the mode restored passes — modes are not contents",
+          r.returncode == EXIT_OK and "HOT-PATCHED" in gr.read_text(encoding="utf-8"),
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    # Repair the fixture for anything that follows.
+    et(root, "--install", str(REPO), "--force")
 
 
 # --------------------------------------------------------------------------------------------

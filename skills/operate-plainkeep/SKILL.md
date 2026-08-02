@@ -199,7 +199,8 @@ happen for the next operator.
   NEVER touch iCloud or family/personal paths.
 - iCloud-bound documents (tax, legal, medical, ID, family, signed masters): PROPOSE the
   destination, never write there yourself.
-- `~/files/**/in/` is READ-ONLY (client originals are evidence). Copy to `work/` to change.
+- `~/files/**/in/` is APPEND-ONLY (client originals are evidence): an original may arrive,
+  none already there may be changed or removed. Copy to `work/` to change one.
 - Deliverables you produce go to the project's `~/files/.../out/` and get linked from the
   project hub and the journal.
 - NEVER transmit externally (email, push, deploy, post, payment). Drafts only; human sends.

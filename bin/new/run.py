@@ -142,7 +142,7 @@ def main(argv):
         def render_c(_):
             print(f"created client '{name}':")
             print(f"  wiki hub:  {hub.relative_to(paths.PLAINKEEP_HOME)}")
-            print(f"  material:  {tree}/  (in/ = read-only originals, out/ = deliverables, work/ = drafts)")
+            print(f"  material:  {tree}/  (in/ = originals, append-only, out/ = deliverables, work/ = drafts)")
         return output.emit(data, "new", human=render_c)
 
     # project

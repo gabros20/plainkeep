@@ -192,6 +192,21 @@ fixing it needs.
   real convergence and it belongs to Phase 2 Task 2 (`PLAINKEEP_ENGINE`), which relocates the engine
   out of the vault entirely and dissolves the question.*
 
+- **`bin/files/run.py::_shadow()` picks a slug with an `exists()`-scan of the whole wiki and then
+  writes it** — the exact TOCTOU shape Phase 2 Task 1c removed from `~/files/**/in/`, one tree over.
+  Two concurrent `files ingest` runs can settle on the same slug and one shadow note then overwrites
+  the other. *Measured, not theoretical:* `test/run_originals.py`'s 16-process case reports the
+  surviving count on every run. It is deliberately out of Task 1c's scope because the note lives
+  inside the vault — a revertible git diff, not evidence — and the ORIGINALS it points at are proved
+  lossless. The fix is the same one: create the note with an atomic primitive and let EEXIST pick
+  the next slug.
+- **The validated-case COUNT is written out in prose in nine places** (`bin/lib/wall.py`,
+  `bin/lib/guardrail.py`, `test/lib/guardrail.py`, `test/run_guardrail.py`,
+  `test/run_deterministic.py`, `test/run_discovery.py`, this file). Task 1c had to update every one
+  of them by hand when the count went 51 -> 59, and nothing fails if the next person misses one. The
+  parity check already prints `len(cases)`; the prose should say "the validated cases" and let the
+  suite carry the number.
+
 ## Oracle and tests (`test/`)
 
 - **`run_core_parity.py:1005`** — reversed containment in the shim-block filter (see triage #3).

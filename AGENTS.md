@@ -24,7 +24,9 @@ verbs is `plainkeep.json` (run `plainkeep help`). NEVER invent a verb or work ar
    produce DRAFTS. The human sends. Verbs that could transmit refuse without a human `--yes`.
 4. NEVER read `.env` files or print secret values. Secret references (`op://…`) may be
    named, never resolved.
-5. `~/files/**/in/` (client originals) is READ-ONLY. To change one, copy it to `work/`.
+5. `~/files/**/in/` (client originals) is APPEND-ONLY. A new original may ARRIVE there (that is what
+   `plainkeep files ingest` is for); one already there is never edited, renamed, replaced or
+   deleted. To change one, copy it to `work/`.
 6. Everything is in git — safe edits are revertible, so prefer doing the safe write over
    asking. But STOP and ask for anything classified `confirm`, and STOP and report on any
    failure or ambiguity. Never guess.

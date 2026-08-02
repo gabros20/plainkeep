@@ -358,8 +358,11 @@ Enforcement principles:
 - **The wall is by path, not by trust.** Guardrail resolves every target path; anything
   escaping `~/plainkeep` / registered `~/work` repos / `~/files` — or entering the
   iCloud/family tree — hits `deny` regardless of who asked. Within `~/files`, the
-  `in/` folders (client-provided originals) are read-only for every verb: originals are
-  evidence, never edited.
+  `in/` folders (client-provided originals) are APPEND-ONLY for every verb: an original may
+  ARRIVE by ATOMIC CREATION (`files ingest` — evidence has to get in somehow), and one already
+  there is never overwritten, replaced, mutated or deleted. The create-only guarantee is the
+  filesystem's — `link(2)` / `O_CREAT|O_EXCL`, which fail EEXIST — never an `exists()` test the
+  verb ran first, because that is a window rather than a guard (Phase 2 Task 1c).
 - **The sweep zone is the one sanctioned write area outside the roots.** `plainkeep sweep`
   (§9.4) operates on the macOS inboxes `~/Desktop` and `~/Downloads` in **move-only** mode —
   it relocates stale items *within* those dirs into `_swept/`, never into the three roots, and
@@ -625,7 +628,7 @@ accelerators, agent-operable through the same surface.
 ```
 files/
 ├── clients/<client>/<project>/      # acme/acme-webapp — IDENTICAL slug to wiki + ~/work
-│   ├── in/                          # client-provided originals — IMMUTABLE (read-only)
+│   ├── in/                          # client-provided originals — APPEND-ONLY (arrive, never change)
 │   ├── out/                         # what you delivered: final PDFs, exports, packages
 │   ├── work/                        # working files: drafts, design sources, comps
 │   └── research/                    # gathered material for this project
@@ -640,8 +643,10 @@ files/
 
 Three structural rules, then no further rules:
 
-1. **`in/` is immutable.** Client originals are evidence — never edited, never renamed
-   beyond the date prefix. Need to change one? Copy to `work/`. (Enforced by guardrail §5.)
+1. **`in/` is append-only.** Client originals are evidence — never edited, never renamed,
+   never replaced. An original ARRIVES (`files ingest`) and after that it is fixed. Need to
+   change one? Copy to `work/`. (Enforced by guardrail §5 + `lib/vaultio.move_create_only`,
+   whose EEXIST is the filesystem's answer rather than the verb's.)
 2. **`out/` is what left the building.** If a client has it, a copy is here. Your
    delivery history is a folder listing.
 3. **Filenames carry their date:** `2026-06-10--acme-homepage-v2.pdf`. Sortable in
@@ -985,7 +990,9 @@ verbs is `plainkeep.json` (run `plainkeep help`). NEVER invent a verb or work ar
    produce DRAFTS. The human sends. Verbs that could transmit refuse without a human `--yes`.
 4. NEVER read `.env` files or print secret values. Secret references (`op://…`) may be
    named, never resolved.
-5. `~/files/**/in/` (client originals) is READ-ONLY. To change one, copy it to `work/`.
+5. `~/files/**/in/` (client originals) is APPEND-ONLY. A new original may ARRIVE there (that is what
+   `plainkeep files ingest` is for); one already there is never edited, renamed, replaced or
+   deleted. To change one, copy it to `work/`.
 6. Everything is in git — safe edits are revertible, so prefer doing the safe write over
    asking. But STOP and ask for anything classified `confirm`, and STOP and report on any
    failure or ambiguity. Never guess.
@@ -1152,7 +1159,8 @@ happen for the next operator.
   NEVER touch iCloud or family/personal paths.
 - iCloud-bound documents (tax, legal, medical, ID, family, signed masters): PROPOSE the
   destination, never write there yourself.
-- `~/files/**/in/` is READ-ONLY (client originals are evidence). Copy to `work/` to change.
+- `~/files/**/in/` is APPEND-ONLY (client originals are evidence): an original may arrive,
+  none already there may be changed or removed. Copy to `work/` to change one.
 - Deliverables you produce go to the project's `~/files/.../out/` and get linked from the
   project hub and the journal.
 - NEVER transmit externally (email, push, deploy, post, payment). Drafts only; human sends.

@@ -797,7 +797,9 @@ failing region is a green test of nothing**.
   `new client` exist precisely to put an original into `in/`. Creating a new original is not
   modifying evidence, but the rule as validated does not draw that line and the fix would flip a
   validated case, so it is recorded rather than quietly redrawn. Today only the verb's own
-  uniquifying loop guarantees ingest never overwrites an original.
+  uniquifying loop guarantees ingest never overwrites an original. **Resolved by ADR-016**, which
+  redraws the rule as append-only and measures what that loop was actually worth: 217 of 320
+  originals silently destroyed under 16-way concurrency.
 
 **Alternatives rejected.** Adding `classify()` calls verb-by-verb with no shared helper (nothing
 stops verb #35 from skipping it — the exact failure being fixed). Widening the wall so the exempt
@@ -811,3 +813,57 @@ wall's reason instead of writing; that is the point, and the ratchet is what kee
 fixtures that symlink the repo into a temp `PLAINKEEP_HOME` now refuse writes that resolve back into
 the real checkout — `test/run_setup_layers.py` was doing exactly that to `plainkeep.json` and now
 copies it, which the wall was right to catch.
+
+
+## ADR-016 — `~/files/**/in/` is append-only, and the create-only guarantee is the filesystem's (2026-08-02)
+**Status.** **Accepted** (2026-08-02). Resolves the contradiction ADR-015 recorded rather than fixed.
+It MOVES a validated rule — `test/cases/guardrail_cases.json`'s `originals-in-readonly` — so the spec
+model, the enforced guardrail, the case file and the parity check all change in one commit.
+
+**Context — the rule and the verb contradicted each other, and the verb won.** `_in_originals`
+denied every write under `~/files/**/in/` ("originals are read-only evidence"). But `plainkeep files
+ingest --client` exists to PUT an original there. Both statements cannot hold, and the way the tree
+resolved it was the worst of the three options: ingest went on `test/run_pathwall.py`'s exemption
+list, outside the wall entirely, with its own `while dest.exists(): dest = …-2…` loop as the only
+thing standing between an arrival and an overwrite. So the rule that existed to protect originals was
+the reason the only verb that writes one was unpoliced.
+
+That loop is not a guarantee. Measured at BASE 5436ec6, with the loop as written: 16 processes
+ingesting one filename into one directory destroyed **217 of 320 originals**, silently, in **20 of 20
+rounds**. `shutil.move` onto an existing path simply replaces it, and the `exists()` test happened
+earlier.
+
+**Decision.** `~/files/**/in/` is **APPEND-ONLY**. An original may ARRIVE by ATOMIC CREATION;
+overwrite, replace, mutate and delete of an existing leaf never happen — `kind: "delete"` under `in/`
+is now DENY outright, on the path and on its realpath.
+
+The wall admits exactly one write SHAPE there: an action carrying `create_only`, which is a claim
+about a syscall that fails EEXIST — `os.link`, `open(O_CREAT|O_EXCL)`, `mkdir(2)` — and **never**
+about a prior `exists()` test. `bin/lib/vaultio.py` gains `move_create_only()` (link + unlink on one
+device, `O_EXCL` + copy across devices, neither falling back to a racy path) and `mkdir(exist_ok=
+False)` carries the same claim. The public `guard()` STRIPS `create_only`: only the primitives that
+make the syscall may assert it. `files._arrive()` therefore contains no `exists()` call at all — it
+ATTEMPTS each candidate name and lets `FileExistsError` advance to the next.
+
+**Why not "deny an existing path, allow a new one".** It is the obvious fix and it is TOCTOU-prone:
+the wall would answer "this path is free" and another arrival would take it before the write. The
+advisor gate rejected it, and the numbers above are what it looks like in practice. The rule as
+shipped consults **no mutable state at all**, so the wall has no window of its own; the guarantee
+lives one layer down, in the syscall.
+
+**Consequences.** Four exemptions LEAVE `run_pathwall.py`'s `EXEMPT` map (18 sites -> 15) rather than
+being reworded, and its stale-exemption ratchet is what proves the sites are really fixed. The
+validated case is SPLIT, not deleted: `originals-in-mutate-denied` keeps the old action and verdict,
+`originals-in-create-allowed` is the new half, and six further cases pin that `create_only` launders
+nothing (not iCloud through a symlink, not a path outside the three roots, not another task's `~/work`
+repo). 51 cases -> 59. `paths.ROOTS_HOME` now mirrors `wall.HOME`'s precedence, because from this
+change the two anchor the same tree from opposite sides and disagreeing produces a DENY on a correct
+path. `test/run_originals.py` (54 checks) keeps the BASE loop alive inside the test and ASSERTS THAT
+IT STILL LOSES FILES, so the concurrency gate cannot quietly stop racing.
+
+**What this does NOT do.** The shadow note `files._shadow()` writes beside each original picks its
+slug with an `exists()`-scan of the wiki and then writes — the same shape, one tree over, and it is
+NOT race-free. It lives inside the vault (a revertible git diff, not evidence), so it is out of scope
+here and stated by `run_originals.py` as a SUITE-NOTE on every run. The cross-device branch is
+exercised by forcing `link(2)` to report EXDEV; no second volume is mounted, so what is proved is
+that the fallback's guarantee is `O_EXCL`'s.

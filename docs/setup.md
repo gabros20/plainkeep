@@ -29,14 +29,49 @@ What that changes in practice:
 | --- | --- |
 | Run plainkeep | `plainkeep <verb>` (the installed launcher on PATH). Your checkout's own `./plainkeep` against that same checkout is the refusal above. |
 | See which engine is live | `plainkeep vault status` — it reports the vault, the engine, and whether they agree. |
-| Pull an engine fix | `script/update` (refreshes the SOURCE checkout, staged) then `script/setup --yes` (installs it and re-points `current`). Two steps on purpose: an update you have not installed cannot break a running vault. |
-| Roll back | `python3 <engine>/bin/lib/enginetree.py --activate <older-version>` — the previous versions are still installed. |
+| Pull an engine fix | `script/update` (refreshes the SOURCE checkout, staged) then `python3 <engine>/bin/lib/enginetree.py --update <checkout>` (stages, checksums, self-tests, then switches one pointer). Two steps on purpose: an update you have not installed cannot break a running vault. |
+| Start a NEW vault | `plainkeep vault init <path> --yes` — content dirs, configuration, `plugins/`, a generated `plainkeep.json`, the marker and a registry entry. **No engine code**: a vault is data. |
+| Adopt an EXISTING directory as a vault | `plainkeep vault register <path> --yes`. `init` creates; `register` adopts — including this checkout, which is legitimately both an engine source and a vault. |
+| Roll back | `python3 <engine>/bin/lib/enginetree.py --rollback` — see the runbook below. |
+| See what a rollback would do | `python3 <engine>/bin/lib/enginetree.py --print pairs`, or the `engine:` rows in `plainkeep doctor`. |
 | Add a capability | `plainkeep new verb <name>` — it scaffolds into `<vault>/plugins/local/`, which is yours and survives every engine upgrade. Editing the engine is not an option; it is read-only. |
 | Install engines somewhere else | export `PLAINKEEP_ENGINE_HOME`. It relocates the install ROOT only; it never steers where a running dispatch loads code from. |
 
 The cost, stated: a read-only tree cannot cache compiled Python beside its source, so each spawned
 verb re-compiles the shared library it imports — **+17.6 ms, +12.2%** measured on macOS arm64 /
 CPython 3.12 (ADR-017 Consequences).
+
+### Updating the engine, and rolling back (ADR-020)
+
+An update stages a checksum-verified **core+engine pair** into a new version directory, runs a real
+verb through that pair's own dispatcher before anything is activated, and then switches exactly one
+symlink. **The pair you were running is kept** — it is never the target of an update, so nothing the
+update does can remove it.
+
+```sh
+ENG="$(python3 -c 'import os;print(os.path.expanduser("~/.local/share/plainkeep/engine/current"))')"
+
+script/update                                        # 1. pull engine files into the checkout (staged)
+python3 "$ENG/bin/lib/enginetree.py" --update .      # 2. stage → checksum → self-test → activate
+plainkeep doctor                                     # 3. confirm
+```
+
+If step 2 refuses, nothing was activated and you are still on the pair you were running. If step 3
+is unhappy, the rollback is three lines and it is a tested sequence, not advice:
+
+```sh
+python3 "$ENG/bin/lib/enginetree.py" --print pairs   # what would a rollback do?
+python3 "$ENG/bin/lib/enginetree.py" --rollback      # switch back
+plainkeep doctor                                     # confirm the pair that landed works
+```
+
+**If an update is interrupted** — a `^C`, a `SIGKILL`, a laptop that slept — re-run the same
+`--update` command. It converges: it finishes whatever was left, and a second run says
+`already active` and does nothing. `plainkeep doctor` warns when an update was interrupted between
+recording its intent and moving the pointer.
+
+`--keep N` bounds how many versions survive (default 2 — the active pair and the one you would roll
+back to). It cannot go below 2: retaining the previous pair is the contract, not a preference.
 
 ### Migrating an existing `~/ops` vault
 

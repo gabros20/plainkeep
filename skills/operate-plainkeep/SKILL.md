@@ -33,6 +33,19 @@ consequences you must act on:
   version. What you CAN add without touching the engine is a plugin: `plainkeep new verb
   <name>` scaffolds one into `<vault>/plugins/local/<name>/`, which is user-owned, survives
   an engine upgrade, and re-enters through the dispatcher so the guardrail still gates it.
+* **Creating a vault and installing an engine are two different acts.** `plainkeep vault
+  init <path> --yes` makes a new DATA-ONLY vault (content dirs, configuration, `plugins/`,
+  a generated `plainkeep.json`, the marker, a registry entry — and no code). `plainkeep
+  vault register <path> --yes` ADOPTS a directory that already exists. Neither installs an
+  engine, and `init` refuses a directory that already carries engine code — that is a
+  source checkout, and `register` is what adopts one.
+* **Never update or roll back an engine on a human's behalf without being asked.** Both are
+  `bin/lib/enginetree.py`, not verbs, and they are deliberately outside the surface you
+  drive. If an engine looks wrong, report what `plainkeep doctor` says — its `engine:` rows
+  name the version, whether the tree is sealed, and which pair a rollback would reach — and
+  hand the operator the command. The rollback is
+  `python3 <engine>/bin/lib/enginetree.py --rollback`; the previous pair is retained
+  precisely so a human has that option (docs/DECISIONS.md ADR-020).
 
 ## 2. The one rule about capabilities
 `plainkeep.json` (or `plainkeep help`) is the authoritative, complete list of what you can do.

@@ -8,6 +8,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from lib.hermetic import seal
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
@@ -91,6 +92,51 @@ def case_scaffold_through_a_sealed_engine() -> None:
               str(list((ops / "plugins" / "local").glob("*"))))
         check("...and never turned the blocker into a half-written verb",
               blocker.is_file() and blocker.read_text() == "not a directory")
+
+        # DEBRIS FROM A KILL. The `except` above cleans every interruption that raises; a `SIGKILL`
+        # between `_fill` and the rename raises nothing, and the staging leaf then stayed forever —
+        # `enginetree.install()` sweeps its own abandoned staging and this did not. Simulated by
+        # planting a leaf with an old mtime, which is what such a kill leaves; a FRESH one is planted
+        # beside it because the sweep must never touch a scaffold that another process is building
+        # right now.
+        local = ops / "plugins" / "local"
+        stale = local / ".pk-scaffolding-killed.80356"
+        stale.mkdir(parents=True, exist_ok=True)
+        (stale / "run.py").write_text("{{name}}", encoding="utf-8")
+        old = time.time() - (25 * 60 * 60)
+        os.utime(stale / "run.py", (old, old))
+        os.utime(stale, (old, old))
+        live = local / ".pk-scaffolding-other.99999"
+        live.mkdir(exist_ok=True)
+        (live / "run.py").write_text("{{name}}", encoding="utf-8")
+        r = subprocess.run([sys.executable, str(eng / "bin" / "new" / "run.py"), "verb", "sweeper"],
+                           capture_output=True, text=True, env=venv)
+        check("a later `new verb` SWEEPS the debris a kill left behind",
+              r.returncode == 0 and not stale.exists(),
+              f"rc={r.returncode} left={sorted(p.name for p in local.glob('.pk-scaffolding-*'))}")
+        check("...and does NOT touch a staging leaf young enough to be live",
+              live.is_dir(), str(sorted(p.name for p in local.glob(".pk-scaffolding-*"))))
+        check("...and the debris was never a dispatchable verb anyway (dot-prefixed)",
+              not (local / ".pk-scaffolding-killed.80356").exists()
+              and (local / "sweeper" / "run.py").is_file())
+        shutil.rmtree(live, ignore_errors=True)
+
+        # AN UNWRITABLE `plugins/local/`. Atomicity already held here — nothing is left behind — but
+        # the SHAPE was a raw `PermissionError` traceback, where `enginetree.main()` prints one line.
+        ro = ops / "plugins" / "local"
+        mode = ro.stat().st_mode
+        os.chmod(ro, 0o555)
+        try:
+            r = subprocess.run([sys.executable, str(eng / "bin" / "new" / "run.py"), "verb", "ro1"],
+                               capture_output=True, text=True, env=venv)
+            out = r.stdout + r.stderr
+            check("new verb into an unwritable plugins/local REFUSES without a traceback",
+                  r.returncode != 0 and "Traceback" not in out
+                  and "scaffolding verb 'ro1' failed" in out, out[-300:])
+        finally:
+            os.chmod(ro, mode)
+        check("...and left no residue", not list(ro.glob(".pk-scaffolding-*"))
+              and not (ro / "ro1").exists(), str(sorted(p.name for p in ro.glob("*"))))
 
         for p in tmp.rglob("*"):                 # the sealed tree cannot be removed as-is
             try:

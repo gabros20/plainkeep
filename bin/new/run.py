@@ -59,9 +59,18 @@ def _new_verb(rest, dry=False):
     if dry:
         return output.emit({"dry_run": True, "type": "verb", "name": name, "risk": risk, "code": f"{rel}/run.py"}, "new",
                            human=lambda _: f"would scaffold verb '{name}' ({rel}/, risk: {risk})  (dry run — nothing written)")
-    vaultio.mkdir(dest.parent)
-    _scaffold_from_template(dest, {"{{name}}": name, "{{risk}}": risk,
-                                   "{{summary}}": summary or f"TODO: describe {name}"})
+    try:
+        vaultio.mkdir(dest.parent)
+        _scaffold_from_template(dest, {"{{name}}": name, "{{risk}}": risk,
+                                       "{{summary}}": summary or f"TODO: describe {name}"})
+    except OSError as e:
+        # An unwritable `plugins/local/`, a full volume, a template that vanished mid-copy. Atomicity
+        # is already handled inside `_scaffold_from_template` (the staging leaf is removed and nothing
+        # half-made appears); what was missing is the SHAPE — a raw traceback where every other
+        # surface in this codebase, `enginetree.main()` included, prints one line the operator can act
+        # on. The failure is genuinely unexpected, so the code stays EXIT_UNEXPECTED; only the
+        # rendering changes.
+        output.fail(output.EXIT_UNEXPECTED, f"scaffolding verb '{name}' failed: {e}", verb="new")
     from lib.manifest import write_manifest  # regenerate plainkeep.json so `plainkeep help` shows the new verb
     write_manifest()
     paths.append_journal(f"new verb: {name} (risk {risk})")
@@ -99,6 +108,7 @@ def _scaffold_from_template(dest: Path, repl: dict) -> None:
     staging = dest.parent / f".pk-scaffolding-{dest.name}.{os.getpid()}"
     if staging.exists():
         shutil.rmtree(staging, ignore_errors=True)
+    _sweep_stale_scaffolding(dest.parent)
     try:
         vaultio.copytree(VERB_TEMPLATE, staging)
         for p in [staging, *staging.rglob("*")]:
@@ -111,6 +121,36 @@ def _scaffold_from_template(dest: Path, repl: dict) -> None:
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
+
+
+def _sweep_stale_scaffolding(parent: Path) -> None:
+    """Remove ABANDONED `.pk-scaffolding-*` leaves under `plugins/local/` — never a live one.
+
+    The `except` above and the same-pid `rmtree` clean every path this process can see; a `SIGKILL`
+    between `_fill` and the rename is the one that cannot be caught, and it left the staging leaf
+    behind forever. Debris rather than a contract leak — it is dot-prefixed, so `plainkeep.json`, the
+    completion catalog, `help` and `plugin list` all omit it, and only `resolver.known_verbs()` sees
+    it — but `enginetree.install()` grew `_sweep_stale_staging()` for exactly this shape and this did
+    not, so a vault accumulated one leaf per interrupted scaffold with nothing to remove them.
+
+    Same age rule as the installer's sweep, imported rather than restated: a leaf younger than the
+    cutoff may belong to a run happening right now, and the previous line has already dealt with this
+    process's own. Best effort — debris this process cannot remove is not a reason to refuse to
+    scaffold a verb."""
+    import time
+    from lib.enginetree import STALE_STAGING_SECONDS
+    cutoff = time.time() - STALE_STAGING_SECONDS
+    try:
+        leaves = list(parent.glob(".pk-scaffolding-*"))
+    except OSError:
+        return
+    for p in leaves:
+        try:
+            if not p.is_dir() or p.is_symlink() or p.stat().st_mtime > cutoff:
+                continue
+            shutil.rmtree(p, ignore_errors=True)
+        except OSError:
+            continue
 
 
 def _all_slugs() -> set:

@@ -1362,10 +1362,11 @@ def _no_repo_read_unreadable_source(binary: str, tmps: list[Path], vault: Path) 
 #
 # The plan section's prose says "×34" verbs and "×19" lib modules. Both were already stale when this
 # task started — measured at BASE 79b6b6e: 35 verb directories (35 run.py, 35 cmd.json) and 23 lib
-# modules, which Task 1a/1b/1c grew (vaultreg, vaultroot, wall) and this task grew again
-# (enginetree). The numbers below are what the tree HAS, not what the plan remembered.
+# modules, which Task 1a/1b/1c grew (vaultreg, vaultroot, wall) and Task 2 grew again
+# (enginetree). Task 3 adds `pluginenv` — 25. The numbers below are what the tree HAS, not what the
+# plan remembered.
 EXPECTED_ENGINE_VERBS = 35
-EXPECTED_ENGINE_LIB_MODULES = 24
+EXPECTED_ENGINE_LIB_MODULES = 25
 
 
 def _installed_manifest_checks(tmps: list[Path]) -> None:

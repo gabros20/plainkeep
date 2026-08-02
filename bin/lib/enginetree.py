@@ -260,7 +260,10 @@ def _has_verb_dir(root: Path) -> bool:
 # DIRECTORY owned — see the note above OWNED_TREES: these two lists are the other half of the
 # manifest, and a new engine-owned path may belong in one of them.
 NAMED_LIB_MODULES = ("vaultroot.py", "vaultreg.py", "enginetree.py", "guardrail.py", "resolver.py",
-                     "manifest.py", "output.py", "paths.py", "wall.py", "vaultio.py")
+                     "manifest.py", "output.py", "paths.py", "wall.py", "vaultio.py",
+                     # the plugin spawn contract (Task 3): resolver.py's `--dispatch` imports it, so a
+                     # tree missing it dispatches every ENGINE verb fine and breaks every PLUGIN verb
+                     "pluginenv.py")
 NAMED_CONTENT = ("bin/ui/version.txt", "bin/share/worker/worker.js",
                  "templates/verb/run.py", "templates/verb/cmd.json",
                  "skills/operate-plainkeep/SKILL.md")

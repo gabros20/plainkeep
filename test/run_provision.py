@@ -63,7 +63,6 @@ GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\0
 EXIT_OK, EXIT_UNEXPECTED, EXIT_USAGE, EXIT_CONFIRM, EXIT_NOT_FOUND, EXIT_DENY = 0, 1, 2, 3, 4, 5
 
 results: list[tuple[str, bool, str]] = []
-notes: list[str] = []
 skipped: list[str] = []
 
 # THE FROZEN TABLE, restated here as the ORACLE rather than read from the file under test. A test that
@@ -599,7 +598,6 @@ def case_frozen_sync_offline(tmp: Path) -> None:
           "version the lock names (not 'byte-identical', which no installed environment can be)",
           r2.returncode == 0 and r2.stdout.strip() == "1.0.0", (r2.stdout + r2.stderr)[:200])
 
-    installed = provision.installed_dists(work.parent) if False else None  # (env is not an engine)
     dists = sorted(p.name for p in (work / "venv" / "lib").glob("python*/site-packages/*.dist-info"))
     check("4b sync GATE: NOTHING was installed beyond what the lock names — no weights, no system "
           "packages, no incidental extras",

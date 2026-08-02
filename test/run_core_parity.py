@@ -99,7 +99,7 @@ CRASH_NOISE_OPT_INS = ("PLAINKEEP_REQUIRE_CORE", "PLAINKEEP_PARITY_FAULT_SIGNALS
 # pinned so that deleting a case (or an invocation) reddens instead of quietly shrinking coverage; see
 # the accounting invariant at the bottom of main() for why a self-consistency check cannot do that job.
 # ADDING cases is expected and welcome: raise this number in the same commit that adds them.
-EXPECTED_CATALOG_INVOCATIONS = 205
+EXPECTED_CATALOG_INVOCATIONS = 210
 
 results: list[tuple[str, bool, str]] = []
 skipped: list[tuple[str, str]] = []
@@ -812,6 +812,17 @@ def _dispatch_env(fx: Fixture, inv: dict, home: Path) -> dict:
     # asserted where it can be controlled (test/run_pluginsdk.py); what this comparator owns is that
     # the two dispatchers produce the same thing from the same start.
     e.pop("PYTHONPATH", None)
+    # invocations[].env — a HOSTILE CALLER'S ENVIRONMENT, stated per invocation. Every knob above
+    # exists to make the two sides start from the same clean place; this one exists for the cases
+    # where the caller's environment is the subject rather than the noise. `PLAINKEEP_PLUGIN_PACK`
+    # preset by a re-entrant plugin verb (or by a shell `export`) is the case it was added for: the
+    # engine-verb negative was only ever asserted from a FRESH dispatch, where the variable was never
+    # there to begin with, so neither dispatcher REMOVING it went uncovered. A null value UNSETS.
+    for k, v in (inv.get("env") or {}).items():
+        if v is None:
+            e.pop(k, None)
+        else:
+            e[k] = str(v)
     return e
 
 

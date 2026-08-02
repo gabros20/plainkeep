@@ -797,7 +797,7 @@
     },
     {
       "name": "plugin-spawn-environment",
-      "rationale": "THE PLUGIN SPAWN CONTRACT (Phase 2 Task 3), compared where it can actually diverge: the floor exports PYTHONPATH + PLAINKEEP_PLUGIN_PACK from resolver.py's `--dispatch` answer, the core composes the same two values in-process from pluginenv.ts, and nothing but this case makes the two agree. A plugin verb must see the vault's dependency overlay FIRST, the engine's bin/ SECOND, the pack name, and an importable `lib`; an ENGINE verb in the same fixture must see NONE of it — no pack, an untouched PYTHONPATH, and no importable `lib`, since it self-locates through __file__ and never needed the path. That negative half is the point: an injection for every verb would pass a plugin-only assertion and leak the engine tree into the environment of every child all 35 engine verbs spawn. Output is normalized to LABELS because the comparator gives each side its own vault copy, so absolute paths would differ by construction.",
+      "rationale": "THE PLUGIN SPAWN CONTRACT (Phase 2 Task 3), compared where it can actually diverge: the floor exports PYTHONPATH + PLAINKEEP_PLUGIN_PACK from resolver.py's `--dispatch` answer, the core composes the same two values in-process from pluginenv.ts, and nothing but this case makes the two agree. A plugin verb must see the vault's dependency overlay FIRST, the engine's bin/ SECOND, the pack name, and an importable `lib`; an ENGINE verb in the same fixture must see NONE of it — no pack, an untouched PYTHONPATH, and no importable `lib`, since it self-locates through __file__ and never needed the path. That negative half is the point: an injection for every verb would pass a plugin-only assertion and leak the engine tree into the environment of every child all 35 engine verbs spawn. Output is normalized to LABELS because the comparator gives each side its own vault copy, so absolute paths would differ by construction. THE NEGATIVE IS ASSERTED FROM A HOSTILE ENVIRONMENT TOO (fix wave r1): the third invocation presets PLAINKEEP_PLUGIN_PACK in the caller's environment and still requires \"pack\": null. Asserting it only from a fresh dispatch could never have failed — the variable was not there to begin with — so neither dispatcher REMOVING it went uncovered, and a plugin verb that re-enters the dispatcher (the documented pattern) is exactly the caller that supplies it. With the marker inherited, `pluginenv.attach()` arms the missing-dependency excepthook and any descendant's own ModuleNotFoundError is reported as that pack's fault.",
       "fixture": {
         "verbs": [
           {
@@ -807,7 +807,7 @@
               "verb": "v_plugenv",
               "risk": "read"
             },
-            "run": "import importlib.util, json, os\nfrom pathlib import Path\n# NORMALIZED on purpose: the comparator gives each side its own VAULT copy, so any absolute\n# path printed here would differ between the two by construction. What is compared is the\n# SHAPE — which labelled entry is where, and whether the SDK is importable at all.\nengine = os.environ.get('PLAINKEEP_ENGINE') or ''\nhome = os.environ.get('PLAINKEEP_HOME') or ''\nlabel = {str(Path(home) / 'plugins' / '.deps'): 'DEPS', str(Path(engine) / 'bin'): 'ENGINE_BIN'}\nraw = os.environ.get('PYTHONPATH') or ''\nprint(json.dumps({\n    'pack': os.environ.get('PLAINKEEP_PLUGIN_PACK'),\n    'pythonpath': [label.get(x, 'other') for x in raw.split(os.pathsep)] if raw else [],\n    'sdk_importable': importlib.util.find_spec('lib') is not None,\n}, sort_keys=True))\n"
+            "run": "import importlib.util, json, os\nfrom pathlib import Path\n# NORMALIZED on purpose: the comparator gives each side its own VAULT copy, so any absolute\n# path printed here would differ between the two by construction. What is compared is the\n# SHAPE — which labelled entry is where, and whether the SDK is importable at all.\nengine = os.environ.get('PLAINKEEP_ENGINE') or ''\nhome = os.environ.get('PLAINKEEP_HOME') or ''\nlabel = {str(Path(home) / '.plugin-deps'): 'DEPS', str(Path(engine) / 'bin'): 'ENGINE_BIN'}\nraw = os.environ.get('PYTHONPATH') or ''\nprint(json.dumps({\n    'pack': os.environ.get('PLAINKEEP_PLUGIN_PACK'),\n    'pythonpath': [label.get(x, 'other') for x in raw.split(os.pathsep)] if raw else [],\n    'sdk_importable': importlib.util.find_spec('lib') is not None,\n}, sort_keys=True))\n"
           },
           {
             "at": "engine",
@@ -816,7 +816,7 @@
               "verb": "v_engenv",
               "risk": "read"
             },
-            "run": "import importlib.util, json, os\nfrom pathlib import Path\n# NORMALIZED on purpose: the comparator gives each side its own VAULT copy, so any absolute\n# path printed here would differ between the two by construction. What is compared is the\n# SHAPE — which labelled entry is where, and whether the SDK is importable at all.\nengine = os.environ.get('PLAINKEEP_ENGINE') or ''\nhome = os.environ.get('PLAINKEEP_HOME') or ''\nlabel = {str(Path(home) / 'plugins' / '.deps'): 'DEPS', str(Path(engine) / 'bin'): 'ENGINE_BIN'}\nraw = os.environ.get('PYTHONPATH') or ''\nprint(json.dumps({\n    'pack': os.environ.get('PLAINKEEP_PLUGIN_PACK'),\n    'pythonpath': [label.get(x, 'other') for x in raw.split(os.pathsep)] if raw else [],\n    'sdk_importable': importlib.util.find_spec('lib') is not None,\n}, sort_keys=True))\n"
+            "run": "import importlib.util, json, os\nfrom pathlib import Path\n# NORMALIZED on purpose: the comparator gives each side its own VAULT copy, so any absolute\n# path printed here would differ between the two by construction. What is compared is the\n# SHAPE — which labelled entry is where, and whether the SDK is importable at all.\nengine = os.environ.get('PLAINKEEP_ENGINE') or ''\nhome = os.environ.get('PLAINKEEP_HOME') or ''\nlabel = {str(Path(home) / '.plugin-deps'): 'DEPS', str(Path(engine) / 'bin'): 'ENGINE_BIN'}\nraw = os.environ.get('PYTHONPATH') or ''\nprint(json.dumps({\n    'pack': os.environ.get('PLAINKEEP_PLUGIN_PACK'),\n    'pythonpath': [label.get(x, 'other') for x in raw.split(os.pathsep)] if raw else [],\n    'sdk_importable': importlib.util.find_spec('lib') is not None,\n}, sort_keys=True))\n"
           }
         ]
       },
@@ -832,6 +832,97 @@
           "verb": "v_engenv",
           "args": [],
           "expect_stdout": "{\"pack\": null, \"pythonpath\": [], \"sdk_importable\": false}\n"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_engenv",
+          "args": [],
+          "env": {
+            "PLAINKEEP_PLUGIN_PACK": "spoofed"
+          },
+          "expect_stdout": "{\"pack\": null, \"pythonpath\": [], \"sdk_importable\": false}\n"
+        }
+      ]
+    },
+    {
+      "name": "dependency-overlay-is-not-a-pack",
+      "rationale": "PIP CONTENT IS NOT A DISPATCHABLE VERB, in EITHER dispatcher (fix wave r1, review BLOCKING 1). `plugin sync` unpacks a pack's declared requirements into a vault-local overlay, and an ordinary pure-python wheel may ship `<pkg>/run.py` — the exact shape of a plainkeep verb. While the overlay sat at `plugins/.deps/`, INSIDE the directory both resolvers enumerate as packs, that third-party file resolved as the verb `<pkg>` under a pack called `.deps` that no lockfile recorded, that `plugin list` never showed and that no user ever consented to. The fix is structural — the overlay moved to `<vault>/.plugin-deps/`, outside the enumerated tree — and the dot filter both resolvers now apply is the second line, for a vault that already carries the old directory from a `sync` run before the move. This case pins the OUTCOME rather than either mechanism: a verb-shaped directory in the overlay (new location) and in the legacy location is unknown to both dispatchers, while a real pack in the same fixture still resolves — without that positive half, a resolver that had stopped finding anything at all would pass.",
+      "fixture": {
+        "verbs": [
+          {
+            "at": "engine",
+            "verb": "v_eng",
+            "cmd": {
+              "verb": "v_eng",
+              "risk": "read"
+            },
+            "run": "print('engine verb resolved')\n"
+          },
+          {
+            "at": "plugin:real",
+            "verb": "v_real",
+            "cmd": {
+              "verb": "v_real",
+              "risk": "read"
+            },
+            "run": "print('a real pack verb resolved')\n"
+          }
+        ],
+        "vault_files": [
+          {
+            "path": "plugins/.deps/zzverbish/run.py",
+            "text": "print('EXECUTED FROM INSIDE THE DEPENDENCY OVERLAY')\n\n\ndef main(argv):\n    print('EXECUTED FROM INSIDE THE DEPENDENCY OVERLAY')\n    return 0\n\n\nif __name__ == '__main__':\n    raise SystemExit(main([]))\n"
+          },
+          {
+            "path": "plugins/.deps/zzverbish/cmd.json",
+            "text": "{\"verb\": \"zzverbish\", \"summary\": \"not a verb\", \"risk\": \"read\"}"
+          },
+          {
+            "path": "plugins/.deps/zzdeps_only_cmd/cmd.json",
+            "text": "{\"verb\": \"zzdeps_only_cmd\", \"summary\": \"not a verb\", \"risk\": \"read\"}"
+          },
+          {
+            "path": ".plugin-deps/zzverbish/run.py",
+            "text": "print('EXECUTED FROM INSIDE THE DEPENDENCY OVERLAY')\n\n\ndef main(argv):\n    print('EXECUTED FROM INSIDE THE DEPENDENCY OVERLAY')\n    return 0\n\n\nif __name__ == '__main__':\n    raise SystemExit(main([]))\n"
+          },
+          {
+            "path": ".plugin-deps/zzverbish/cmd.json",
+            "text": "{\"verb\": \"zzverbish\", \"summary\": \"not a verb\", \"risk\": \"read\"}"
+          }
+        ]
+      },
+      "invocations": [
+        {
+          "compare": "dispatch",
+          "verb": "v_eng",
+          "args": [],
+          "expect_stdout": "engine verb resolved\n"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "v_real",
+          "args": [],
+          "expect_stdout": "a real pack verb resolved\n"
+        },
+        {
+          "compare": "dispatch",
+          "verb": "zzverbish",
+          "args": [],
+          "expect_returncodes": {
+            "core": 4,
+            "floor": 4
+          },
+          "expect_stdout": ""
+        },
+        {
+          "compare": "dispatch",
+          "verb": "zzdeps_only_cmd",
+          "args": [],
+          "expect_returncodes": {
+            "core": 4,
+            "floor": 4
+          },
+          "expect_stdout": ""
         }
       ]
     }

@@ -56,7 +56,7 @@ PROBE = r"""import importlib.util, json, os, subprocess, sys
 from pathlib import Path
 engine = os.environ.get("PLAINKEEP_ENGINE") or ""
 home = os.environ.get("PLAINKEEP_HOME") or ""
-label = {str(Path(home) / "plugins" / ".deps"): "DEPS", str(Path(engine) / "bin"): "ENGINE_BIN"}
+label = {str(Path(home) / ".plugin-deps"): "DEPS", str(Path(engine) / "bin"): "ENGINE_BIN"}
 def shape(raw):
     return [label.get(x, x) for x in raw.split(os.pathsep)] if raw else []
 # `lib.api`, not `lib`: `lib` alone is ambiguous — any directory named lib on the child's path
@@ -431,7 +431,7 @@ def case_dependency_resolution() -> None:
 
         # (2) THE OVERLAY RESOLVES. Populated by hand here so the resolution path is tested without
         # pip — the pip path itself is case (4).
-        overlay = vault / "plugins" / ".deps" / "zzdemo"
+        overlay = vault / ".plugin-deps" / "zzdemo"
         overlay.mkdir(parents=True)
         (overlay / "__init__.py").write_text("VALUE = 'from-the-overlay'\n", encoding="utf-8")
         r = pk(vault, td, "v_needy", "--yes")
@@ -465,11 +465,11 @@ def case_sync_with_pip() -> None:
         src = make_pack(td / "needy", "needy", "v_needy", DEPENDENT, {"dependencies": ["zzdemo>=1.0"]})
         pk(vault, td, "plugin", "add", str(src), "--yes")
         r = pk(vault, td, "plugin", "sync", "needy", "--yes",
-               "--pip-arg=--no-index", f"--pip-arg=--find-links={wheels}")
+               "--no-index", f"--find-links={wheels}")
         check("plugin sync installs the declared dependency (exit 0)", r.returncode == 0,
               f"rc={r.returncode} {r.stdout[:200]} {r.stderr[:400]}")
         check("plugin sync writes into the vault's overlay, nowhere else",
-              (vault / "plugins" / ".deps" / "zzdemo" / "__init__.py").exists())
+              (vault / ".plugin-deps" / "zzdemo" / "__init__.py").exists())
         lock = _lock(vault)
         want = f"{sys.version_info.major}.{sys.version_info.minor}"
         check("plugin sync records the interpreter it built the overlay for",
@@ -512,7 +512,7 @@ def case_sync_refuses_shadowing_overlay() -> None:
                         {"dependencies": ["zzlibby"]})
         pk(vault, td, "plugin", "add", str(src), "--yes")
         r = pk(vault, td, "plugin", "sync", "libby", "--yes",
-               "--pip-arg=--no-index", f"--pip-arg=--find-links={wheels}")
+               "--no-index", f"--find-links={wheels}")
         check("sync REFUSES an overlay that shadows the SDK with a top-level `lib` (exit 5)",
               r.returncode == 5 and "SHADOWS" in r.stderr, f"rc={r.returncode} {r.stderr[:300]}")
 
@@ -582,7 +582,346 @@ def case_new_dependency_revokes_trust() -> None:
 
 
 # --------------------------------------------------------------------------------------------------
-# E. Doc and template agree on what a plugin imports
+# E. THE OVERLAY IS NOT A PLUGIN PACK (fix wave r1, review BLOCKING 1)
+#
+# The overlay used to live at `plugins/.deps/` — inside the directory `resolver._plugin_packs()`
+# enumerates, which appended EVERY subdirectory. So any distribution that ships `<pkg>/run.py` (an
+# ordinary layout) became the dispatchable verb `<pkg>`, attributed to a "pack" named `.deps` that no
+# lockfile recorded, that `plugin list` never showed, and that no user consented to.
+#
+# WHAT THIS CASE ASSERTS IS THE OUTCOME, NOT THE MECHANISM: a wheel installed the sanctioned way
+# (`plugin add` then `plugin sync`) CANNOT BE DISPATCHED. A test that the dot filter exists, or that
+# the constant says `.plugin-deps`, would pass against any number of new ways to reach the same hole.
+# The wheel is built here to be maximally verb-shaped — package directory, `run.py`, `cmd.json` — so
+# the only thing standing between it and a dispatch is the property under test.
+# --------------------------------------------------------------------------------------------------
+def _verbish_wheel(dirpath: Path, name: str = "zzverbish") -> Path:
+    """A pure-python wheel whose package directory is EXACTLY the shape of a plainkeep verb."""
+    dirpath.mkdir(parents=True, exist_ok=True)
+    whl = dirpath / f"{name}-1.0.0-py3-none-any.whl"
+    with zipfile.ZipFile(whl, "w") as z:
+        z.writestr(f"{name}/__init__.py", "VALUE = 'ordinary package'\n")
+        z.writestr(f"{name}/cmd.json",
+                   json.dumps({"verb": name, "summary": "not a verb", "risk": "read"}))
+        z.writestr(f"{name}/run.py",
+                   "print('EXECUTED FROM INSIDE THE DEPENDENCY OVERLAY')\n\n\n"
+                   "def main(argv):\n"
+                   "    print('EXECUTED FROM INSIDE THE DEPENDENCY OVERLAY')\n"
+                   "    return 0\n\n\n"
+                   "if __name__ == '__main__':\n"
+                   "    raise SystemExit(main([]))\n")
+        z.writestr(f"{name}-1.0.0.dist-info/METADATA",
+                   f"Metadata-Version: 2.1\nName: {name}\nVersion: 1.0.0\n")
+        z.writestr(f"{name}-1.0.0.dist-info/WHEEL",
+                   "Wheel-Version: 1.0\nGenerator: hand\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+        z.writestr(f"{name}-1.0.0.dist-info/RECORD", "")
+    return whl
+
+
+# Asked of the REAL resolver, in a subprocess, with the vault's own environment — the same module the
+# dispatcher asks. `plugin_names()` is what `plainkeep.json` publishes as `capabilities.plugins`, so
+# it is the surface through which a bogus pack would reach help, completion, the TUI and MCP.
+_RESOLVER_PROBE = """
+import json, sys
+sys.path.insert(0, sys.argv[1])
+import resolver
+print(json.dumps({"packs": resolver.plugin_names(),
+                  "source": resolver.source_of(sys.argv[2]),
+                  "known": sys.argv[2] in resolver.known_verbs()}))
+"""
+
+
+def _resolver_view(vault: Path, td: Path, verb: str) -> dict:
+    # cwd=<vault>: `python -c` puts the current directory on sys.path, and the suite is run both
+    # from the repo root and from `test/`. Neither may be able to answer this probe's imports.
+    r = subprocess.run([PY, "-c", _RESOLVER_PROBE, str(REPO / "bin" / "lib"), verb],
+                       capture_output=True, text=True, env=env_for(vault, td), cwd=str(vault))
+    try:
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except Exception:
+        return {"error": r.stderr[-200:]}
+
+
+def _undispatchable(vault: Path, td: Path, where: str, expect_packs: list[str]) -> None:
+    """The property, asserted through the REAL dispatcher and the REAL resolver. `--yes` is supplied
+    deliberately: the untrusted-pack ceiling is NOT what is under test, and a case that leaned on it
+    would go green for the wrong reason the day the ceiling changed."""
+    d = pk(vault, td, "zzverbish", "--yes")
+    check(f"{where}: A WHEEL'S CONTENT CANNOT BE DISPATCHED AS A VERB (unknown verb, exit 4)",
+          d.returncode == 4 and "unknown verb" in d.stderr,
+          f"rc={d.returncode} out={d.stdout[:160]!r} err={d.stderr[:200]!r}")
+    check(f"{where}: ...and none of its code ran",
+          "EXECUTED FROM INSIDE THE DEPENDENCY OVERLAY" not in (d.stdout + d.stderr), d.stdout[:200])
+    rr = subprocess.run([PY, str(REPO / "bin" / "lib" / "resolver.py"), "--dispatch", "zzverbish"],
+                        capture_output=True, text=True, env=env_for(vault, td))
+    check(f"{where}: ...the resolver's own --dispatch has no answer for it (exit 4)",
+          rr.returncode == 4 and not rr.stdout.strip(), f"rc={rr.returncode} {rr.stdout[:160]!r}")
+    view = _resolver_view(vault, td, "zzverbish")
+    check(f"{where}: ...it is not in known_verbs() and has no source",
+          view.get("known") is False and view.get("source") is None, str(view))
+    check(f"{where}: ...and no pack was invented for it (plainkeep.json capabilities)",
+          view.get("packs") == expect_packs, str(view))
+
+
+def _unpack_wheel(whl: Path, dest: Path) -> None:
+    """Unpack a wheel exactly where pip's `--target` would have put it — the real bytes, no network."""
+    dest.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(whl) as z:
+        z.extractall(dest)
+
+
+def case_overlay_is_not_a_pack() -> None:
+    """OFFLINE and always runs. The wheel is real (built by `_verbish_wheel`) and its payload is put
+    where the overlay is and where the overlay USED to be — so this is red at b1b3f6e on the legacy
+    half without needing pip, an index, or a network to be reachable."""
+    with tempfile.TemporaryDirectory() as t:
+        td = Path(t)
+        vault = make_vault(td)
+        wheels = td / "wheels"
+        whl = _verbish_wheel(wheels)
+        src = make_pack(td / "carrier", "carrier", "v_carrier", "def main(a):\n    return 0\n",
+                        {"dependencies": ["zzverbish"]})
+        pk(vault, td, "plugin", "add", str(src), "--yes")
+
+        # (1) THE CURRENT LOCATION. The overlay is outside `plugins/` entirely, which is what makes
+        # the property structural rather than a rule something has to consult.
+        _unpack_wheel(whl, vault / ".plugin-deps")
+        landed = vault / ".plugin-deps" / "zzverbish"
+        check("overlay: the wheel's payload really is a verb-shaped directory in the vault",
+              (landed / "run.py").exists() and (landed / "cmd.json").exists(), str(landed))
+        check("overlay: it is NOT inside plugins/, the tree the resolver enumerates",
+              not (vault / "plugins" / ".deps").exists()
+              and not (vault / "plugins" / ".plugin-deps").exists(),
+              str(sorted(p.name for p in (vault / "plugins").iterdir())))
+        _undispatchable(vault, td, "overlay", ["carrier"])
+
+        # (2) THE LEGACY LOCATION, and it is not a curiosity: every vault that ran `plugin sync`
+        # before the overlay moved still has `plugins/.deps/` on disk with exactly this content in
+        # it. Moving the overlay does nothing for those vaults, so the resolver's dot filter is
+        # asserted on the case it exists for — in both dispatchers, via the parity catalog too.
+        _unpack_wheel(whl, vault / "plugins" / ".deps")
+        check("legacy: the payload is present at the pre-move location",
+              (vault / "plugins" / ".deps" / "zzverbish" / "run.py").exists())
+        _undispatchable(vault, td, "legacy plugins/.deps", ["carrier"])
+
+
+def case_overlay_end_to_end_with_pip() -> None:
+    """The same property reached the SANCTIONED way — `plugin add` then `plugin sync` — so the case
+    above cannot be satisfied by an overlay layout pip would never actually produce."""
+    probe = subprocess.run([PY, "-m", "pip", "--version"], capture_output=True, text=True)
+    if probe.returncode != 0:
+        skip("an installed wheel cannot be dispatched as a verb (end to end)",
+             "python3 -m pip is not available on this interpreter")
+        return
+    with tempfile.TemporaryDirectory() as t:
+        td = Path(t)
+        vault = make_vault(td)
+        wheels = td / "wheels"
+        _verbish_wheel(wheels)
+        src = make_pack(td / "carrier", "carrier", "v_carrier",
+                        STALE_BOOTSTRAP + "from lib import api\nimport zzverbish\n"
+                        "print(zzverbish.VALUE)\n", {"dependencies": ["zzverbish"]})
+        pk(vault, td, "plugin", "add", str(src), "--yes")
+        r = pk(vault, td, "plugin", "sync", "carrier", "--yes", "--no-index", f"--find-links={wheels}")
+        if r.returncode != 0:
+            skip("an installed wheel cannot be dispatched as a verb (end to end)",
+                 f"pip install failed: {(r.stderr or r.stdout)[-200:]}")
+            return
+        landed = vault / ".plugin-deps" / "zzverbish"
+        check("end to end: `plugin sync` really did install a verb-shaped package",
+              (landed / "run.py").exists() and (landed / "cmd.json").exists(), str(landed))
+        _undispatchable(vault, td, "end to end", ["carrier"])
+        # AND THE OVERLAY STILL WORKS — the fix moved the dependency overlay, it did not disable it.
+        v = pk(vault, td, "v_carrier", "--yes")
+        check("end to end: the declaring pack still imports the package it declared",
+              v.returncode == 0 and "ordinary package" in v.stdout,
+              f"rc={v.returncode} {v.stdout[:120]} {v.stderr[:300]}")
+
+
+# --------------------------------------------------------------------------------------------------
+# F. NOTHING BUT THE LOCKFILE'S DECLARATIONS REACHES PIP (fix wave r1, review BLOCKING 2)
+#
+# `sync` used to accept `--pip-arg=<anything>` and splice it into pip's argv AHEAD of the `--`
+# terminator, which made it a REQUIREMENT channel rather than a flag channel: `--pip-arg=zzpwn`
+# installed a package no pack declared onto every plugin verb's PYTHONPATH, the command reported only
+# the declared ones, and the lockfile's audit trail never mentioned it. DEP_RE — the consent gate this
+# verb exists to be — was bypassed entirely, and `bin/mcp/run.py` passes a free-form `args` array
+# through verbatim, so no human had to be present.
+# --------------------------------------------------------------------------------------------------
+_PIP_ARGV_PROBE = """
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("pk_plugin", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+from pathlib import Path
+print(json.dumps(m._pip_argv(Path("/tmp/overlay"), ["httpx>=0.27"], ["--no-index"])))
+"""
+
+
+def case_pip_argv_is_closed() -> None:
+    with tempfile.TemporaryDirectory() as t:
+        td = Path(t)
+        vault = make_vault(td)
+        # A pack that declares NOTHING, on purpose. The refusal has to happen before any pip runs —
+        # that is what "the flag cannot add a requirement" means — so the case must not need pip, an
+        # index or a network to reach the boundary. With no declarations there is nothing legitimate
+        # for pip to do, and anything that lands in the overlay came from the flag.
+        src = make_pack(td / "needy", "needy", "v_needy", "def main(a):\n    return 0\n")
+        pk(vault, td, "plugin", "add", str(src), "--yes")
+
+        # (1) EVERY WAY THE OLD CHANNEL WAS REACHED, refused with exit 2 — and refused rather than
+        # ignored, because a silently dropped flag teaches a caller nothing about the boundary.
+        refusals = [
+            ("--pip-arg=zzundeclared", "the exact reproduction: a bare word is a pip REQUIREMENT"),
+            ("--pip-arg=--no-index", "the flag is gone even for values that used to be benign"),
+            ("--pip-arg=--index-url=https://evil/simple", "index steering"),
+            ("--index-url=https://evil/simple", "index steering, spelled directly"),
+            ("--extra-index-url=https://evil/simple", "a second index is still an index"),
+            ("-i", "pip's short index flag"),
+            ("-r", "a requirements FILE is a requirement channel"),
+            ("-e", "an editable install is a path channel"),
+            ("--pre", "pre-release selection is still steering"),
+        ]
+        for flag, why in refusals:
+            r = pk(vault, td, "plugin", "sync", "needy", "--yes", flag)
+            check(f"sync REFUSES {flag!r} ({why})",
+                  r.returncode == 2 and "unknown option" in r.stderr,
+                  f"rc={r.returncode} {r.stderr[:200]}")
+            check(f"...and nothing was installed for {flag!r}",
+                  not (vault / ".plugin-deps").exists() or
+                  not any((vault / ".plugin-deps").iterdir()),
+                  str(vault / ".plugin-deps"))
+
+        # (2) THE TWO SURVIVING OPTIONS CANNOT STEER EITHER. `--find-links` accepts a URL from pip,
+        # and a URL there is an index by another name.
+        r = pk(vault, td, "plugin", "sync", "needy", "--yes", "--find-links=https://evil/wheels")
+        check("sync REFUSES a --find-links URL (an index by another name)",
+              r.returncode == 2 and "local directory" in r.stderr, f"rc={r.returncode} {r.stderr[:200]}")
+        r = pk(vault, td, "plugin", "sync", "needy", "--yes", f"--find-links={td / 'nope'}")
+        check("sync REFUSES a --find-links directory that does not exist (exit 4)",
+              r.returncode == 4, f"rc={r.returncode} {r.stderr[:200]}")
+
+        # (3) THE ARGV ITSELF, pinned. `_pip_argv` is factored for exactly this: the requirements sit
+        # AFTER `--`, and the option fragment is the only thing that precedes them.
+        # cwd=<vault>, for the same reason the PROBE child at the top of this file uses it: `python -c`
+        # puts the CURRENT DIRECTORY on sys.path, so running the suite from `test/` would offer the
+        # repository's own `test/lib` as an answer for the `from lib import …` this module performs.
+        # The vault has no `lib` of any kind, so the ambient cwd cannot decide what gets imported.
+        pr = subprocess.run([PY, "-c", _PIP_ARGV_PROBE, str(REPO / "bin" / "plugin" / "run.py")],
+                            capture_output=True, text=True, env=env_for(vault, td), cwd=str(vault))
+        try:
+            argv = json.loads(pr.stdout.strip().splitlines()[-1])
+        except Exception:
+            argv = []
+        check("_pip_argv puts every requirement AFTER pip's `--` terminator",
+              "--" in argv and argv.index("--") == len(argv) - 2 and argv[-1] == "httpx>=0.27",
+              f"{argv} {pr.stderr[-200:]}")
+        check("_pip_argv installs with --target into the overlay and nothing else",
+              "--target" in argv and "/tmp/overlay" in argv and "--no-input" in argv, str(argv))
+
+
+def case_sync_audit_trail() -> None:
+    """What the lockfile records must be what LANDED. The old record named only the declarations, so
+    a package installed through `--pip-arg` left no trace at all."""
+    probe = subprocess.run([PY, "-m", "pip", "--version"], capture_output=True, text=True)
+    if probe.returncode != 0:
+        skip("plugin sync audit trail", "python3 -m pip is not available on this interpreter")
+        return
+    with tempfile.TemporaryDirectory() as t:
+        td = Path(t)
+        vault = make_vault(td)
+        wheels = td / "wheels"
+        _wheel(wheels)
+        src = make_pack(td / "needy", "needy", "v_needy", DEPENDENT, {"dependencies": ["zzdemo>=1.0"]})
+        pk(vault, td, "plugin", "add", str(src), "--yes")
+        r = pk(vault, td, "plugin", "sync", "needy", "--yes", "--no-index", f"--find-links={wheels}")
+        check("audit trail: sync succeeded", r.returncode == 0, f"rc={r.returncode} {r.stderr[:300]}")
+        ov = _lock(vault).get("overlay", {})
+        check("audit trail: records the requirements handed to pip",
+              ov.get("requirements") == ["zzdemo>=1.0"], str(ov))
+        check("audit trail: records every option that reached pip",
+              ov.get("pip_options") == ["--no-index", f"--find-links={wheels}"], str(ov))
+        # WHAT LANDED, read off the overlay's own dist-info rather than assumed from the request. An
+        # ABSENT overlay is a failing check, never an exception: a suite that dies reports nothing,
+        # and this check's whole job is to be legible when it goes red.
+        try:
+            on_disk = sorted(d.name[: -len(".dist-info")] for d in (vault / ".plugin-deps").iterdir()
+                             if d.name.endswith(".dist-info"))
+        except Exception as e:
+            on_disk = [f"<no overlay: {e}>"]
+        recorded = sorted(f"{c['name']}-{c['version']}" for c in ov.get("contents") or [])
+        check("audit trail: `contents` equals the distributions actually in the overlay",
+              recorded == on_disk and recorded == ["zzdemo-1.0.0"], f"{recorded} vs {on_disk}")
+
+
+# --------------------------------------------------------------------------------------------------
+# G. THE PACK MARKER IS REPLACED, NOT ADDED (fix wave r1, review IMPORTANT)
+#
+# `case_engine_verb_untouched` above asserts the engine-verb negative from a FRESH dispatch, where
+# PLAINKEEP_PLUGIN_PACK was never in the environment to begin with. Neither dispatcher REMOVED it
+# when it was: a plugin verb that re-enters the dispatcher (the documented pattern) passes the marker
+# down, `pluginenv.attach()` is gated on nothing else, and every descendant that imports `lib.api`
+# then reports its own ModuleNotFoundError as some innocent pack's fault. Exporting the variable in a
+# shell armed the same hook for everything after it.
+# --------------------------------------------------------------------------------------------------
+def case_engine_verb_clears_inherited_pack() -> None:
+    with tempfile.TemporaryDirectory() as t:
+        td = Path(t)
+        source = td / "src"
+        shutil.copytree(REPO, source, symlinks=True,
+                        ignore=shutil.ignore_patterns("__pycache__", ".git", "node_modules", ".venv",
+                                                      ".index", ".logs", "site", "docs"))
+        probe = source / "bin" / "v_engprobe"
+        probe.mkdir()
+        (probe / "cmd.json").write_text(json.dumps(
+            {"verb": "v_engprobe", "summary": "probe", "usage": "plainkeep v_engprobe", "risk": "read"}),
+            encoding="utf-8")
+        (probe / "run.py").write_text(ENGINE_PROBE, encoding="utf-8")
+        root = td / "engines"
+        inst = subprocess.run([PY, str(ENGINETREE), "--install", str(source)], capture_output=True,
+                              text=True, env={**os.environ, "PLAINKEEP_ENGINE_HOME": str(root)})
+        if inst.returncode != 0:
+            skip("engine verb clears an inherited pack marker", f"install failed: {inst.stderr[-300:]}")
+            return
+        launcher = root / "engine" / "current" / "plainkeep"
+        vault = make_vault(td)
+        r = pk(vault, td, "v_engprobe", "--yes", launcher=launcher,
+               PLAINKEEP_PLUGIN_PACK="spoofed")
+        try:
+            d = json.loads(r.stdout.strip().splitlines()[-1])
+        except Exception:
+            d = {}
+        check("an INHERITED PLAINKEEP_PLUGIN_PACK is REMOVED for an engine verb",
+              d.get("pack") is None,
+              f"rc={r.returncode} {r.stdout[:200]} {r.stderr[:200]}")
+
+        # The consequence, which is what actually bites: with the marker present, `pluginenv.attach()`
+        # arms the missing-dependency excepthook and an unrelated import failure is reported as the
+        # named pack's fault. Asserted on the message, not on the variable.
+        blamer = source / "bin" / "v_blame"
+        blamer.mkdir()
+        (blamer / "cmd.json").write_text(json.dumps(
+            {"verb": "v_blame", "summary": "probe", "usage": "plainkeep v_blame", "risk": "read"}),
+            encoding="utf-8")
+        (blamer / "run.py").write_text(
+            "import sys\nfrom pathlib import Path\n"
+            "sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n"
+            "from lib import api  # noqa: F401\n"
+            "import zznotathing\n", encoding="utf-8")
+        root2 = td / "engines2"
+        inst2 = subprocess.run([PY, str(ENGINETREE), "--install", str(source)], capture_output=True,
+                               text=True, env={**os.environ, "PLAINKEEP_ENGINE_HOME": str(root2)})
+        if inst2.returncode != 0:
+            skip("engine verb is not blamed on a spoofed pack", f"install failed: {inst2.stderr[-300:]}")
+            return
+        b = pk(vault, td, "v_blame", "--yes", launcher=root2 / "engine" / "current" / "plainkeep",
+               PLAINKEEP_PLUGIN_PACK="spoofed")
+        check("...so an engine verb's own import failure is never blamed on a pack",
+              "spoofed" not in b.stderr, f"rc={b.returncode} {b.stderr[:300]}")
+
+
+# --------------------------------------------------------------------------------------------------
+# H. Doc and template agree on what a plugin imports
 # --------------------------------------------------------------------------------------------------
 def case_doc_template_agreement() -> None:
     tpl = (REPO / "templates" / "verb" / "run.py").read_text(encoding="utf-8")
@@ -608,6 +947,11 @@ def main() -> int:
     case_sync_refuses_shadowing_overlay()
     case_dependency_grammar()
     case_new_dependency_revokes_trust()
+    case_overlay_is_not_a_pack()
+    case_overlay_end_to_end_with_pip()
+    case_pip_argv_is_closed()
+    case_sync_audit_trail()
+    case_engine_verb_clears_inherited_pack()
     case_doc_template_agreement()
 
     print(f"{BOLD}SDK compatibility + the plugin dependency contract (Phase 2 Task 3) — "

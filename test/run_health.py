@@ -38,8 +38,13 @@ def main() -> int:
         h = Path(td)
         shutil.copy(REPO / "AGENTS.md", h / "AGENTS.md")
         shutil.copy(REPO / "CLAUDE.md", h / "CLAUDE.md")
+        # The DIRECTORY only, deliberately: since Phase 2 Task 2 doctor reads SKILL.md from
+        # `paths.SKILLS` (the ENGINE tree), so a copy in the fixture vault is inert — the
+        # `adapter: skills/operate-plainkeep/SKILL.md present` row passes on the engine's copy either
+        # way, and a vault-local copy would make this fixture look like it proves something it does
+        # not. What the vault still needs is the directory, because the `.codex/skills` and
+        # `.claude/skills` symlinks below resolve `<vault>/skills/operate-plainkeep`.
         (h / "skills" / "operate-plainkeep").mkdir(parents=True)
-        shutil.copy(REPO / "skills" / "operate-plainkeep" / "SKILL.md", h / "skills" / "operate-plainkeep" / "SKILL.md")
         # per-agent adapters (relative skill symlinks, like the real repo)
         (h / ".codex").mkdir(); (h / ".claude").mkdir()
         (h / ".codex" / "config.toml").write_text('sandbox_mode="workspace-write"\n')

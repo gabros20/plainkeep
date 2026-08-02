@@ -102,7 +102,7 @@ OWNED_FILES = (
 NON_VERB_BIN_DIRS = ("lib",)
 
 # The dispatch-critical files, probed on EVERY invocation by `require_intact()`. Deliberately the
-# cheap half of `verify()`: five stats, not the ~150 the full manifest walk costs. The full walk runs
+# cheap half of `verify()`: four stats, not the ~150 the full manifest walk costs. The full walk runs
 # at INSTALL time (where a broken tree must never be left behind) and in `plainkeep doctor`.
 DISPATCH_PROBE = (
     "bin/lib/vaultroot.py",             # the floor and the core both spawn this first

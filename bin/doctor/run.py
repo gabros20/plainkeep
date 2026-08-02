@@ -149,8 +149,15 @@ def main(argv):
             fail(f"engine: {p}")
     else:
         ok(f"engine: complete tree at {paths.ENGINE}")
-    if str(paths.ENGINE) == str(Path(paths.PLAINKEEP_HOME).resolve()):
-        fail("engine: the engine tree IS the vault — data and code must be separate trees")
+    # This row reports the rule that is ENFORCED, by calling the same function the enforcement calls.
+    # It used to compare equality only, which is a weaker spelling: `disjointness_verdict` (ADR-017
+    # D5) covers THREE shapes — identical, data inside engine, engine inside data — and the two
+    # containment shapes would have printed "disjoint" here. A containing pair is refused at exit 5
+    # in `vaultroot.validate()` before doctor can run, so the row is advisory today; an advisory row
+    # that disagrees with the enforced rule is exactly how the two drift apart.
+    overlap = enginetree.disjointness_verdict(str(paths.PLAINKEEP_HOME), paths.ENGINE)
+    if overlap:
+        fail(f"engine: the vault and the engine tree are not disjoint — {overlap}")
     else:
         ok("engine: disjoint from the vault (data is data, code is code)")
 

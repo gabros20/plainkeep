@@ -69,8 +69,21 @@ function vaultDir(prefix: string): string {
 
 // The engine `vaultDir()` (or a test's own `makeEngine`) activated. Verbs written here are what both
 // resolvers see; a `bin/` inside the vault is inert data.
+//
+// It THROWS rather than defaulting to "". The `?? ""` this replaces made `path.join(engineDir(),
+// "bin", "v")` resolve to a path RELATIVE TO CWD whenever no engine was activated, so a caller that
+// forgot `makeEngine()` silently wrote a scratch verb into `cli/bin/v/` in the repository — which is
+// exactly what happened (that residue was committed in e6ac365 and is removed in the r1 fix wave).
+// A missing engine is a test-setup bug; the loud failure is the point.
 function engineDir(): string {
-  return process.env.PLAINKEEP_ENGINE ?? "";
+  const engine = process.env.PLAINKEEP_ENGINE;
+  if (!engine) {
+    throw new Error(
+      "engineDir(): no PLAINKEEP_ENGINE activated — call vaultDir()/makeEngine() first. " +
+        "Falling back to a relative path would write a scratch verb into the repository.",
+    );
+  }
+  return engine;
 }
 
 test("verbFromArgv: no argv is the default verb `help` with no args", () => {

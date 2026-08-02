@@ -231,13 +231,51 @@ EXEMPT: dict[str, dict[str, str]] = {
         'staging.mkdir()':
             "the `.incoming-<version>` staging directory — an engine is verified there and only "
             "then renamed into its version name, so a half-copied tree is never reachable",
+        # Phase 2 Task 5. The first two write BESIDE the version trees (the pair manifests and the
+        # activation state, deliberately outside the sealed tree they describe); the last three
+        # write into a `tempfile.mkdtemp()` the self-test throws away. Neither destination is
+        # caller-shaped: one is derived from `versions_dir()` alone, the other from mkdtemp.
+        'p.parent.mkdir(parents=True, exist_ok=True)':
+            "`<install-root>/engine/.pairs/` — the pair manifests and activation state, which must "
+            "live outside the tree they cover",
+        '(vault / vaultreg.MARKER_DIR).mkdir(parents=True)':
+            "the throwaway marked vault the pair self-test dispatches against, under mkdtemp — the "
+            "self-test must never be pointed at the operator's real notes",
+        'vaultreg.marker_path(vault).write_text(':
+            "its marker, same mkdtemp directory, removed in the `finally`",
+        'cfg.mkdir()':
+            "the throwaway PLAINKEEP_CONFIG_HOME for the same self-test, so it neither reads nor "
+            "writes the real registry",
+        'self.path.parent.mkdir(parents=True, exist_ok=True)':
+            "the versions directory, so the update lock has somewhere to live",
     },
     "bin/vault/run.py": {
         'vaultreg.marker_path(target).write_text(vaultreg.marker_bytes(marker), encoding="utf-8")':
             "the vault MARKER — the one write that establishes where the wall goes. The target is "
             "by definition not yet the active data root, so classifying it against the active root "
             "would refuse every registration but the current vault's. One file, --yes only",
-        'd.mkdir(parents=True, exist_ok=True)': "the marker's .plainkeep/ directory, same reason",
+        # LOOSE, in the sense the enginetree block above flags: `d.mkdir(...)` is not distinctive
+        # text. It covers two sites today — `register`'s marker directory and `init`'s skeleton
+        # directories — and both are the same class.
+        'd.mkdir(parents=True, exist_ok=True)':
+            "the marker's .plainkeep/ directory (register) and one REQUIRED_DIRS skeleton directory "
+            "inside the vault being created (init), same reason",
+        # `vault init` (Phase 2 Task 5). Same class as the marker write above and for the identical
+        # reason: the wall classifies against the ACTIVE data root, and the vault being CREATED is
+        # by definition not it — every one of these lines would be denied for the only directory
+        # they are ever aimed at. The destination is not caller-shaped either: it is one canonical
+        # path validated by `_init_refusals` (disjoint from the engine, outside a walled/sync tree,
+        # not already a vault, not a checkout) before a single byte is written, and the relative
+        # paths under it come from `REQUIRED_DIRS` + four literals in this file — never from argv.
+        # --yes only.
+        'raw.mkdir(parents=True)':
+            "the new vault's own directory, created before the location checks so `path_within` has "
+            "inodes to compare (see the comment at the call site)",
+        'f.write_text(text, encoding="utf-8")':
+            ".gitignore / jobs/registry.json / AGENTS.md / CLAUDE.md — the four generated "
+            "configuration files, written only when absent",
+        'vaultreg.marker_path(target).parent.mkdir(parents=True, exist_ok=True)':
+            "the new vault's .plainkeep/ directory",
     },
     "bin/repo/run.py": {
         'dest.parent.mkdir(parents=True, exist_ok=True)': "~/work fleet clone + adopt destination",
@@ -324,7 +362,24 @@ PINNED_DELETES: dict[str, set[str]] = {
                               # replacing the `current` symlink, atomically: a uniquely named link
                               # is created beside it and renamed over the old one
                               "tmp.unlink()",
-                              "os.replace(tmp, link)"},
+                              "os.replace(tmp, link)",
+                              # Phase 2 Task 5. `os.replace(tmp, p)` is the atomic write of a pair
+                              # manifest / the activation state under `<install-root>/engine/.pairs/`
+                              # — same destination class as everything above, derived from
+                              # `versions_dir()` and never from an argument. The rmtree is the
+                              # self-test's own `tempfile.mkdtemp()` sandbox. The two `unlink`s
+                              # remove a pair manifest for a version that has just been removed or
+                              # refused, so the manifest never outlives the tree it describes.
+                              "os.replace(tmp, p)",
+                              "shutil.rmtree(td, ignore_errors=True)",
+                              "pair_manifest_path(version).unlink(missing_ok=True)",
+                              "pair_manifest_path(v).unlink(missing_ok=True)"},
+    # Phase 2 Task 5. The ONE removal `vault init` can reach, and it is bounded twice over: it runs
+    # only when this same call created the directory moments earlier, and `rmdir` refuses a
+    # non-empty one — so a path that acquired any content between the two lines survives. It cannot
+    # resolve under `~/files/**/in/` for the same reason the rest of init cannot: the target is
+    # validated disjoint and unmarked before anything is written.
+    "bin/vault/run.py": {"target.rmdir()"},
     # `new verb` scaffolds through a `.pk-scaffolding-<verb>.<pid>` staging leaf and renames it into
     # place, so that a scaffold which fails halfway (it did — the engine seal made every copied file
     # read-only, and `_fill` could not substitute) leaves nothing behind instead of an unwritable verb

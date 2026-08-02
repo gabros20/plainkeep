@@ -17,7 +17,7 @@ seal()   # hermetic: an empty throwaway registry, never the developer's real vau
 # Since ADR-014 Task 1b the enforcement guardrail's wall is anchored to the SELECTED root and to
 # nothing else, and it refuses outright when no root is selected — so this harness has to select one
 # BEFORE loading it. Pinned to the CONVENTIONAL location, which is what every validated case spells
-# (`~/plainkeep/...`), so all 51 keep their recorded verdict for the recorded reason. Unconditional
+# (`~/plainkeep/...`), so all 59 keep their recorded verdict for the recorded reason. Unconditional
 # rather than setdefault: an inherited value would silently repoint the wall and turn the recorded
 # verdicts into a different question. The expression mirrors bin/lib/wall.py's HOME rule exactly.
 os.environ["PLAINKEEP_HOME"] = (os.environ.get("PLAINKEEP_TEST_HOME")

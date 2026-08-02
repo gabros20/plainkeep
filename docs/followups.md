@@ -9,7 +9,7 @@ later. Entries closed by later fix waves have been removed rather than left with
 stating plainly rather than burying. The second is under
 [The location wall](#the-location-wall-binlibwallpy): a vault whose path merely *contains* a sync
 marker is selectable but not writable, so it is reachable, user-visible and self-contradictory —
-disclosed rather than fixed, because fixing it means re-recording 51 validated guardrail verdicts.
+disclosed rather than fixed, because fixing it means re-recording 59 validated guardrail verdicts.
 The first is a real divergence from the bash floor and not a theoretical one:
 
 > **`resolver.ts:60` sorts directory names in UTF-16 code-unit order where Python's `sorted()` uses
@@ -176,7 +176,7 @@ fixing it needs.
   and a path PREFIX for the `$HOME`-anchored ones, and vault SELECTION uses those. So a vault at a
   path merely *containing* a marker — `~/notes/my.sync-notes`, `~/notes/not-iCloudy` — is now
   selectable but every write into it is still denied with exit 5 and a reason that is false of that
-  path. *Deferred because converging them means re-recording 51 validated guardrail cases, which is
+  path. *Deferred because converging them means re-recording 59 validated guardrail cases, which is
   its own task with its own oracle work; the split is disclosed in `wall.py`'s header, in
   `_policy_verdict`, and in a SUITE-NOTE `test/run_discovery.py` prints on every run.* The honest fix
   is probably neither matcher: ask whether the path is on a synced VOLUME rather than inferring it

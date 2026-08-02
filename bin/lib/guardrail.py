@@ -75,7 +75,7 @@ def _with_real(*roots: str) -> list[str]:
 # realpath, and NOTHING ELSE (ADR-014 D5).
 #
 # ADR-015 shipped this list carrying the conventional `$HOME/plainkeep` AND the active root. That was
-# the right interim — it kept the 51 validated cases resolving unchanged while the write seam went in
+# the right interim — it kept the validated cases resolving unchanged while the write seam went in
 # — but two roots in the wall means selecting vault A still AUTHORIZES writes into vault B, which is
 # precisely the accident the two-vault identity test hunts for (test/run_discovery.py). One
 # invocation, one authorized vault.
@@ -154,7 +154,22 @@ def _write_verdict(path, action):
     if _walled(path):
         return Decision(DENY, "iCloud/family path is walled off — propose, never write", "deny")
     if _in_originals(path):
-        return Decision(DENY, "~/files/**/in/ originals are read-only evidence", "deny")
+        # APPEND-ONLY, not read-only. `~/files/**/in/` holds evidence, and evidence has to ARRIVE:
+        # `files ingest --client` exists to put an original there. A rule that denies every write
+        # under in/ does not protect originals — it puts the verb that creates them outside the wall
+        # entirely, which is where the only real overwrite lived (measured at BASE 5436ec6: 217 of
+        # 320 originals silently destroyed by ingest's exists()-then-move loop under 16-way
+        # concurrency). So: an atomic CREATE is allowed, everything else is denied.
+        #
+        # `create_only` is a claim about a syscall that fails EEXIST — never a prior exists() test,
+        # which is why this branch does not stat the path. The wall has no TOCTOU window because it
+        # consults no mutable state; `lib/vaultio.py` owns the guarantee and only its primitives may
+        # assert the flag.
+        if action.get("create_only"):
+            return Decision(ALLOW, "~/files/**/in/ is append-only: an original ARRIVES by atomic creation",
+                            "safe_write")
+        return Decision(DENY, "~/files/**/in/ originals are append-only evidence — an existing one is "
+                              "never overwritten, and only an atomic create may add one", "deny")
     if _under_any(path, VAULT_ROOTS):
         return Decision(ALLOW, "write inside the selected vault is a revertible git diff", "safe_write")
     if _under_any(path, FILES_ROOTS):
@@ -205,6 +220,9 @@ def classify(action: dict) -> Decision:
             return Decision(DENY, "forced external transmit is denied", "deny")
         return Decision(ALLOW if yes else CONFIRM, "external transmit" + (" via --yes" if yes else " needs --yes"), "confirm")
     if kind == "delete":
+        for p in (path, realpath):   # append-only cuts both ways: an original is never removed either
+            if p and _in_originals(p):
+                return Decision(DENY, "~/files/**/in/ is append-only: an original is never deleted", "deny")
         return Decision(DENY if force else CONFIRM, "delete is irreversible" + (" (forced=deny)" if force else " — needs --yes"), "confirm")
     if kind == "draft":
         return Decision(ALLOW, "draft produced; a human transmits", "draft_only")

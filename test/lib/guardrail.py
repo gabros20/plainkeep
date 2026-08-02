@@ -13,6 +13,9 @@ Reliability hardening (v3.7, found by the test/ adversarial suite):
   - a write is checked against its resolved `realpath` too (symlink-escape defense),
   - external transmit is confirm-class for ANY tool (deploy/publish/upload/exfil), not just git.
 
+Phase 2 Task 1c moved one rule rather than hardening it: `~/files/**/in/` is APPEND-ONLY, not
+read-only. See `_write_verdict`.
+
 Decision classes (§5): read | safe_write | draft_only | confirm | deny.
 No third-party deps. Python 3.10+.
 """
@@ -31,7 +34,7 @@ HOME = os.environ.get("PLAINKEEP_TEST_HOME", "/Users/tamas")
 # There is deliberately no fallback in the engine (`bin/lib/guardrail.py` refuses when
 # PLAINKEEP_HOME is unset). The default kept here is the CONVENTIONAL location and exists only so
 # `python3 test/lib/guardrail.py` still demos: both harnesses that fire the validated cases at this
-# model set PLAINKEEP_HOME explicitly, to exactly this value, so all 51 keep their recorded verdict
+# model set PLAINKEEP_HOME explicitly, to exactly this value, so all 59 keep their recorded verdict
 # for the recorded reason.
 PLAINKEEP = os.environ.get("PLAINKEEP_HOME") or f"{HOME}/plainkeep"
 WORK = f"{HOME}/work"
@@ -119,7 +122,21 @@ def _write_verdict(path: str, action: dict) -> Decision:
     if _is_walled_off(path):
         return Decision(DENY, "iCloud/family path is walled off — propose, never write", "deny")
     if _in_originals(path):
-        return Decision(DENY, "~/files/**/in/ originals are read-only evidence", "deny")
+        # APPEND-ONLY, not read-only (Phase 2 Task 1c). Evidence has to ARRIVE — `files ingest
+        # --client` exists to put an original under in/ — so a rule that denied every write there
+        # did not protect originals, it exempted the verb that creates them from the wall. An atomic
+        # CREATE is allowed; overwrite, replace, mutate and delete never are.
+        #
+        # The model does NOT stat the path, and that is the point rather than an omission: "deny an
+        # existing path, allow a new one" is a TOCTOU window, since another arrival can take the name
+        # between the question and the write. `create_only` is a claim about a syscall that fails
+        # EEXIST (`link(2)`, `O_CREAT|O_EXCL`, `mkdir(2)`); the guarantee lives in bin/lib/vaultio.py,
+        # which is the only thing allowed to assert it.
+        if action.get("create_only"):
+            return Decision(ALLOW, "~/files/**/in/ is append-only: an original ARRIVES by atomic creation",
+                            "safe_write")
+        return Decision(DENY, "~/files/**/in/ originals are append-only evidence — an existing one is "
+                              "never overwritten, and only an atomic create may add one", "deny")
     if _under(path, PLAINKEEP):
         return Decision(ALLOW, "write inside the selected vault is a revertible git diff", "safe_write")
     if _under(path, FILES):
@@ -142,6 +159,9 @@ def classify(action: dict) -> Decision:
     action keys (all optional except kind):
       kind: read | write | transmit | delete | read_secret | resolve_secret | draft | propose | ask | verb
       path, realpath, command, flags{yes,force}, repo, task_repo
+      create_only: the write is an ATOMIC CREATE — a syscall that fails EEXIST rather than replacing
+        (`link(2)`, `O_CREAT|O_EXCL`, `mkdir(2)`). Only `bin/lib/vaultio.py`'s primitives may say it;
+        it is what distinguishes an original ARRIVING under ~/files/**/in/ from one being overwritten.
     """
     kind = action.get("kind", "verb")
     flags = action.get("flags", {}) or {}
@@ -188,6 +208,9 @@ def classify(action: dict) -> Decision:
 
     # --- 4. delete ---
     if kind == "delete":
+        for p in (path, realpath):   # append-only cuts both ways: an original is never removed either
+            if p and _in_originals(p):
+                return Decision(DENY, "~/files/**/in/ is append-only: an original is never deleted", "deny")
         if force:
             return Decision(DENY, "forced delete is denied", "deny")
         return Decision(CONFIRM, "delete is irreversible — needs explicit --yes", "confirm")

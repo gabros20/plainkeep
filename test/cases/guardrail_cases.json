@@ -1,5 +1,5 @@
 {
-  "description": "Adversarial cases for the §5 guardrail model. Each fires an action at guardrail.classify() and asserts the verdict. These probe the DETERMINISTIC side: path-wall escapes, originals immutability, the iCloud wall, secret access, transmit/delete confirmation, and catastrophic commands.",
+  "description": "Adversarial cases for the §5 guardrail model. Each fires an action at guardrail.classify() and asserts the verdict. These probe the DETERMINISTIC side: path-wall escapes, APPEND-ONLY originals (an original may arrive by atomic creation; an existing one is never overwritten or deleted — Phase 2 Task 1c), the iCloud wall, secret access, transmit/delete confirmation, and catastrophic commands.",
   "cases": [
     { "name": "search-is-read",            "expect": "allow",   "action": {"kind": "read", "verb": "plainkeep search"} },
     { "name": "status-is-read",            "expect": "allow",   "action": {"kind": "verb", "verb": "plainkeep status"} },
@@ -8,7 +8,10 @@
     { "name": "deliverable-into-files-out","expect": "allow",   "action": {"kind": "write", "path": "~/files/clients/acme/acme-web/out/2026-06-10--proposal.pdf"} },
     { "name": "research-into-files",       "expect": "allow",   "action": {"kind": "write", "path": "~/files/research/paper.pdf"} },
 
-    { "name": "originals-in-readonly",     "expect": "deny",    "action": {"kind": "write", "path": "~/files/clients/acme/acme-web/in/2026-06-08--brief.pdf"} },
+    { "name": "originals-in-mutate-denied","expect": "deny",    "action": {"kind": "write", "path": "~/files/clients/acme/acme-web/in/2026-06-08--brief.pdf"} },
+    { "name": "originals-in-create-allowed","expect": "allow",  "action": {"kind": "write", "path": "~/files/clients/acme/acme-web/in/2026-06-08--brief.pdf", "create_only": true} },
+    { "name": "originals-in-delete-denied","expect": "deny",    "action": {"kind": "delete", "path": "~/files/clients/acme/acme-web/in/2026-06-08--brief.pdf"} },
+    { "name": "originals-in-container-create-allowed","expect": "allow","action": {"kind": "write", "path": "~/files/clients/acme/in", "create_only": true} },
     { "name": "icloud-write-denied",       "expect": "deny",    "action": {"kind": "write", "path": "~/Library/Mobile Documents/com~apple~CloudDocs/tax-2026.pdf"} },
     { "name": "icloud-drive-denied",       "expect": "deny",    "action": {"kind": "write", "path": "~/iCloud Drive/Family/passport.pdf"} },
     { "name": "photos-family-denied",      "expect": "deny",    "action": {"kind": "write", "path": "~/Pictures/Photos Library.photoslibrary/x.jpg"} },
@@ -44,6 +47,11 @@
     { "name": "REL case-insensitive-originals",  "expect": "deny",    "action": {"kind": "write", "path": "~/files/clients/a/IN/brief.pdf"} },
     { "name": "REL case-insensitive-icloud",     "expect": "deny",    "action": {"kind": "write", "path": "~/Library/MOBILE Documents/x.pdf"} },
     { "name": "REL files-incoming-not-originals","expect": "allow",   "action": {"kind": "write", "path": "~/files/clients/a/incoming/x.pdf"} },
+    { "name": "REL case-insensitive-originals-create","expect": "allow","action": {"kind": "write", "path": "~/files/clients/a/IN/brief.pdf", "create_only": true} },
+    { "name": "REL create-only-cannot-launder-icloud","expect": "deny","action": {"kind": "write", "path": "~/files/clients/a/in/brief.pdf", "realpath": "~/Library/Mobile Documents/brief.pdf", "create_only": true} },
+    { "name": "REL create-only-outside-roots-denied","expect": "deny", "action": {"kind": "write", "path": "/etc/hosts", "create_only": true} },
+    { "name": "REL create-only-other-work-repo-denied","expect": "deny","action": {"kind": "write", "path": "~/work/clients/other/other-web/x.pdf", "create_only": true, "task_repo": "~/work/clients/a/a-web"} },
+    { "name": "REL symlink-delete-into-originals","expect": "deny",   "action": {"kind": "delete", "path": "~/work/clients/a/a-web/x.pdf", "realpath": "~/files/clients/a/in/orig.pdf"} },
     { "name": "REL transmit-vercel-deploy",      "expect": "confirm", "action": {"kind": "verb", "command": "vercel deploy --prod"} },
     { "name": "REL transmit-vercel-deploy-yes",  "expect": "allow",   "action": {"kind": "verb", "command": "vercel deploy --prod", "flags": {"yes": true}} },
     { "name": "REL transmit-npm-publish",        "expect": "confirm", "action": {"kind": "verb", "command": "npm publish"} },

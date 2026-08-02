@@ -18,7 +18,7 @@ under their own names; `is_walled` it imports as `wall_is_walled` and wraps, so 
 does NOT exist. Its callers and the validated spec model (`test/lib/guardrail.py`) are unchanged.
 
 **Two matchers over one marker list, and the split is deliberate.** `is_walled` / `under_sync_dir`
-match a marker as a bare SUBSTRING anywhere in the path — the semantics the guardrail's 51 validated
+match a marker as a bare SUBSTRING anywhere in the path — the semantics the guardrail's 59 validated
 write cases were recorded against. `vault_is_walled` / `vault_under_sync_dir` match a path COMPONENT
 for the un-anchored markers and a proper path PREFIX for the `$HOME`-anchored ones, and vault
 SELECTION uses those. The reason is asymmetry of cost, not taste: under substring matching
@@ -54,7 +54,7 @@ from pathlib import Path
 
 # The SIBLING-ROOTS anchor (~/work, ~/files, ~/dotfiles) — ADR-015 D4 converged two variables that
 # were relocating the same conceptual thing. PLAINKEEP_TEST_HOME first, so the validated spec model
-# (test/lib/guardrail.py) and its 51 parity cases keep resolving exactly as before.
+# (test/lib/guardrail.py) and its 59 parity cases keep resolving exactly as before.
 HOME = (os.environ.get("PLAINKEEP_TEST_HOME")
         or os.environ.get("PLAINKEEP_ROOTS_HOME")
         or os.environ.get("HOME")
@@ -106,7 +106,7 @@ def _anchored(markers: list[str]) -> list[str]:
     "no". A symlinked or network-mounted `$HOME` is the live case: with `$HOME=/var/…` whose realpath
     is `/private/var/…`, every anchored marker missed and `~/iCloud Drive` and `~/Pictures` became
     selectable. The substring matchers above are deliberately NOT canonicalized — they compare
-    against a raw path, not a canonical one, and their 51 recorded verdicts were taken that way."""
+    against a raw path, not a canonical one, and their 59 recorded verdicts were taken that way."""
     return [os.path.realpath(m) for m in markers if m.startswith(HOME)]
 
 

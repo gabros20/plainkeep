@@ -634,7 +634,7 @@ def case_policy_denied_location() -> None:
         # Asserted at the layer the finding names — SELECTION, i.e. `vaultroot.py --select` — for
         # every shape, and then end-to-end for the ones the guardrail's separate WRITE wall does not
         # also reject. That split is not a dodge, it is the residue: guardrail's `_walled` keeps the
-        # substring semantics (its 51 recorded verdicts were taken against them, and changing them
+        # substring semantics (its 59 recorded verdicts were taken against them, and changing them
         # is not this fix), so a path containing "icloud" is now selectable but still not writable.
         # Recorded as a SUITE-NOTE rather than quietly asserted away.
         for name in ("my.sync-notes", "Pictures-notes", "not-iCloudy"):
@@ -1168,7 +1168,7 @@ def main() -> int:
               f"paths were NOT exercised, so this run gates the bash floor only. Build it with "
               f"(cd cli && bun run build).")
     print("SUITE-NOTE: section G fixes the LOCATION policy for vault SELECTION only. guardrail.py's "
-          "write wall still matches its markers as bare substrings — the semantics its 51 recorded "
+          "write wall still matches its markers as bare substrings — the semantics its 59 recorded "
           "verdicts were taken against — so a vault at a path merely CONTAINING 'icloud' can be "
           "selectable while every write into it is denied with an untrue reason. Converging the two "
           "matchers means re-recording those cases and is not this fix; it is registered in "

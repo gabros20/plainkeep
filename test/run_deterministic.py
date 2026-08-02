@@ -25,7 +25,7 @@ seal()   # hermetic: an empty throwaway registry, never the developer's real vau
 # this line was unnecessary because the model hard-coded that same path; the constant became
 # configuration, and this is where the configuration is stated.
 # Unconditional, not setdefault: the cases below are fixed and so are their expected verdicts, so an
-# inherited PLAINKEEP_HOME must not silently repoint the wall and turn 51 recorded verdicts into a
+# inherited PLAINKEEP_HOME must not silently repoint the wall and turn 59 recorded verdicts into a
 # different question. The expression mirrors lib/guardrail.py's own HOME rule exactly.
 os.environ["PLAINKEEP_HOME"] = (os.environ.get("PLAINKEEP_TEST_HOME") or "/Users/tamas") + "/plainkeep"
 

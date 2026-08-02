@@ -355,9 +355,34 @@ fixing it needs.
   beside it and every spawned verb re-compiles `bin/lib`: **+17.6 ms / +12.2%**, measured (ADR-017
   Consequences). `PYTHONPYCACHEPREFIX` would recover it at the cost of a third location to reason
   about; not taken, and deliberately left as a measured number rather than a fix.
-- **`bin/lib/enginetree.py:activate`** — rollback (`--activate <older-version>`) is unit-covered and
-  has never been used in the field. Nothing prunes old versions either: every install leaves a full
-  tree behind and there is no `--gc`.
+- ~~**`bin/lib/enginetree.py:activate`** — rollback is unit-covered and has never been used in the
+  field. Nothing prunes old versions either.~~ **Closed by Phase 2 Task 5** (ADR-020):
+  `--rollback` is a recorded target executed as a runbook in
+  `run_engineupdate.py::case_rollback_is_a_tested_command_sequence`, and `prune()` (default
+  `--keep 2`) runs after every activation and refuses to remove the active version or the rollback
+  target. It has still never been used in the FIELD; what changed is that it is exercised.
+- **No engine tree is CHECKSUMMED except one installed by `--update`.** Task 5 records a per-file
+  sha256 manifest at `<install-root>/engine/.pairs/<version>.json` (outside the sealed tree) for
+  every pair `update()` activates, and re-verifies the staged tree against its source before
+  activation. `--install` writes none, so a tree installed by `script/setup` has no manifest and
+  `--print pairs` reports `no manifest` for it. Measured: on this machine, a fresh `--install`
+  followed by `--print pairs` shows the version with `checksums: false`. *Deferred because
+  `--install` is also the repair path, and a manifest written by the same run that wrote the tree
+  proves less than one written elsewhere.*
+- **The `remove_version()` → `os.rename` window is still open on `--install --force`.** ADR-020 D7
+  carries the measurement in both directions: killed there, `--install --force` over the ACTIVE
+  version leaves **no runnable engine** and a dangling `current` (recovered by a plain `--install`),
+  while `--update` cannot reach the state because it refuses the running version as a target.
+  `script/setup` runs `--install --force` unconditionally, so this is on the setup path.
+  *Not closed here: the fix is a swap through a temporary name — unseal, `rename(dst → .retiring-*)`,
+  `rename(staging → dst)`, `rmtree` — which adds two more mutations to the destructive path, and
+  `script/setup` cannot simply switch to `--update` because setup must also REPAIR a broken active
+  install, which `update` refuses by design.*
+- **`run_engineupdate.py`'s "exactly ONE of two concurrent updates wins" cell is insensitive.**
+  Call-site mutation (removing the `flock`) left it GREEN — one of the two racers still failed for an
+  unrelated reason. The load-bearing cell beside it ("the loser refuses with the lock named") does go
+  red, so serialization is gated; the weaker cell is not pulling its weight and should either target
+  the SAME version in both racers or be dropped.
 - **The XDG default path is barely exercised.** Almost every test drives `PLAINKEEP_ENGINE_HOME`, so
   `${XDG_DATA_HOME:-$HOME/.local/share}/plainkeep/` itself is covered by one manual end-to-end run
   and by `script/setup` on this machine only.

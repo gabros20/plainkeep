@@ -181,14 +181,17 @@ def validate(candidate, *, how: str, require_registered: bool = False,
 
 
 # --- the chain -----------------------------------------------------------------------------------
-def _walk_up(cwd: str, reg: dict, saw: dict) -> tuple[str, str] | None:
+def _walk_up(cwd: str | None, reg: dict, saw: dict) -> tuple[str, str] | None:
     """The nearest ancestor of `cwd` carrying a marker, validated. None only when there is NO marker
-    anywhere up to `/`.
+    anywhere up to `/` — or when there is no `cwd` left to walk from at all.
 
     The subtlety this function exists for: the first marker found DECIDES. A malformed or
     unregistered marker at the nearest ancestor refuses THERE. Skipping it to try an outer ancestor
     would mean a broken inner vault silently hands your keystrokes to the outer one — which is the
     single worst outcome this whole task exists to prevent."""
+    if cwd is None:                     # $PWD was unlinked underneath the shell — see discover()
+        saw[MECHANISMS[2]] = "$PWD no longer exists — the directory was deleted underneath this shell"
+        return None
     d = Path(vaultreg.canonical(cwd))
     for cand in (d, *d.parents):
         if vaultreg.marker_path(cand).is_file():
@@ -206,7 +209,17 @@ def discover(selector: str | None = None, cwd: str | None = None) -> Selection:
     so a refusal can be EXPLAINED and not merely reported. `vault status` renders it, which is the
     difference between an operator fixing a refusal and working around it."""
     saw: dict = {}
-    cwd = cwd or os.getcwd()
+    if cwd is None:
+        try:
+            cwd = os.getcwd()
+        except OSError:
+            # $PWD was unlinked underneath this shell — a worktree removed, a `git clean`, a temp dir
+            # the agent that made it deleted. That is a mechanism SEEING NOTHING, not an unexpected
+            # condition: the frozen protocol has no "1 = something went wrong" excuse for a
+            # foreseeable one, and reading the cwd before the chain runs meant even an explicit
+            # --vault or PLAINKEEP_HOME died here without being asked. Steps 1, 2 and 4 still answer;
+            # only step 3 is unavailable, and it says so.
+            cwd = None
     try:
         return _discover(selector, cwd, saw)
     except VaultError as e:
@@ -214,7 +227,7 @@ def discover(selector: str | None = None, cwd: str | None = None) -> Selection:
         raise
 
 
-def _discover(selector: str | None, cwd: str, saw: dict) -> Selection:
+def _discover(selector: str | None, cwd: str | None, saw: dict) -> Selection:
     # 1. --vault. Resolved THROUGH the registry (a name/id/path all mean "a vault I know about"), so
     #    an unregistered spelling refuses here rather than being validated as a bare path.
     if selector is not None:
@@ -268,11 +281,16 @@ def _discover(selector: str | None, cwd: str, saw: dict) -> Selection:
     # 5. Refuse, showing the whole chain. This is the message an operator meets on a fresh install,
     #    in a cron job with a sanitized environment, and in an agent shell started outside any vault,
     #    so it carries the remediation rather than only the diagnosis.
+    # The "make THIS directory a vault" half of the remediation is only offered when there IS a
+    # this-directory: with `$PWD` deleted, a bootstrap command naming it would be one the operator
+    # cannot run, which is the failure mode `bootstrap_hint`'s own docstring exists to avoid.
+    hint = ("pick a registered vault (plainkeep --vault <name> <verb>), or point PLAINKEEP_HOME "
+            "at one" + (f":\n    cd <somewhere that still exists> first — {MECHANISMS[2]} "
+                        f"could not run" if cwd is None
+                        else ", or make THIS directory a vault:\n    " + bootstrap_hint(cwd)))
     raise VaultError("no vault selected — every discovery mechanism came up empty:\n"
                      + "\n".join(f"  {m:<26} {saw.get(m, '?')}" for m in MECHANISMS),
-                     hint="pick a registered vault (plainkeep --vault <name> <verb>), point "
-                          "PLAINKEEP_HOME at one, or make THIS directory a vault:\n    "
-                          + bootstrap_hint(cwd))
+                     hint=hint)
 
 
 # --- the consumer side ----------------------------------------------------------------------------

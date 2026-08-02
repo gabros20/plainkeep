@@ -313,6 +313,104 @@ def case_unset() -> None:
 
 
 # --------------------------------------------------------------------------------------------
+# C2. `$PWD` NO LONGER EXISTS — a worktree removed underneath a long-lived shell, a `git clean`,
+# a temp dir the agent that made it deleted. The cwd is read before the chain runs, so before this
+# case it crashed `os.getcwd()` with a FileNotFoundError traceback and exit 1 — a code that is off
+# the frozen protocol, reached even when the operator DID say which vault they meant, and one the
+# core inherits as-is (the trace is already on the shared stderr, so main.ts's "an enforcement
+# binary must never reach the shell as a stack trace" guard never sees it).
+#
+# A deleted cwd is a mechanism that SAW NOTHING, not an unexpected condition: steps 1, 2 and 4 must
+# still get to answer, and only step 3 is unavailable.
+# --------------------------------------------------------------------------------------------
+def case_deleted_cwd() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        sandbox = Path(os.path.realpath(td))
+        (sandbox / "home").mkdir()
+        a = sandbox / "vault-a"
+        make_vault(a)
+        register(sandbox, a, "alpha", default=True)
+        env = base_env(sandbox)
+
+        def in_deleted_cwd(argv: list[str], extra: dict) -> subprocess.CompletedProcess:
+            """Run `argv` from a directory that is unlinked between the chdir and the exec. `cwd=` on
+            a deleted path is rejected by posix_spawn itself, so the deletion has to happen inside
+            the child — hence the shell wrapper."""
+            gone = sandbox / "gone"
+            gone.mkdir(exist_ok=True)
+            quoted = " ".join(f"'{a}'" for a in argv)
+            return subprocess.run(
+                ["/bin/sh", "-c", f"cd '{gone}' && rmdir '{gone}' && exec {quoted}"],
+                cwd=str(gone), env={**env, **extra}, capture_output=True, text=True)
+
+        # The CORE binary cannot be exercised here and that is not plainkeep's to fix: the bun
+        # runtime refuses to start at all in a deleted cwd ("error: The current working directory was
+        # deleted…", exit 1) before any plainkeep code runs. Measured directly against
+        # `.local/bin/plainkeep-core`. What IS gated is the shape a real user meets — PLAINKEEP_CORE
+        # defaults to `auto`, whose liveness probe fails for the same reason and degrades to the
+        # floor, so the invocation still works. `require` is asserted separately below: it refuses,
+        # by contract, and must not do so with a traceback.
+        for path, extra in (("floor", {"PLAINKEEP_CORE": "off"}),
+                            ("auto", {"PLAINKEEP_CORE": "auto",
+                                      "PLAINKEEP_CORE_BIN": str(CORE_BIN)})):
+            if path == "auto" and not core_live():
+                continue
+            shim = [str(REPO / "plainkeep")]
+
+            # (a) The chain can still be ANSWERED — the registry default is step 4 and a deleted cwd
+            # only takes step 3 away. Before the fix this was exit 1 with a traceback.
+            before = snapshot(sandbox)
+            r = in_deleted_cwd([*shim, "capture", "deletedcwd"], extra)
+            created = new_files(sandbox, before)
+            check(f"[{path}] a deleted $PWD still reaches the registry default (step 4), not a crash",
+                  r.returncode == 0, f"rc={r.returncode} {r.stdout}{r.stderr}")
+            check(f"[{path}] ...and the note landed in the selected vault",
+                  any(f.startswith("vault-a" + os.sep + "inbox") for f in created), str(sorted(created)))
+            check(f"[{path}] ...with no traceback on stderr", "Traceback" not in r.stderr, r.stderr)
+
+            # (b) An EXPLICIT selection is honoured too: step 1 runs before the cwd is ever needed,
+            # so `--vault` must not be defeated by where the shell happens to be standing.
+            r = in_deleted_cwd([*shim, "--vault", "alpha", "capture", "deletedcwdsel"], extra)
+            check(f"[{path}] a deleted $PWD does not defeat an explicit --vault", r.returncode == 0,
+                  f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+            # (c) And with nothing else to fall back on it REFUSES on the protocol (2), naming what
+            # the walk-up saw — never exit 1, which the protocol reserves for the unexpected.
+            with tempfile.TemporaryDirectory() as td2:
+                bare = Path(os.path.realpath(td2))
+                (bare / "home").mkdir()
+                bare_env = base_env(bare)
+                gone2 = bare / "gone"
+                gone2.mkdir()
+                r = subprocess.run(
+                    ["/bin/sh", "-c", f"cd '{gone2}' && rmdir '{gone2}' && exec '{REPO}/plainkeep' "
+                                      f"capture x"],
+                    cwd=str(gone2), env={**bare_env, **extra}, capture_output=True, text=True)
+                out = r.stdout + r.stderr
+                check(f"[{path}] a deleted $PWD with nothing else set refuses with EXIT_USAGE (2)",
+                      r.returncode == EXIT_USAGE, f"rc={r.returncode} {out}")
+                check(f"[{path}] ...and the refusal SAYS the cwd is gone rather than crashing",
+                      "no longer exists" in out and "Traceback" not in out, out)
+
+        # PLAINKEEP_CORE=require in a deleted cwd: the core cannot start (bun), so the shim's own
+        # liveness contract answers — a plainkeep message, never a Python traceback. This is the
+        # pre-existing `require`-with-no-live-core path, not a discovery refusal, and it is asserted
+        # so the disclosure above is measured rather than reasoned.
+        if core_live():
+            gone = sandbox / "gone-req"
+            gone.mkdir()
+            r = subprocess.run(
+                ["/bin/sh", "-c", f"cd '{gone}' && rmdir '{gone}' && exec '{REPO}/plainkeep' "
+                                  f"capture x"],
+                cwd=str(gone), env={**env, "PLAINKEEP_CORE": "require",
+                                    "PLAINKEEP_CORE_BIN": str(CORE_BIN)},
+                capture_output=True, text=True)
+            out = r.stdout + r.stderr
+            check("[require] a deleted $PWD reaches the shim's liveness refusal, not a traceback",
+                  "no live core binary" in out and "Traceback" not in out, f"rc={r.returncode} {out}")
+
+
+# --------------------------------------------------------------------------------------------
 # D. The WALK-UP rule, which is the subtle one: the FIRST marker found going up DECIDES.
 # --------------------------------------------------------------------------------------------
 def case_walkup_first_marker_decides() -> None:
@@ -648,6 +746,7 @@ def main() -> int:
     case_two_vault_identity()
     case_negative_twin()
     case_unset()
+    case_deleted_cwd()
     case_walkup_first_marker_decides()
     case_moved_vault()
     case_many_vaults_one_wall()
@@ -666,6 +765,10 @@ def main() -> int:
         print(f"\nSUITE-NOTE: no live core binary at {CORE_BIN} — the `core` and `direct` invocation "
               f"paths were NOT exercised, so this run gates the bash floor only. Build it with "
               f"(cd cli && bun run build).")
+    print("SUITE-NOTE: the deleted-$PWD case (C2) does NOT gate the compiled core. The bun runtime "
+          "refuses to start in a deleted cwd before any plainkeep code runs, so `plainkeep-core` "
+          "exits 1 with bun's own message no matter what discovery does. Measured; the default "
+          "PLAINKEEP_CORE=auto degrades to the floor for the same reason and IS gated.")
     print("SUITE-NOTE: a verb invoked DIRECTLY (python3 bin/<verb>/run.py) still trusts whatever "
           "PLAINKEEP_HOME it is handed — validation belongs to the dispatcher, and every product "
           "surface goes through one. Nothing here gates that escape hatch.")

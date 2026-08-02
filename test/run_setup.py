@@ -31,8 +31,13 @@ def main() -> int:
         cl = subprocess.run(["git", "clone", "-q", str(REPO), str(vault)], capture_output=True, text=True)
         if cl.returncode != 0:
             print("git clone failed:", cl.stderr); return 1
+        # PLAINKEEP_CONFIG_HOME is hermetic and MANDATORY here: since ADR-014 Task 1b `script/setup`
+        # registers the vault it creates, and the registry lives OUTSIDE every vault — in the real
+        # ~/.config unless redirected. Without this the suite would write an entry into the
+        # developer's own registry (and fail the moment their vault already holds the name).
         env = {**os.environ, "PLAINKEEP_ROOTS_HOME": str(home), "PLAINKEEP_BIN_DIR": str(bindir),
-               "PLAINKEEP_COMP_DIR": str(compdir), "PLAINKEEP_HOME": str(vault)}
+               "PLAINKEEP_COMP_DIR": str(compdir), "PLAINKEEP_HOME": str(vault),
+               "PLAINKEEP_CONFIG_HOME": str(tmp / "config")}
 
         # dry-run changes nothing
         subprocess.run([str(vault / "script" / "setup"), "--lean", "--yes", "--dry-run",

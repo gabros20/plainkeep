@@ -23,6 +23,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import vaultfx  # noqa: E402
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results: list[tuple[str, bool, str]] = []
 
@@ -228,7 +230,19 @@ def case_atomic() -> None:
 
 
 # --------------------------------------------------------------------------------------------
-# D. The template is not adoptable, and discovery has NOT changed
+# D. The template is not adoptable — and discovery HAS changed (Task 1b)
+#
+# This section used to assert the opposite. Its case read "discovery is UNCHANGED: PLAINKEEP_HOME
+# still wins over a registered default", and it was the evidence that Task 1a was shippable ALONE:
+# identity landed without moving how a root gets selected. Task 1b is the task that makes it false,
+# so it is REWRITTEN here rather than deleted — the same invocation, asserting the new contract.
+#
+# What changed, precisely: PLAINKEEP_HOME still wins over the registry default (it is step 2 of four,
+# the default is step 4), but it is no longer accepted UNVALIDATED. An unmarked root now refuses with
+# exit 2 and writes nothing, where it used to capture happily into whatever directory it named. The
+# full chain — every mechanism, every refusal, and the two-vault identity test — is gated in
+# test/run_discovery.py; what belongs HERE is the one assertion this file has always owned: that
+# Task 1a's marker/registry contract still behaves the way it says it does.
 # --------------------------------------------------------------------------------------------
 def case_template_and_discovery() -> None:
     check("the repo template carries no committed marker "
@@ -245,15 +259,45 @@ def case_template_and_discovery() -> None:
         a.mkdir(); b.mkdir()
         vault(a, cfg, "register", str(a), "--name", "alpha", "--default", "--yes")
 
-        # Task 1a is shippable alone precisely BECAUSE this is still true. When Task 1b lands, this
-        # assertion is the one that must be deliberately rewritten — not quietly.
-        r = subprocess.run([sys.executable, str(REPO / "bin" / "capture" / "run.py"), "unchanged"],
-                           capture_output=True, text=True,
-                           env={**os.environ, "PLAINKEEP_HOME": str(b),
+        # REWRITTEN BY TASK 1b (see the section header). `b` is an UNMARKED directory: before Task 1b
+        # `PLAINKEEP_HOME` naming it was enough and `capture` wrote an inbox note there; now the same
+        # invocation refuses. Asserted by FILESYSTEM WALK as well as exit code — this suite's own
+        # subject is what gets written where, and an exit code has already been observed lying about
+        # that once in this project (a refusal exited 5 having already written the file).
+        #
+        # Through the DISPATCHER, not `python3 bin/capture/run.py`: validation is the dispatcher's
+        # job by design, and a directly-invoked verb still trusts whatever PLAINKEEP_HOME it is
+        # handed (lib/vaultroot.active_root reads, it does not re-validate). That boundary is stated
+        # in the Task 1b report as a known limit, and it is why this case had to change its
+        # invocation shape as well as its expectation.
+        r = subprocess.run([str(REPO / "plainkeep"), "capture", "unchanged"],
+                           capture_output=True, text=True, cwd=str(b),
+                           env={**os.environ, "PLAINKEEP_HOME": str(b), "PLAINKEEP_CORE": "off",
                                 "PLAINKEEP_CONFIG_HOME": str(cfg)})
-        check("discovery is UNCHANGED: PLAINKEEP_HOME still wins over a registered default",
+        check("discovery CHANGED (Task 1b): an unmarked PLAINKEEP_HOME is refused, not obeyed",
+              r.returncode == 2, f"rc={r.returncode} {r.stdout}{r.stderr}")
+        check("...and the refusal wrote NOTHING into the root it refused",
+              not (b / "inbox").exists() and not (b / "journal").exists(),
+              str(sorted(p.name for p in b.iterdir())))
+        check("...and nothing was written into the registered default vault either",
+              not (a / "inbox").exists())
+
+        # ...and PLAINKEEP_HOME still OUTRANKS the registry default when it is a valid vault: it is
+        # step 2 of four and the default is step 4. What Task 1b added is validation, not a new
+        # precedence — asserting only the refusal above would leave that half unproven.
+        vaultfx.mark_vault(b)
+        # The bash floor spawns `$PLAINKEEP_HOME/bin/lib/*.py` — the engine still lives inside the
+        # vault in Phase 1 — so a temp vault needs the engine tree to dispatch at all. (The refusal
+        # above needs none of it: discovery runs from the ENGINE's own copy and refuses before the
+        # floor ever reaches for the vault's.)
+        os.symlink(REPO / "bin", b / "bin")
+        r = subprocess.run([str(REPO / "plainkeep"), "capture", "unchanged"],
+                           capture_output=True, text=True, cwd=str(b),
+                           env={**os.environ, "PLAINKEEP_HOME": str(b), "PLAINKEEP_CORE": "off",
+                                "PLAINKEEP_CONFIG_HOME": str(cfg)})
+        check("a MARKED PLAINKEEP_HOME still wins over a registered default",
               r.returncode == 0 and any((b / "inbox").glob("cap-*.md")), r.stdout + r.stderr)
-        check("...and nothing was written into the registered default vault",
+        check("...and still nothing landed in the registered default vault",
               not (a / "inbox").exists())
 
         r = vault(b, cfg, "status", "--json")
@@ -262,6 +306,9 @@ def case_template_and_discovery() -> None:
               data["active_root"] == os.path.realpath(b) and data["registered_as"] is None, r.stdout)
         check("status names the mechanism that selected the root",
               data["selected_by"] == "PLAINKEEP_HOME", r.stdout)
+        check("status reports what EVERY mechanism saw, not just the winner",
+              data["saw"].get("--vault") == "not supplied"
+              and data["would_select"] == os.path.realpath(b), r.stdout)
 
 
 def main() -> int:
@@ -276,9 +323,9 @@ def main() -> int:
         mark = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"
         print(f"  {mark} {name:<70}" + (f" {DIM}{detail}{RESET}" if (detail and not ok) else ""))
     failed = len(results) - passed
-    print("\nSUITE-NOTE: Task 1a is IDENTITY ONLY. Nothing here proves a root is discovered "
-          "correctly — the --vault selector, marker walk-up and the registry default are Task 1b, "
-          "and the two-vault identity test that proves selection is gated there.")
+    print("\nSUITE-NOTE: this suite is IDENTITY ONLY — the marker and the registry. Nothing here "
+          "proves a root is DISCOVERED correctly; the --vault selector, marker walk-up, the registry "
+          "default and the two-vault identity test are gated in test/run_discovery.py.")
     print(f"\n{BOLD}Result:{RESET} {GREEN}{passed} passed{RESET}, "
           f"{(RED if failed else DIM)}{failed} failed{RESET}, {len(results)} checks")
     return 1 if failed else 0

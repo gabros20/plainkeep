@@ -186,10 +186,21 @@ def _walk_up(cwd: str, reg: dict, saw: dict) -> tuple[str, str] | None:
 
 def discover(selector: str | None = None, cwd: str | None = None) -> Selection:
     """Run the whole chain and return the validated Selection, or raise VaultError naming every
-    mechanism and what it saw."""
+    mechanism and what it saw.
+
+    A raised VaultError carries `.saw` — the same per-mechanism account the Selection would have —
+    so a refusal can be EXPLAINED and not merely reported. `vault status` renders it, which is the
+    difference between an operator fixing a refusal and working around it."""
     saw: dict = {}
     cwd = cwd or os.getcwd()
+    try:
+        return _discover(selector, cwd, saw)
+    except VaultError as e:
+        e.saw = saw          # type: ignore[attr-defined]
+        raise
 
+
+def _discover(selector: str | None, cwd: str, saw: dict) -> Selection:
     # 1. --vault. Resolved THROUGH the registry (a name/id/path all mean "a vault I know about"), so
     #    an unregistered spelling refuses here rather than being validated as a bare path.
     if selector is not None:

@@ -54,6 +54,9 @@ class VaultError(Exception):
     def __init__(self, message: str, code: int = output.EXIT_USAGE, hint: str | None = None):
         super().__init__(message)
         self.message, self.code, self.hint = message, code, hint
+        # Filled in by vaultroot.discover(): the per-mechanism account of the discovery chain, so a
+        # refusal can be explained rather than only reported. Empty for every other refusal.
+        self.saw: dict = {}
 
 
 # --- canonical paths ----------------------------------------------------------------------------

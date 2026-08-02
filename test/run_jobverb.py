@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from lib import vaultfx  # noqa: E402
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
 
@@ -46,6 +48,7 @@ def main() -> int:
         # engine `plainkeep` + `bin` in; `job run index`/`consolidate` then pass the guardrail like any call.
         os.symlink(REPO / "plainkeep", h / "plainkeep")
         os.symlink(REPO / "bin", h / "bin")
+        vaultfx.mark_vault(h)   # Task 1b: the dispatcher validates the root before it dispatches
 
         r = run(h, "list")
         check("job list shows the jobs", "index" in r.stdout and "consolidate" in r.stdout, r.stdout)

@@ -124,10 +124,27 @@ fi
 # created here does not exist yet by that definition. It is the same line the refusal message hands
 # an operator with an older vault (lib/vaultroot.py, bootstrap_hint).
 #
-# Re-running setup is safe: register refuses an already-registered path (exit 2) and the `|| true`
-# keeps that from failing the run. It never overwrites an existing marker.
+# It is NOT best-effort. If registration fails, nothing after this point works — `doctor --init` and
+# every later verb go through the dispatcher, which refuses an unregistered root — so swallowing the
+# error would turn a one-line problem into a confusing refusal three steps later. The two realistic
+# failures both name their own fix: the path is already registered (which re-running setup hits, and
+# which is fine), or the NAME is taken by another vault, which `register` says out loud along with
+# the --name flag that resolves it.
 say "4b. mark + register this vault (the dispatcher will not act on an unregistered root)"
-run env PLAINKEEP_HOME="$ROOT" python3 "$ROOT/bin/vault/run.py" register "$ROOT" --yes || true
+REG_LOG="$(mktemp "${TMPDIR:-/tmp}/pk-setup-register.XXXXXX")"
+if [ "$DRY" = 1 ]; then
+  echo "  + env PLAINKEEP_HOME=$ROOT python3 $ROOT/bin/vault/run.py register $ROOT --yes"
+elif env PLAINKEEP_HOME="$ROOT" python3 "$ROOT/bin/vault/run.py" register "$ROOT" --yes >"$REG_LOG" 2>&1; then
+  sed 's/^/  /' "$REG_LOG"
+elif grep -q "already registered" "$REG_LOG"; then
+  echo "  ok:    already registered"
+else
+  sed 's/^/  /' "$REG_LOG" >&2
+  rm -f "$REG_LOG"
+  echo "setup cannot continue: every verb below needs a registered root." >&2
+  exit 2
+fi
+rm -f "$REG_LOG"
 
 say "5. validate the skeleton"
 run env PLAINKEEP_HOME="$ROOT" "$ROOT/plainkeep" doctor --init

@@ -166,6 +166,27 @@ class Session:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
+    def wait_writing(self, timeout: float = 30.0) -> bool:
+        """Block until the server has STARTED writing a reply — the first byte is readable — without
+        consuming it. False if it never did.
+
+        This exists because "the reply is in flight" used to be a `time.sleep(0.05)`, and a sleep is
+        an assumption about how long a tool call takes. ADR-014 Task 1b made every dispatch spawn one
+        more process (root discovery, ~23 ms measured), which pushed the child PAST the 50 ms window
+        — so the SIGTERM landed while the child was still running, the core killed it as designed,
+        and the case saw `exit -15` instead of the frame. `select()` on the descriptor answers the
+        question the case is actually asking, and it answers it by measurement."""
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            # `self.buf`, never `self.raw`: raw accumulates every byte the session has EVER read
+            # (the initialize frame included), so testing it would answer True instantly and
+            # reproduce the sleep this replaced.
+            if self.buf or select.select([self.fd], [], [], 0.05)[0]:
+                return True
+            if self.proc.poll() is not None:
+                return False
+        return False
+
     # -- teardown --------------------------------------------------------------------------------
     def finish(self, timeout: float = 30.0, close: bool = True) -> int:
         if close:
@@ -961,11 +982,34 @@ def case_sigterm_mid_call(m: Mode) -> None:
         s.frame()
         s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
                 "params": {"name": "bigout", "arguments": {}}})
-        time.sleep(0.05)                        # inside the child spawn, which blocks the loop
-        # WHY THIS IS PROVABLY "MID-FLIGHT" rather than merely "probably": we have read NOTHING since
-        # sending the request, and the reply is ~300 KB against a 64 KiB pipe buffer, so the server
-        # CANNOT have finished writing it before this signal — whatever it had written is still parked
-        # in write(). Recording that the process is alive here closes the other end of the argument.
+        # THE TRIGGER DIFFERS BY MODE, and the asymmetry is deliberate — the two branches below
+        # assert different things, and one of them is timing-sensitive in a way this task MEASURED
+        # but did not change.
+        #
+        # CORE asserts "the COMPLETE in-flight frame is still delivered", so the frame has to be
+        # provably in flight. Two measured halves: the server has STARTED writing (wait_writing —
+        # the first byte is readable and we have consumed nothing), so the tool child has finished
+        # and the frame is what is in flight; and the reply is ~300 KB against a 64 KiB pipe buffer
+        # with nothing read, so it CANNOT have finished writing. This used to be `time.sleep(0.05)`,
+        # a guess about how long a tool call takes, and it stopped being true the moment ADR-014
+        # Task 1b added a process to every dispatch (root discovery, ~23 ms): the signal started
+        # landing while the child still ran, the core killed it as designed, and the case saw
+        # `exit -15`.
+        #
+        # FLOOR keeps the sleep, and here is the finding that decided it. The floor's claim is that
+        # it dies by signal leaving NO PARTIAL FRAME — and that is true because CPython has not
+        # begun writing yet, not because it cannot be interrupted mid-write. Driving the floor with
+        # wait_writing too was tried and it REDDENS: stdout ends mid-payload
+        # (b'xxxx…' with no newline), which is exactly the truncation this module's header discloses
+        # ("run.py takes the default disposition and dies instantly — mid-frame if it is halfway
+        # through a write()"). So the floor's assertion holds by timing rather than by construction.
+        # It is left exactly as it was rather than rewritten under this task's pressure; the
+        # measurement is recorded in .orchestrate/task-1b-report.md as a live concern.
+        if m.name == "core":
+            started_writing = s.wait_writing(timeout=60.0)
+        else:
+            time.sleep(0.05)
+            started_writing = True
         alive_at_signal = s.alive()
         t0 = time.time()
         s.proc.send_signal(signal.SIGTERM)
@@ -976,8 +1020,9 @@ def case_sigterm_mid_call(m: Mode) -> None:
             check("[core] SIGTERM mid-call still delivers the COMPLETE in-flight frame",
                   frame["id"] == 2 and len(blob) == BIG_BYTES, f"blob={len(blob)}")
             check("[core] the frame really was in flight when the signal landed "
-                  f"(alive, unread, {BIG_BYTES}B > 64 KiB pipe)",
-                  alive_at_signal and BIG_BYTES > 65536, f"finished {elapsed:.3f}s after SIGTERM")
+                  f"(alive, writing, unread, {BIG_BYTES}B > 64 KiB pipe)",
+                  alive_at_signal and started_writing and BIG_BYTES > 65536,
+                  f"started_writing={started_writing} finished {elapsed:.3f}s after SIGTERM")
             rc = s.finish(timeout=15.0, close=False)
             check("[core] and then shuts down on the protocol (0)", rc == 0, f"rc={rc}")
         else:

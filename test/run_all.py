@@ -21,6 +21,7 @@ SUITES = [
     ("guardrail enforcement (§5)", "run_guardrail.py"),
     ("path-wall on the write path (§5 Iron Law)", "run_pathwall.py"),
     ("vault marker + registry (ADR-014 Task 1a)", "run_vault.py"),
+    ("vault discovery: selection + refusals (ADR-014 Task 1b)", "run_discovery.py"),
     ("jobs registry (§15)", "run_jobs.py"),
     ("jobs scheduler verb (§15)", "run_jobverb.py"),
     ("sweep decay model (§9.4)", "run_sweep.py"),

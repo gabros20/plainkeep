@@ -1055,19 +1055,31 @@ was scoped to move; `bin/lib/enginetree.py --install|--activate|--verify|--print
 - **It costs a break for anyone dispatching a vault's own launcher against that vault**, which is
   what `script/setup` produced before this task and therefore what every existing install looks
   like. It is exit 5 with a remediation naming the installer, not a silent misresolution — but it is
-  a break, and re-running `script/setup` is the migration. Precisely: what is refused is dispatching
-  **through a tree's own launcher against that tree**. The checkout can still be ACTED ON as a vault
-  — `~/.local/share/plainkeep/engine/current/plainkeep status` against it exits 0 (measured) — so
-  "the checkout cannot be its own vault" overstates it, and "a PATH-symlink problem" understates it:
-  `./plainkeep <verb>` from the checkout is exit 5 whether or not `plainkeep` is on PATH at all.
-- **It costs contributors their edit→run loop**, which is the same break wearing work clothes and is
-  the one this repo pays daily. An installed engine is a read-only SNAPSHOT (D4), so editing
-  `bin/<verb>/run.py` changes nothing a dispatch can see until the tree is re-installed, and the
-  `./plainkeep help` gesture that used to close the loop is now exit 5. The replacement loop is
-  `python3 bin/lib/enginetree.py --install . --force` (~0.2 s, re-points `current` atomically) then
-  the installed launcher; `--force` exists precisely because re-installing the SAME version is the
-  contributor case rather than an error. Written down in `CONTRIBUTING.md` ("Run the engine you just
-  edited") and `test/README.md`, both of which shipped broken instructions until the r1 fix wave.
+  a break, and re-running `script/setup` is the migration. **Precisely** — measured, because all
+  three of the obvious framings are wrong:
+
+  | gesture | rc |
+  |---|---|
+  | `./plainkeep <verb>` from the checkout, checkout selected as the vault | **5** |
+  | `./plainkeep <verb>` from the checkout, `PLAINKEEP_HOME` = any other vault | **0** |
+  | installed launcher (`…/engine/current/plainkeep`) against the checkout as vault | **0** |
+
+  So what is refused is exactly **a tree's own launcher dispatching against that same tree** — one
+  cell, not a class. "A PATH-symlink problem" understates it (PATH is not involved; it is refused
+  whether or not `plainkeep` is on PATH at all). "The checkout cannot act as its own vault"
+  overstates it (an installed engine acts on the checkout fine). And "there is no `./plainkeep` loop
+  any more" is also false: point the checkout's launcher at a different vault and it dispatches.
+- **It costs contributors the DEFAULT edit→run loop, not the loop itself.** The gesture that broke is
+  `./plainkeep <verb>` with the checkout as its own vault, which is what a contributor typed by
+  default. Two loops replace it, and they are not equivalent: `PLAINKEEP_HOME=<other vault>
+  ./plainkeep <verb>` keeps the edit LIVE (the checkout is the engine; nothing was snapshotted) and
+  is the one to iterate in; re-installing (`python3 bin/lib/enginetree.py --install . --force`,
+  ~0.2 s, re-points `current` atomically) is required only to exercise the shipped shape — the
+  read-only tree, `plainkeep` on PATH, or the checkout as its own vault — because an installed engine
+  is a SNAPSHOT (D4) and an un-installed edit is invisible to it. `--force` exists precisely because
+  re-installing the SAME version is the contributor case rather than an error. Both loops, and which
+  is for what, are in `CONTRIBUTING.md` ("Run the engine you just edited") and `test/README.md` —
+  both of which shipped instructions that exited 5 until the r1 fix wave.
 - **CPython cannot write `__pycache__` into a read-only tree**, so an installed engine re-compiles
   the `bin/lib` modules it imports on every invocation. **Measured** — macOS arm64 / CPython 3.12,
   the same tree installed twice (once sealed, once `--writable`), both warmed three times, then 25

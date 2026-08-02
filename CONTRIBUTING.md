@@ -14,13 +14,31 @@ python3 test/run_<suite>.py      # one suite
 
 All suites must stay green. CI (`.github/workflows/ci.yml`) runs `run_all.py` on every push/PR.
 
-## Run the engine you just edited — the edit→install→run loop
+## Run the engine you just edited
 
-**Since ADR-017 there is no `./plainkeep <verb>` loop.** This checkout is the engine SOURCE and (if
-you registered it) a data vault, and one directory cannot be both: dispatching through the
-checkout's own launcher against the checkout is refused with **exit 5**, naming the installer as the
-remediation. What runs your edits is an INSTALLED engine, and an installed engine is a read-only
-snapshot — so an edit is not live until you re-install it.
+Since ADR-017 the engine is a versioned tree installed OUTSIDE any vault, so "run my edit" is no
+longer automatically "`./plainkeep <verb>`". Exactly one gesture broke, and it is worth knowing
+which, because the fast loop still exists.
+
+**What broke:** `./plainkeep <verb>` **with this checkout as the selected vault** — the default,
+since the marker walk-up finds the checkout's own marker. A vault is data and an engine is code, and
+one directory cannot be both, so that is **exit 5** with a remediation naming the installer. Nothing
+about PATH is involved; it is refused whether or not `plainkeep` is on PATH at all.
+
+**The fast loop — live, no install step.** Point `PLAINKEEP_HOME` at any *other* vault and the
+checkout's own launcher runs your edit immediately:
+
+```sh
+export PLAINKEEP_HOME=/tmp/pk-dev-vault     # any marked vault that is not this checkout
+./plainkeep <verb>                          # runs bin/<verb>/run.py as it is on disk, right now
+```
+
+This is the loop to use while iterating on a verb. Your edit is live because the checkout IS the
+engine here — nothing was snapshotted.
+
+**The install loop — when you need the shipped shape.** Use this to test what users actually run:
+the installed tree, `plainkeep` on PATH, or the checkout acting as its own vault. An installed engine
+is a read-only snapshot, so **an edit is invisible until you re-install**:
 
 ```sh
 python3 bin/lib/enginetree.py --install . --force   # ~0.2 s; re-points `current` atomically
@@ -31,7 +49,7 @@ plainkeep <verb>                                    # the INSTALLED launcher, pu
 refuse it — which is exactly the contributor case. If `plainkeep` is not on PATH, invoke the
 launcher by path: `"$(python3 bin/lib/enginetree.py --print current)"/plainkeep <verb>`.
 
-To iterate without touching your real install, point the install ROOT somewhere disposable — the
+To install without touching your real engine, point the install ROOT somewhere disposable — the
 variable is read by the installer surface only, never by a dispatch:
 
 ```sh
@@ -40,8 +58,9 @@ python3 bin/lib/enginetree.py --install . --force
 "$(python3 bin/lib/enginetree.py --print current)"/plainkeep <verb>
 ```
 
-The checkout can still be ACTED ON as a vault — `plainkeep status` from an installed engine against
-this directory works fine. What is refused is dispatching *through this checkout's own launcher*.
+The checkout can also still be ACTED ON as a vault — `plainkeep status` from an *installed* engine
+against this directory works fine. What is refused is only the checkout's own launcher against
+itself.
 
 ## Add a verb — one folder
 
@@ -71,12 +90,12 @@ hand:
    **`dry_run`** for mutating verbs — shapes in [`docs/machine-contract.md`](docs/machine-contract.md).
    Emit through `lib.output` (`emit` / `emit_rows` / `fail`), never hand-rolled JSON.
 3. **Register the group** in `bin/lib/manifest.py` `GROUPS` (optional but tidy).
-4. **Re-install, then `plainkeep help`** — `python3 bin/lib/enginetree.py --install . --force` first
-   (see the loop above; the installed tree is a snapshot, so an un-installed verb does not exist to
-   the dispatcher), then `plainkeep help` regenerates `plainkeep.json`. Confirm the verb appears.
+4. **`plainkeep help`** — regenerates `plainkeep.json`; confirm the verb appears. Run it through
+   either loop above (`PLAINKEEP_HOME=<other vault> ./plainkeep help`, or re-install and use the
+   installed launcher) — **not** `./plainkeep help` against this checkout, which is exit 5.
 5. **`test/run_<verb>.py`** — cover it against a temp `PLAINKEEP_HOME` (and `PLAINKEEP_ROOTS_HOME`
    for the sibling roots). Add it to `test/run_all.py`.
-6. **`plainkeep doctor`** — should stay all-green (again: through the installed launcher).
+6. **`plainkeep doctor`** — should stay all-green (same two ways of invoking it).
 
 ### Conventions
 

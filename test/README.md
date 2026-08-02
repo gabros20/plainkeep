@@ -163,16 +163,20 @@ test/
 ## The first real implementation
 Stage-1 search now exists for real (not just modeled): `../plainkeep` (dispatcher) + `../bin/index/`,
 `../bin/search/`, `../bin/lib/indexlib.py` (FTS5 + wikilink-graph engine), over `../content/`.
-Try it — **not** with `./plainkeep`. Since ADR-017 the checkout's own launcher refuses to dispatch
-against the checkout (exit 5: a vault is data, an engine is code). Install the engine, then run it:
+Try it — but **not** as a bare `./plainkeep index` from the checkout. Since ADR-017 the checkout's
+own launcher refuses to dispatch against the checkout itself (exit 5: a vault is data, an engine is
+code). Give it a vault that is not this checkout and the same launcher works, live:
 
 ```sh
-python3 ../bin/lib/enginetree.py --install .. --force
-PK="$(python3 ../bin/lib/enginetree.py --print current)/plainkeep"
-"$PK" index && "$PK" search "webhook retry"
+PLAINKEEP_HOME=/tmp/pk-dev-vault ../plainkeep index
+PLAINKEEP_HOME=/tmp/pk-dev-vault ../plainkeep search "webhook retry"
 ```
 
-`run_search_impl.py` is its test. Rebuild rule: `rm -rf .index && "$PK" index`.
+(or install the engine — `python3 ../bin/lib/enginetree.py --install .. --force` — and dispatch
+through `"$(python3 ../bin/lib/enginetree.py --print current)"/plainkeep`; see CONTRIBUTING.md's
+"Run the engine you just edited" for when each loop is the right one.)
+
+`run_search_impl.py` is its test. Rebuild rule: `rm -rf .index` then re-run `index` the same way.
 
 ## Requirements
 Python 3.10+ (stdlib only). For the simulation: the `claude` CLI on `PATH` (or pass your own

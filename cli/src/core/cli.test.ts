@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { runCore, CORE_IDENTITY } from "./cli.js";
 import { EXIT_NOT_FOUND } from "./guardrail.js";
+import { EXIT_USAGE, VaultRefusal } from "./vaultroot.js";
 import { CORE_VERSION } from "./version.js";
 
 test("--version prints the core identity and exits 0", async () => {
@@ -47,6 +48,50 @@ test("a non-flag argv dispatches: an unknown verb is the gate's not-found (4)", 
       expect(r.stderr).toContain("unknown verb");
       expect(r.stderr!.split("\n")).toHaveLength(1);
     }
+  } finally {
+    if (prev === undefined) delete process.env.PLAINKEEP_HOME;
+    else process.env.PLAINKEEP_HOME = prev;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// `--vault` reaching a hidden `--core-*` probe must REFUSE, not be dropped.
+//
+// The probes are consumed only by test/run_core_parity.py, which always sets PLAINKEEP_HOME — so
+// silently discarding the selector costs nothing today and is still the wrong failure mode: it makes
+// `plainkeep-core --vault X --core-gate capture foo` answer for whatever root PLAINKEEP_HOME happens
+// to name while the caller believes it answered for X. For the ONE flag this task exists for, an
+// unimplemented position must be a refusal and not a silent default. (Spec review MINOR-4.)
+//
+// `--version` and `--core-selftest` are deliberately NOT in this list: `plainkeep --vault work
+// --version` is a documented identity probe that ignores the selection, and the parity oracle pins
+// that shape on both dispatchers.
+test("--vault on a hidden --core-* probe REFUSES (2), never silently ignored", async () => {
+  const prev = process.env.PLAINKEEP_HOME;
+  const home = mkdtempSync(path.join(tmpdir(), "pk-core-vaultprobe-"));
+  markVault(home);
+  process.env.PLAINKEEP_HOME = home;
+  try {
+    for (const argv of [
+      ["--vault", "work", "--core-gate", "capture", "foo"],
+      ["--vault", "work", "--core-resolve", "capture"],
+      ["--vault", "work", "--core-api"],
+    ]) {
+      // Thrown, not returned, exactly as `--vault` with no value already is: main.ts maps a
+      // VaultRefusal to its own code and stderr, and collapsing it into a CoreResult here would
+      // make this refusal the only one in the file that does not travel that path.
+      let caught: unknown;
+      try {
+        await runCore(argv);
+      } catch (e) {
+        caught = e;
+      }
+      expect(caught).toBeInstanceOf(VaultRefusal);
+      expect((caught as VaultRefusal).code).toBe(EXIT_USAGE);
+      expect((caught as VaultRefusal).message).toContain("--vault");
+    }
+    // and the same probes without a selector still work exactly as before
+    expect((await runCore(["--core-resolve", "definitely-not-a-verb"])).code).toBe(4);
   } finally {
     if (prev === undefined) delete process.env.PLAINKEEP_HOME;
     else process.env.PLAINKEEP_HOME = prev;

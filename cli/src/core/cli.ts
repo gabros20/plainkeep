@@ -13,7 +13,7 @@ import {
   sourceOf,
 } from "./resolver.js";
 import { mainCli } from "./guardrail.js";
-import { takeVaultSelector } from "./vaultroot.js";
+import { takeVaultSelector, VaultRefusal } from "./vaultroot.js";
 
 export interface CoreResult {
   stdout?: string;
@@ -115,6 +115,17 @@ export function runCore(rawArgv: string[]): CoreResult | Promise<CoreResult> {
   // Test-only introspection flags (hidden, no help text) consumed by test/run_core_parity.py. They
   // expose the ported resolver so a Python-owned differential harness can prove TS ≡ Python.
   if ((INTERCEPTED_FLAGS_ALWAYS as readonly string[]).includes(head)) {
+    // None of these three honour a vault SELECTION — they answer for whatever PLAINKEEP_HOME names,
+    // which is what their only caller (the parity harness) always sets. So a selector that reaches
+    // here is REFUSED rather than dropped: silently ignoring the one flag whose entire purpose is to
+    // steer which vault gets read and written is the wrong failure mode, and it is worse than an
+    // unimplemented one because the caller cannot tell the difference from a green exit.
+    if (selector !== null) {
+      throw new VaultRefusal(
+        `plainkeep: --vault is not honoured by ${head} — these probes answer for PLAINKEEP_HOME ` +
+          `only. Set PLAINKEEP_HOME to the vault you mean.`,
+      );
+    }
     if (head === "--core-resolve") {
       // Mirrors resolver.py __main__: print the resolved run.py path (exit 0) or nothing (exit 4).
       const p = runPy(argv[1] ?? "");

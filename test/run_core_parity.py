@@ -1428,13 +1428,36 @@ def _installed_manifest_checks(tmps: list[Path]) -> None:
     # (4) The engine's own VERSION is what the manifest reports, read as `<engine>/VERSION` —
     # `manifest.py:VERSION_FILE` is `BIN.parent / "VERSION"`, which is the line the plan section
     # calls load-bearing: move `bin/` without it and every plainkeep.json reports 0.0.0.
-    ver = _run([PY, "-c",
+    #
+    # `-I` (isolated) and a deliberately hostile cwd, together, are the check. Without `-I` the
+    # spawned interpreter puts its CWD at sys.path[0], ahead of the `<engine>/bin` this passes in —
+    # and `bin/lib/` has no `__init__.py` (a namespace package) while `test/lib/` has one (a regular
+    # package). Python's path scan remembers a namespace portion and keeps looking, and the first
+    # REGULAR package wins, so from `test/` the import resolved to the SUITE's own `lib` and the check
+    # failed with `cannot import name 'manifest' from 'lib'` — a false red about the engine, produced
+    # entirely by where the contributor happened to be standing (`cd test && python3 run_all.py`,
+    # which test/README.md presents as normal, exited 1; the repo root exited 0).
+    #
+    # So cwd is PINNED to `test/`, the directory that does the shadowing: this check must read the
+    # INSTALLED engine and nothing else, and running it from the one place that can prove that is how
+    # the property stays proved. Drop the `-I` and this goes red from every directory, not just one.
+    ver = _run([PY, "-I", "-c",
                 "import sys;sys.path.insert(0,sys.argv[1]);"
                 "from lib import manifest;print(manifest._engine_version())",
-                str(root / "bin")], renv)
+                str(root / "bin")], renv, cwd=str(REPO / "test"))
     check("[manifest] manifest.py reads <engine>/VERSION, not 0.0.0",
           ver.stdout.strip() == ENGINE_VERSION,
           f"got {ver.stdout.strip()!r} want {ENGINE_VERSION!r} err={ver.stderr[:200]!r}")
+    # ...and the same question asked from the repo root gives the same answer. The bug was that these
+    # two disagreed; one of them alone cannot show that they now agree.
+    ver_root = _run([PY, "-I", "-c",
+                     "import sys;sys.path.insert(0,sys.argv[1]);"
+                     "from lib import manifest;print(manifest._engine_version())",
+                     str(root / "bin")], renv, cwd=str(REPO))
+    check("[manifest] ...and the answer does not depend on the caller's cwd",
+          ver_root.stdout.strip() == ver.stdout.strip() == ENGINE_VERSION,
+          f"from test/={ver.stdout.strip()!r} from repo root={ver_root.stdout.strip()!r} "
+          f"want {ENGINE_VERSION!r} err={ver_root.stderr[:200]!r}")
 
 
 # --------------------------------------------------------------------------------------------------

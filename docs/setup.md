@@ -6,13 +6,37 @@ This guide shows how to finish setting up your vault after bootstrap. It is for 
 
 The bootstrap scripts handle L0. Run `script/get` and `script/setup` first; they:
 
-- Clone or wire `~/plainkeep` and put `plainkeep` on PATH.
+- **Install the engine** into `${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/` and
+  point a `current` symlink at it.
+- Put that installed launcher on PATH (`~/.local/bin/plainkeep` → `…/engine/current/plainkeep`).
 - Install shell completion.
 - Create `~/work` and `~/files`.
 - Track the template as a fetch-only `upstream` remote.
+- Mark + register the checkout as a **vault**.
 - Run `plainkeep doctor --init`.
 
 GitHub remote and push work is left to you.
+
+### The engine and the vault are two trees (ADR-017)
+
+Since Phase 2 Task 2, plainkeep's code does not live in the vault it edits. The engine is a
+versioned, **read-only** tree; the vault is your data. They must not overlap — an invocation where
+the data root IS the engine root, or either contains the other, is refused with exit 5.
+
+What that changes in practice:
+
+| You want to… | Do this |
+| --- | --- |
+| Run plainkeep | `plainkeep <verb>` (the installed launcher on PATH). Your checkout's own `./plainkeep` against that same checkout is the refusal above. |
+| See which engine is live | `plainkeep vault status` — it reports the vault, the engine, and whether they agree. |
+| Pull an engine fix | `script/update` (refreshes the SOURCE checkout, staged) then `script/setup --yes` (installs it and re-points `current`). Two steps on purpose: an update you have not installed cannot break a running vault. |
+| Roll back | `python3 <engine>/bin/lib/enginetree.py --activate <older-version>` — the previous versions are still installed. |
+| Add a capability | `plainkeep new verb <name>` — it scaffolds into `<vault>/plugins/local/`, which is yours and survives every engine upgrade. Editing the engine is not an option; it is read-only. |
+| Install engines somewhere else | export `PLAINKEEP_ENGINE_HOME`. It relocates the install ROOT only; it never steers where a running dispatch loads code from. |
+
+The cost, stated: a read-only tree cannot cache compiled Python beside its source, so each spawned
+verb re-compiles the shared library it imports — **+17.6 ms, +12.2%** measured on macOS arm64 /
+CPython 3.12 (ADR-017 Consequences).
 
 ### Migrating an existing `~/ops` vault
 
@@ -20,9 +44,12 @@ If you have an existing vault from before the opskit → plainkeep rename (ADR-0
 
 ```sh
 mv ~/ops ~/plainkeep                       # 1. move the vault itself
-ln -sf ~/plainkeep/plainkeep ~/dotfiles/bin/plainkeep   # 2. re-symlink the dispatcher onto PATH
-mv ~/plainkeep/.ops-engine-ref ~/plainkeep/.plainkeep-engine-ref  # 3. rename the engine-ref file
+mv ~/plainkeep/.ops-engine-ref ~/plainkeep/.plainkeep-engine-ref  # 2. rename the engine-ref file
+~/plainkeep/script/setup --yes             # 3. install the engine and re-point PATH at it
 ```
+
+Step 3 replaced a manual `ln -sf ~/plainkeep/plainkeep …` onto PATH. Since ADR-017 the thing on PATH
+is the INSTALLED engine's launcher, not the vault's — a vault has no launcher of its own.
 
 Then, in your shell profile, rename every exported `OPS_*` environment variable to its `PLAINKEEP_*`
 counterpart (e.g. `OPS_HOME` → `PLAINKEEP_HOME`, `OPS_VECTORS` → `PLAINKEEP_VECTORS`) and re-source

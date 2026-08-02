@@ -1,21 +1,29 @@
 # Raycast Script Commands — the first built frontend (Part 3.3)
 
 Zero-build [Raycast Script Commands](https://github.com/raycast/script-commands): plain bash, no
-extension to compile. Every command shells to `plainkeep` on `PATH` (fallback `$PLAINKEEP_HOME/plainkeep`), so the
+extension to compile. Every command shells to `plainkeep` on `PATH`, falling back to the activated
+engine's launcher (`${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/current/plainkeep`), so the
 guardrail and `.logs/` apply exactly as on the terminal — the frontend has **zero privileged
 access** and re-enters through the dispatcher, never importing `bin/lib`.
 
+The fallback used to be `$PLAINKEEP_HOME/plainkeep`. Since Phase 2 Task 2 a vault has no launcher of
+its own — it is data — so that path names nothing, and the engine's own launcher is what a frontend
+must reach for.
+
 ## Install
 
-1. Make sure `plainkeep` is on your `PATH` (or export `PLAINKEEP_HOME=~/plainkeep`).
-2. Raycast → *Extensions* → *Script Commands* → *Add Directories* → point it at this folder
-   (`~/plainkeep/frontends/raycast`).
+1. Run `script/setup`, which installs the engine and puts `plainkeep` on your `PATH`.
+2. Raycast → *Extensions* → *Script Commands* → *Add Directories* → point it at this folder inside
+   the ACTIVE engine (`$(plainkeep vault status --json | ...)` — or simply
+   `~/.local/share/plainkeep/engine/current/frontends/raycast`).
 3. The commands appear in Raycast root search: **Plainkeep Capture**, **Plainkeep Search**, **Plainkeep Task Add**,
    **Plainkeep Task List**, **Plainkeep Status**.
 
-Because this folder lives inside the engine boundary (`script/engine.txt`), improvements flow to you
-on `script/update` — but you can freely add your own `*.sh` alongside them (Raycast picks up every
-script in the directory).
+Because this folder is engine-owned (`enginetree.OWNED_TREES`, `script/engine.txt`), improvements
+arrive with the next installed engine version — and the `current` symlink means the Raycast
+directory you pointed at follows the upgrade with no reconfiguration. Your own `*.sh` do NOT belong
+here any more: an installed engine is read-only and is replaced wholesale on upgrade. Keep personal
+scripts in a directory of your own and add it to Raycast as a second source.
 
 ## Commands
 

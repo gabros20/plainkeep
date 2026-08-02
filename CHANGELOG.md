@@ -63,6 +63,34 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   says the same at the top.
 
 ### Changed
+- **BREAKING — plainkeep is now INSTALLED, and your vault is just your notes**
+  ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-017, Phase 2 Task 2). plainkeep's code used to live
+  inside the vault it edited: `~/plainkeep/bin/` was the engine, `~/plainkeep/plainkeep` was the
+  launcher, and updating plainkeep meant merging code into the same git repository that held your
+  notes. The engine now lives in its own versioned, **read-only** tree at
+  `~/.local/share/plainkeep/engine/<version>/`, with a `current` symlink saying which version is
+  live, and a vault contains nothing but your data.
+
+  **What you do once:** re-run `script/setup`. It installs the engine, points `plainkeep` on your
+  PATH at the installed launcher, and registers your checkout as a vault. Until you do, running your
+  checkout's own `./plainkeep` against that same checkout refuses with exit 5 and tells you this —
+  a vault and an engine may no longer be the same directory, because a tool that can edit itself
+  while acting on your notes is one bad write away from both being wrong.
+
+  **What you get.** A vault that holds only notes now works — so a second vault is just a folder
+  with a marker, and `plainkeep --vault work capture "…"` acts on it. Upgrading plainkeep is no
+  longer a merge into your notes: `script/update` refreshes the source, `script/setup` installs it,
+  and a bad version is rolled back by re-activating the previous one instead of by reverting commits
+  in the repository your notes live in. Scheduled jobs, the MCP server, `search`/`open`/`wiki`'s fzf
+  previews and the Raycast scripts all now invoke the installed launcher, so none of them can be
+  answered by an executable that happened to be sitting in a vault.
+
+  **What it costs.** A read-only engine cannot cache compiled Python beside its source, so each
+  spawned verb re-compiles the shared library it imports: **+17.6 ms per invocation, +12.2%**,
+  measured 25 interleaved runs on macOS arm64 / CPython 3.12. Writing a plugin is unaffected —
+  `plainkeep new verb <name>` still scaffolds into `<vault>/plugins/local/`, which is yours, survives
+  every engine upgrade, and is where a new capability belongs now that the engine is not editable.
+
 - **BREAKING — plainkeep now operates on REGISTERED vaults, and no longer guesses one**
   ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-014, Phase 2 Task 1b). A vault used to be "whatever
   directory `PLAINKEEP_HOME` names, or failing that, wherever the engine happens to be installed."

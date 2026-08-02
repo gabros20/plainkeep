@@ -8,7 +8,10 @@ Adding a *core* verb to the engine instead? Read [`CONTRIBUTING.md`](../CONTRIBU
 
 A plugin verb has the exact same shape as an engine verb: a folder with `run.py` + `cmd.json`.
 
-The only difference is where it lives. Core verbs resolve from `bin/`; plugin verbs resolve from `plugins/`.
+The only difference is where it lives — and since Phase 2 Task 2 those are two different TREES, not
+two directories in one. Core verbs resolve from the installed **engine** at
+`${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/bin/`, which is read-only and outside
+every vault. Plugin verbs resolve from `<vault>/plugins/`, which is yours.
 
 - `bin/` is reserved. The engine always wins, so a plugin can never shadow a core verb.
 - `plugins/` is yours. `script/update` never touches it, and it's version-controlled inside your vault.
@@ -106,7 +109,7 @@ Read this before installing anything.
 
 | Export | What it's for |
 |---|---|
-| `PLAINKEEP_HOME`, `WIKI`, `INBOX` | the filesystem roots |
+| `PLAINKEEP_HOME`, `WIKI`, `INBOX` | the filesystem roots — the SELECTED vault's, exported by the dispatcher |
 | `append_journal(line)` | the shared activity record — call it after any meaningful action |
 | `slugify`, `today`, `fm_field`, `link_targets` | slugs, dates, frontmatter reads, wikilink extraction |
 | `classify(action, path…)` | the Iron Law seam — gives your verb the same path-wall + transmit-block a core verb has; call it before any write you compute yourself |
@@ -129,7 +132,26 @@ Read this before installing anything.
 
 ## Gotchas
 
-- **Don't put a verb in `bin/`.** `script/update` owns that path and will merge upstream over it. That's exactly what `plugins/local/` is for, and `plainkeep new verb` refuses to scaffold into `bin/`.
+- **You cannot put a verb in the engine's `bin/`.** It is a read-only tree outside your vault, it is
+  replaced wholesale by the next `script/setup`, and a `bin/` sitting inside a vault is inert — the
+  resolvers do not look there. `plugins/local/` is where a verb of yours belongs, and `plainkeep new
+  verb` scaffolds it there.
+- **Bootstrap `lib` through `$PLAINKEEP_ENGINE`, never through `$PLAINKEEP_HOME`.** Your verb lives
+  in the vault and the engine does not, so its own `__file__` cannot find `lib` — this is the one
+  thing a plugin genuinely cannot work out for itself. The dispatcher exports `PLAINKEEP_ENGINE` for
+  exactly this, and REPLACES any value the caller had, so a plugin loading through it loads the
+  engine that gated it. The scaffold does this for you:
+
+  ```python
+  _ENGINE = os.environ.get("PLAINKEEP_ENGINE")
+  if not _ENGINE:
+      sys.stderr.write("run this through `plainkeep <verb>`\n"); raise SystemExit(2)
+  sys.path.insert(0, str(Path(_ENGINE) / "bin"))
+  from lib import api
+  ```
+
+  There is deliberately no fallback: a plugin reached outside a dispatch has not been gated either,
+  and guessing a path is how a verb ends up importing a `lib` nobody validated.
 - **Re-enter, never import.** If your verb needs another verb, shell out to `plainkeep <verb> --json`. Don't import its code — the guardrail must see every call.
 - **Declare `output` and `hints`.** They're what agents and the MCP tool list see. A verb without them is invisible to half the ecosystem.
 - **One pack name = one directory** under `plugins/`. The resolver reads `plugins/<pack>/<verb>/`, so nesting deeper won't resolve.

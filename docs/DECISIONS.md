@@ -926,3 +926,112 @@ stops if it would leave the **filesystem** (an `in/` that is its own mount), bec
 is `link`ed onto the destination and that link must not fail EXDEV; in that case staging falls back
 beside the destination and the old residue returns, which is the pre-existing behaviour and never
 worse than it.
+
+## ADR-017 — the engine is a versioned, immutable tree outside every vault (2026-08-02)
+**Status.** **Accepted** (2026-08-02). It implements ADR-014 D2 and D6 rather than deciding anything
+new about them: D6 already said the engine ships as a versioned immutable *file tree* exec'd by
+installed path, and D2 already named `PLAINKEEP_ENGINE` and its ownership. What this entry records is
+the part D2/D6 left to implementation — **where** the tree lives, **how** the rule that caller input
+must not control it is made true, and what turning ADR-014 D3's disjointness check on actually costs.
+Basis: Phase 2 Task 2, implemented against a fully green suite; every claim below was measured or
+mutation-tested rather than argued.
+
+**Decision.**
+
+1. **The install location is `${XDG_DATA_HOME:-$HOME/.local/share}/plainkeep/engine/<version>/`, with
+   a `current` symlink beside the versioned directories.** XDG-correct, and next to
+   `$XDG_CONFIG_HOME/plainkeep/` where ADR-014 already put the vault registry. `PLAINKEEP_ENGINE_HOME`
+   relocates the install ROOT; it is read by the installer surface only (`--install`, `--activate`,
+   `--print`) and **never by a dispatch**, which is what lets the hermetic test suite install engines
+   into temp directories without opening a second way to steer where code is loaded from.
+
+2. **`PLAINKEEP_ENGINE` is an OUTPUT, never an input, and that is how D2's rule is satisfied.** The
+   engine root is derived from where the code is — `Path(__file__).resolve().parents[2]` in
+   `bin/lib/enginetree.py`, `realpath(execPath)/../..` in the core, a `$0` symlink chain ending in
+   `cd -P` in the bash floor — and **nothing that decides where to load code from ever reads the
+   variable**. Both dispatchers OVERWRITE it at their entry point, before any flag branch and before
+   discovery. The alternative — read it and validate it — was rejected: a validated variable is still
+   a variable, and the failure it admits (a caller naming a well-formed engine tree of their choosing)
+   is exactly the one D2 forbids.
+
+   Its consumers are the processes that genuinely cannot self-locate: a PLUGIN verb under
+   `<vault>/plugins/<pack>/<verb>/`, a frontend script, a scheduled job. `templates/verb/run.py` — the
+   scaffold every plugin starts from — is the load-bearing one; it bootstrapped `lib` through
+   `$PLAINKEEP_HOME/bin`, so without this variable every scaffolded plugin would have died on its
+   import the moment the engine moved.
+
+3. **The ownership manifest is executable, not descriptive.** `enginetree.OWNED_TREES` /
+   `OWNED_FILES` is simultaneously what `--install` copies and what `verify()` checks; an install
+   that fails verification is never renamed into place and never activated. Measured against the
+   tree at implementation time: **35 verb directories** (each with `run.py` AND `cmd.json`) and
+   **24 `bin/lib` modules** — the plan section's "×34 / ×19" was stale before this task began, and
+   the counts are pinned in the suite so a silent shrink reddens.
+
+4. **An installed engine is read-only (dirs 0555, files 0444/0555).** That is the property that makes
+   "immutable" mean something: the manual this task rewrote used to describe editing engine files in
+   place, and now there is nothing to edit. The measured cost is stated in Consequences.
+
+5. **ADR-014 D3's disjointness check turns ON here** — the data root may not be inside the engine
+   root and the engine root may not be inside the data root, refused with **exit 5** (`EXIT_DENY`),
+   the same code as the walled-off/cloud-sync location verdict it sits beside and for the same
+   reason: it is a refusal about WHERE, not a missing selection (which is 2). Task 1b defined the
+   rule and deliberately did not enforce it, because while the engine was `<vault>/bin` the rule was
+   unsatisfiable and would have refused every existing vault. A sequencing split, not a legacy
+   exception.
+
+6. **Task 1b's `require_engine(sel)` is INVERTED, not deleted.** It asked whether the selected VAULT
+   carried a copy of the engine — a question that existed only because Phase 1 ran the engine out of
+   the vault it acted on. The seam is kept (it is the one function both dispatchers run, which is
+   what makes their refusals byte-identical rather than two spellings that drift) and its subject
+   moves to the ENGINE tree. Deleting it outright would have been acceptable; keeping the old
+   question would not, because it refuses every data-only vault — the shape Task 5's `init` exists to
+   produce.
+
+7. **`script/setup` installs the engine and puts the INSTALLED launcher on PATH.** This is the
+   explicit answer to the contributor case ADR-014 raised and left open. The checkout stays both
+   things — the engine SOURCE and a registered data vault — and the two roles stop being the same
+   directory. `script/update` refreshes the source; installing it is a second, separate step.
+
+**Alternatives.**
+(a) **Read and validate `PLAINKEEP_ENGINE` instead of overwriting it.** Rejected per Decision 2.
+(b) **Put the engine under `~/.plainkeep/engine/`.** Rejected: it invents a dotfile home beside the
+XDG dirs ADR-014 already committed to for the registry, for no gain.
+(c) **Enforce disjointness in Task 1b with a legacy exception for `<vault>/bin`.** Rejected in the
+plan and re-affirmed here: a silent exception for the one shape that violates the rule defeats the
+rule, where a sequencing split does not.
+(d) **A `plainkeep engine` VERB rather than a module CLI.** Deferred, not rejected. A verb changes the
+verb surface, `plainkeep.json`, the completion catalogs and the help output, none of which this task
+was scoped to move; `bin/lib/enginetree.py --install|--activate|--verify|--print` is what
+`script/setup` and the harness call today.
+
+**Consequences.**
+- **It buys** the thing Phase 2 exists for: a vault is data. A vault holding only notes now
+  dispatches (all 271 checks in `test/run_discovery.py` run against data-only vaults), an engine
+  upgrade is not a merge into somebody's notes, and a rollback is re-activating a previous version.
+  It also closes a hole nobody had named: `resolver.ts` derived engine `bin/` as `<home>/bin`, so a
+  vault that happened to carry `bin/capture/` had it resolved as an `engine` verb — the one source a
+  plugin is forbidden to shadow.
+- **It costs a break for anyone dispatching a vault's own launcher against that vault**, which is
+  what `script/setup` produced before this task and therefore what every existing install looks
+  like. It is exit 5 with a remediation naming the installer, not a silent misresolution — but it is
+  a break, and re-running `script/setup` is the migration.
+- **CPython cannot write `__pycache__` into a read-only tree**, so an installed engine re-compiles
+  the `bin/lib` modules it imports on every invocation. **Measured** — macOS arm64 / CPython 3.12,
+  the same tree installed twice (once sealed, once `--writable`), both warmed three times, then 25
+  runs of `plainkeep vault list --json` through the bash floor INTERLEAVED with alternating order:
+  **161.6 ms median read-only against 144.0 ms writable, +17.6 ms / +12.2%** (writable min/max
+  141.1/151.3, read-only 158.5/172.5; the writable tree had 7 `.pyc` files after warm-up, the sealed
+  one 0). `.orchestrate/raw/task-p2-2-pycache-bench.log`. It is paid by every spawned Python verb,
+  and on the compiled-core path it is paid by the discovery spawn and the verb rather than by the
+  core's own work. The fix, if it is ever worth taking, is `PYTHONPYCACHEPREFIX` pointing at a cache
+  directory outside the tree; it is NOT taken here because it adds a third location to reason about
+  for a cost smaller than the discovery spawn ADR-014 already accepted (+28.8 ms). Recorded so the
+  next person measures rather than rediscovers.
+- **`PLAINKEEP_ENGINE` becomes public API for plugins.** A plugin bootstraps `lib` through it and has
+  no fallback; a plugin invoked outside a dispatch refuses with exit 2 rather than guessing a path.
+  That is deliberate — a plugin reached outside a dispatch has not been gated either.
+- **Carried open, deliberately unmeasured**: no engine has been installed on a machine other than
+  this one, so the XDG default path is exercised only through `PLAINKEEP_ENGINE_HOME` overrides in
+  the suite plus one manual end-to-end run; multi-version rollback (`--activate <older>`) has unit
+  coverage but no field use; and `plainkeep plugin`'s trust ceiling has not been re-examined against
+  a plugin that now imports `lib` through an env var the dispatcher sets.

@@ -294,3 +294,45 @@ fixing it needs.
   (what an installed engine contains vs what `script/update` refreshes into a checkout). Nothing
   checks that a runtime-owned path appears in at least one of them — which is exactly how
   `templates/verb` went stale in every existing checkout until this task.
+
+## The plugin SDK + dependency contract (Phase 2 Task 3, ADR-018)
+
+Registered by the r1 fix wave from the deferred MINOR/INFO list of `.orchestrate/review-task-p2-3-r1.md`.
+The wave's three BLOCKING/IMPORTANT findings are fixed and are NOT here; everything below was
+deliberately left. Each was reproduced by the reviewer.
+
+- **`bin/plugin/run.py` (`cmd_sync`, the `lock["overlay"]["packs"]` write)** — `plugin sync <one-pack>`
+  overwrites `overlay.packs` with only that pack, losing the record of what every *other* pack's
+  declarations put in the shared overlay. No current consumer reads that key, so nothing misbehaves
+  today; the audit trail is simply incomplete after a single-pack sync. The `contents` key the fix
+  wave added is read back off the overlay itself and IS whole-overlay, so the on-disk truth is
+  recorded either way.
+- **`bin/plugin/run.py` (`cmd_sync`, `names = [a for a in argv if not a.startswith("-")]`)** — `sync
+  foo bar` silently syncs `foo` and ignores `bar`. The fix wave made *unknown flags* a refusal but
+  deliberately did not touch positional handling, which is a separate (and pre-existing) shape; a
+  caller who names two packs gets one of them with no word said.
+- **`bin/lib/pluginenv.py` (`scrub_sdk_path`)** — removes EVERY occurrence of `<engine>/bin` from
+  `PYTHONPATH`, including one a caller deliberately exported before the dispatch. The scrub cannot
+  currently tell its own injected entry from an identical inherited one.
+- **`templates/verb/run.py`** — a newly scaffolded plugin keeps `sys.path.insert(0, …)`, so the ENGINE
+  wins for it, while an unmodified old plugin gets plugin-wins under `PYTHONPATH`. The two precedence
+  regimes now coexist and only the old one is warned about (ADR-018 D3 pins which way each goes, so a
+  change is noticed, but the divergence itself is unresolved).
+- **The overlay entry stays on `PYTHONPATH` for descendants at any depth** (disclosed in ADR-018 D2
+  and pinned by a test): a python grandchild with nothing to do with plainkeep can import from a
+  pack's dependency overlay.
+- **`bin/lib/pluginenv.py` (`sdk_shadows`)** — scans one level (`<pack>/<verb>/lib`). A
+  `$PLAINKEEP_PATH` root nested one level deeper than the resolver's "the root itself is the pack"
+  shape would be missed by the shadow preflight.
+- **`test/run_pluginsdk.py`** — the whole suite runs `PLAINKEEP_CORE=off`. Core coverage for the
+  plugin spawn rests entirely on the parity cells in
+  `test/cases/core-parity/dispatcher.json` (`plugin-spawn-environment`, and now
+  `dependency-overlay-is-not-a-pack`).
+- **`test/run_pluginsdk.py` (the two installed-engine cases)** — they `skip()` rather than fail if the
+  installer breaks, so an installer regression surfaces here as a SKIP rather than a red check.
+- **MCP can supply `--yes` for any confirm-class `plugin` subcommand.** `bin/mcp/run.py`'s `_argv_from`
+  passes the free-form `args` array through verbatim and nothing strips `--yes`, so an agent can
+  self-confirm `plugin add`/`trust`/`remove`/`backup`/`sync`. Pre-existing and not a Task 3
+  regression — but it is what made the (now closed) `--pip-arg` hole reachable with no human present,
+  and no test pins that `--yes` cannot be smuggled. **This is the one item on this list with a
+  security consequence, and it is the one worth doing first.**

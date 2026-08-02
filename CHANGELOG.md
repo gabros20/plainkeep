@@ -77,13 +77,19 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 - **New — plugins can declare their dependencies, and they survive an engine update**
   ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-018, Phase 2 Task 3). A pack's `plugin.json` may now
   carry `"dependencies": ["httpx>=0.27"]`, and `plainkeep plugin sync <name> --yes` installs them into
-  `<vault>/plugins/.deps/` — **in your vault, not in the engine**, so the next engine update (which
+  `<vault>/.plugin-deps/` — **in your vault, not in the engine**, so the next engine update (which
   replaces the engine wholesale) leaves them exactly where they were. Declared only: nothing is ever
   guessed from your imports, and a declaration that could steer pip (a flag, a URL, a local path) is
   refused. A missing module now says which pack wanted it and whether it was declared, instead of
   printing a traceback. Anything you previously `pip install`ed into `<vault>/.venv` still works
   unchanged; declaring it is what makes it travel with the vault. Adding a dependency in an update
-  asks you to re-trust the pack, like any other growth in what it can do.
+  asks you to re-trust the pack, like any other growth in what it can do. The overlay sits at the
+  vault ROOT rather than under `plugins/`, because `plugins/` is the directory verbs are discovered in
+  — an installed package must never be able to become a runnable `plainkeep <verb>`. `sync` takes only
+  `--no-index` and `--find-links=<local dir>` beyond `--yes` (for an offline wheelhouse) and refuses
+  any other pip argument, so nothing but what a pack declared can be installed; what actually landed
+  is recorded in `plugins.lock.json`. If you already have a `plugins/.deps/` from an earlier build,
+  nothing reads it — delete it and re-run `plainkeep plugin sync --yes`.
 - **BREAKING — plainkeep is now INSTALLED, and your vault is just your notes**
   ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-017, Phase 2 Task 2). plainkeep's code used to live
   inside the vault it edited: `~/plainkeep/bin/` was the engine, `~/plainkeep/plainkeep` was the

@@ -1152,8 +1152,10 @@ snapshot could not detect the break: the question is not what `lib.api` exports,
    packages the pack declared, and its own helper scripts have the same claim on them. **What remains
    open, and is pinned by a test rather than left as prose:** a child spawned BEFORE the SDK import
    does inherit `<engine>/bin`, and with it 35 importable top-level namespace packages (`models`,
-   `files`, `index`, …). `PLAINKEEP_PLUGIN_PACK` is not scrubbed at all — it is small, inert, and it
-   is what makes a missing-dependency refusal able to name the pack.
+   `files`, `index`, …). `PLAINKEEP_PLUGIN_PACK` is not scrubbed from a plugin's own descendants
+   — it is small, and it is what makes a missing-dependency refusal able to name the pack — but
+   it IS removed for a verb the resolver did not answer `plugin:<pack>` for (see the amendment
+   below).
 
 3. **The precedence inversion is REAL, silent, and is pinned rather than fixed.** `sys.path[0]` is the
    script's own directory and precedes every `PYTHONPATH` entry. The old scaffold's `insert(0, …)`
@@ -1169,7 +1171,7 @@ snapshot could not detect the break: the question is not what `lib.api` exports,
    carried name/version/min_ops_version/api/verbs, and the lock entry recorded none. So this is a
    scope decision, and the scope is: **declared** in `plugin.json` (never inferred from imports),
    **recorded** in `plugins.lock.json`, **installed as an overlay** (`pip install --target
-   <vault>/plugins/.deps`) which both dispatchers prepend to a plugin spawn's `PYTHONPATH`.
+   <vault>/.plugin-deps`) which both dispatchers prepend to a plugin spawn's `PYTHONPATH`.
 
    **"Re-applied when an engine update creates a fresh environment" is satisfied STRUCTURALLY rather
    than by a re-install step**: the overlay is vault-local and was never part of the engine
@@ -1213,3 +1215,47 @@ snapshot could not detect the break: the question is not what `lib.api` exports,
   version recorded and checked); there is no `sync --check` or garbage collection of packages a pack
   no longer declares; `$PLAINKEEP_PATH` packs are scanned by the shadow preflight but have no
   lockfile, so they can declare nothing.
+
+### Amendment (fix wave r1, review of Task 3) — three corrections
+
+1. **The overlay moved OUT of `plugins/`: `<vault>/plugins/.deps/` → `<vault>/.plugin-deps/`.** As
+   originally sited it was inside the directory both resolvers ENUMERATE as packs, and that
+   enumeration appended every subdirectory. So every distribution `plugin sync` unpacked became a
+   candidate pack: an ordinary pure-python wheel that ships `<pkg>/run.py` resolved as the verb
+   `<pkg>`, in both dispatchers, attributed to a pack named `.deps` that `plugins.lock.json` never
+   recorded, `plugin list` never showed and no user consented to — and published through
+   `plugin_names()` to help, completion, the TUI and MCP. The module comment asserted that the
+   resolver skipped it; nothing made that true and no test asked. The fix is structural rather than a
+   rule: pip content is no longer inside the tree that is enumerated. Both resolvers additionally skip
+   dot-prefixed entries under `plugins/` — the SECOND line, for vaults that already carry the pre-move
+   directory. The acceptance test is that a wheel CANNOT be dispatched (`test/run_pluginsdk.py`, plus
+   the `dependency-overlay-is-not-a-pack` parity case), not that a filter exists.
+
+2. **`--pip-arg` is gone.** It spliced a caller's string into pip's argv AHEAD of the `--` terminator,
+   so a bare word was a positional REQUIREMENT: a package no pack declared could be installed onto
+   every plugin verb's `PYTHONPATH` while the command reported only the declared ones and the lockfile
+   recorded nothing about it, and `--index-url=` pointed pip at any host. `DEP_RE` — the consent gate
+   D4 rests on — was bypassed entirely, and `bin/mcp/run.py` passes a free-form `args` array through
+   verbatim, so the channel needed no human. D4's justification ("a human on the command line can
+   already run pip directly, so the flag adds no authority") was true for a human and false for the
+   MCP surface, which is the surface this was regenerated into `plainkeep.json` to expose. It is
+   replaced by two options this file translates itself — `--no-index` and `--find-links=<existing
+   local dir>`, for an air-gapped wheelhouse — with everything else refused rather than ignored.
+   Neither can add a requirement; neither can steer an index. The lockfile's `overlay` entry now
+   records the requirements handed to pip, every option that reached it, and the distributions
+   actually present afterwards (read off their `.dist-info`), so the overlay's contents can be audited
+   against the declarations. NOT closed, and registered as a follow-up instead: MCP can still supply
+   `--yes` for any confirm-class plugin subcommand. That is pre-existing and not this task's
+   regression, but it is what made this reachable with no human.
+
+3. **`PLAINKEEP_PLUGIN_PACK` is REMOVED for an engine verb, not merely not-added.** D2 left it
+   unscrubbed, and the engine-verb negative was only ever asserted from a FRESH dispatch — where the
+   variable was never present, so the assertion could not fail. A plugin verb that re-enters the
+   dispatcher (the documented pattern) passes the marker to every descendant, and `pluginenv.attach()`
+   is gated on nothing else: any descendant that imports `lib.api` installs the missing-dependency
+   excepthook and reports its OWN `ModuleNotFoundError` as that pack's fault. A shell `export` armed
+   the same hook for everything after it. The exit code was unaffected, so this was a wrong-MESSAGE
+   bug rather than a wrong-outcome one. The spawn contract is now a REPLACEMENT: the floor `unset`s
+   the variable in the `else` branch, `spawnEnv` returns an explicit deletion for the engine-verb
+   branch (applied with `delete` in `spawnVerb`), and the parity cell runs `v_engenv` with the marker
+   preset in the caller's environment.

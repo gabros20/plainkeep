@@ -66,14 +66,26 @@ one from your imports:
 ```
 
 ```sh
-plainkeep plugin sync greeter --yes      # installs them into <vault>/plugins/.deps/
+plainkeep plugin sync greeter --yes      # installs them into <vault>/.plugin-deps/
 plainkeep plugin sync --yes              # every installed pack
 ```
 
 The overlay lives in **your vault**, not in the engine. That is the point: the engine is a versioned,
 read-only tree that gets replaced wholesale by an update, and anything installed *into* it would be
-gone with it. Both dispatchers put `plugins/.deps/` on a plugin verb's `PYTHONPATH` at spawn time, so
-an engine update re-applies your dependencies by doing nothing at all. The one thing that invalidates
+gone with it. Both dispatchers put `.plugin-deps/` on a plugin verb's `PYTHONPATH` at spawn time, so
+an engine update re-applies your dependencies by doing nothing at all.
+
+The overlay sits at the vault ROOT, not under `plugins/`, and that placement is load-bearing:
+`plugins/` is the directory the resolver enumerates as packs, so an overlay inside it made every
+installed distribution a candidate verb — a wheel that happens to ship `<pkg>/run.py` was dispatchable
+as `plainkeep <pkg>`. If your vault still has a `plugins/.deps/` from an earlier version, nothing
+reads it: delete it.
+
+Only the declarations in `plugins.lock.json` reach pip. `sync` takes exactly two options beyond
+`--yes` — `--no-index` and `--find-links=<local dir>`, for an air-gapped wheelhouse — and refuses
+anything else rather than passing it through, because an arbitrary pip argument is a way to install a
+package no pack ever declared. What actually landed is recorded back into the lockfile's `overlay`
+entry, so the overlay's contents can be audited against the declarations. The one thing that invalidates
 the overlay is the **interpreter** changing underneath it (a `--target` install can carry compiled
 extensions); `plainkeep doctor` says so, and `plugin sync --yes` rebuilds it.
 
@@ -130,7 +142,7 @@ plainkeep plugin remove greeter --yes               # delete dir + lock entry
 plainkeep plugin sync greeter --yes                 # install its declared dependencies into this vault
 ```
 
-`plugins/.deps/` itself is a rebuildable cache — gitignore it; `plugins.lock.json` is what you commit.
+`.plugin-deps/` itself is a rebuildable cache — gitignore it; `plugins.lock.json` is what you commit.
 
 Every install and trust decision is recorded in the committed `plugins/plugins.lock.json` (resolved commit sha + accepted risk ceiling). Your vault's plugin state stays reproducible and auditable.
 
@@ -170,7 +182,7 @@ Read this before installing anything.
 | `plainkeep plugin trust <name> --yes` | lift the ceiling to the pack's declared risks |
 | `plainkeep plugin update <name> --yes` | explicit re-pin; refuses to cross `min_ops_version` |
 | `plainkeep plugin remove <name> --yes` | delete the dir + lock entry |
-| `plainkeep plugin sync [<name>] --yes` | install declared `dependencies` into `plugins/.deps/` |
+| `plainkeep plugin sync [<name>] --yes [--no-index] [--find-links=<dir>]` | install declared `dependencies` into `.plugin-deps/` |
 
 ---
 

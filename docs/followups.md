@@ -275,7 +275,7 @@ fixing it needs.
   when someone remembers they exist.
 - **ADR-019's own detection rule is not enforced by anything.** Nothing requires a new gate to ship
   with a call-site mutation showing it red, which is precisely the shape ADR-019 names — and it would
-  be the sixth instance if it were claimed as enforced. *Stated rather than solved: the honest
+  be the next instance if it were claimed as enforced. *Stated rather than solved: the honest
   mechanism is a reviewer's question ("show me it red"), and this repo has no way to require one. A
   weaker but real version is available and not taken — a `run_all.py` gate that every suite added
   after this date carries a recorded RED measurement in its module docstring, which checks that

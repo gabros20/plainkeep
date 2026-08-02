@@ -518,7 +518,8 @@ says so at the top of its own file, which is where a maintainer stands when it g
 > a release, and its `sed` parser had never been exercised at all. Phase 2 Task 7 moved that rule
 > into `test/run_uirelease.py`, which the offline batch runs on every push and which proves on every
 > run that it goes red on each way the three can disagree; the workflow now calls it with the tag.
-> The pattern — five instances of it in this phase alone — is written up as **ADR-019** below.
+> The pattern — six instances of it in this phase alone, one of them a security hole rather than a
+> dead path — is written up as **ADR-019** below.
 >
 > One related deferral in the bullet list above is also closed by that task: `check:bun` **does** now
 > gate `build:ui`, so the artifact a floor user installs can no longer be built by a bun older than
@@ -1244,12 +1245,12 @@ snapshot could not detect the break: the question is not what `lib.api` exports,
 ## ADR-019 — the unwired rule: a guardrail nothing consults, and how to detect one (2026-08-02)
 
 **Status.** **Accepted** (2026-08-02). It decides nothing about the product; it names a failure
-class this repo has now shipped **five** times in two phases and fixes what a task must produce
-before it may call a rule enforced. Basis: the five instances below, each re-read at HEAD while
+class this repo has now shipped **six** times in two phases and fixes what a task must produce
+before it may call a rule enforced. Basis: the six instances below, each re-read at HEAD while
 writing this entry, each with the measurement that closed it. Written in Phase 2 Task 7 because that
-task hit the sixth instance — a release gate that had never been executed at all.
+task hit the seventh — a release gate that had never been executed at all.
 
-**Context — five times, and not once by the same mechanism.**
+**Context — six times, and not once by the same mechanism.**
 
 | # | the rule | what was true | how it was found | measurement |
 |---|---|---|---|---|
@@ -1258,8 +1259,9 @@ task hit the sixth instance — a release gate that had never been executed at a
 | 3 | `originals-in-delete-denied` — the wall's delete verdict | shipped with **no enforcing seam**. `classify({"kind": "delete", …})` returned DENY correctly; nothing asked it. `plainkeep files ingest` renamed a filed original out of `in/` with **rc 0** | Task 1c quality review r1, IMPORTANT-2 | before: `in/ before ['brief.pdf'] → after ['brief-2.pdf']`, rc 0, no wall, no exit code, no trace |
 | 4 | the delete **ratchet** — the gate written to stop #3 recurring | **passed while its own guard was deleted.** `'"kind": "delete"' in seam and "_guard_delete" in seam` is satisfied by the helper's own `def` and docstring, so the check whose *name* claimed the property was the one that could not fail | Task 1c fix wave r3, NEW-4 | with both call sites removed and the helper kept: `run_pathwall.py → 15 passed, 0 failed`, all three delete-ratchet checks **green** |
 | 5 | the engine **seal** — "immutability is enforced, not asserted" | **written but never verified.** `verify()` checked presence and never mode; `require_intact()` checked four paths exist; `doctor` inherited the blind spot; `_chmod_tree` swallowed every `OSError` | Task 2 quality review r1, IMPORTANT-5 | a `SIGKILL` in the rename→seal window leaves a **fully writable** engine that `--verify` calls OK, `doctor` calls complete, and every dispatch accepts — and `--install` then refuses as "already installed", so it persists |
+| 6 | the `.deps` overlay is not a plugin pack — "the resolver skips it for the same reason `plugin_names()` never invents a pack called `.deps`" (`bin/lib/pluginenv.py:53-56`) | **the rule never existed.** Both halves of that sentence are false: `_plugin_packs()` (`bin/lib/resolver.py:51-52`, and its port `cli/src/core/resolver.ts:96-98`) appends every subdirectory of `plugins/` with no dot filter, and the overlay was sited at `<vault>/plugins/.deps/` — inside it. **A declared dependency could install a new command** | Task 3 combined review r1, BLOCKING 1 | an ordinary pure-python wheel whose package directory holds a `run.py`, installed the sanctioned way (`plugin add` → `plugin sync --yes`), **DISPATCHED in both dispatchers**: `plainkeep zzrunner --yes` → executed from inside the dependency overlay on the bash floor **and** under `PLAINKEEP_CORE=require`; `plugin_names()` → `['.deps', 'p']`; `source_of('zzrunner')` → `'plugin:.deps'`; and `plugins.lock.json` packs → `['p']`, so `.deps` was never consented to and `plugin list` does not show it |
 
-And the sixth, which is why this entry exists rather than a sixth follow-up line: the `ui-v*` release
+And the seventh, which is why this entry exists rather than a seventh follow-up line: the `ui-v*` release
 pipeline's three-way version check (tag == the engine-owned pin == the constant compiled into
 `plainkeep-ui`) lived as an inline shell snippet in a **tag-triggered** workflow. Nothing but cutting
 a release could execute it, nothing ever did, and its `sed` parser — which yields the empty string on
@@ -1267,12 +1269,24 @@ a reformatted declaration, after which nothing is compared against nothing and t
 no test at all. In the same file, ADR-013's prose *about* that workflow stayed factually wrong for a
 whole phase and through the reviews of it.
 
-**The through-line is not carelessness.** Every one of the six was reviewed. Four were reviewed by
-people who had the rule's own source open. What they share is that **the failing region is the
-absence of something**, and absence has no line number to put a test on. A unit test of
-`classify()` exercises `classify()`; the defect was in `capture/run.py`, which does not mention it.
-That is the standing rule ADR-015 already recorded — *a gate that never exercises the failing region
-is a green test of nothing* — and five repeats say a standing rule was not enough.
+**Two variants, and the second is worse to find.** Instances 1–5 are a rule that **exists and is
+never called**: there is a function, it is correct, and no product path reaches it. Instance 6 is a
+rule that **never existed at all** — `pluginenv.py` asserted the resolver's behaviour in prose, and
+the resolver had no such behaviour to assert. The detection answer is identical either way (prove the
+product consults it, end to end), but the comment-only variant is harder to spot by *reading*,
+because there is no unused function to notice: nothing is dead, nothing is unreferenced, and a
+reviewer scanning for orphans finds nothing. The only thing that catches it is going to the code the
+comment describes and checking. Instance 6 is also the one with the sharpest consequence — not a dead
+code path but a **hole**: pip content became a dispatchable verb, attributed to a pack absent from
+`plugins.lock.json` and invisible to `plugin list`, in **both** dispatchers.
+
+**The through-line is not carelessness.** Every one of the seven was reviewed, five of them found
+only because a reviewer went looking for the *caller* rather than reading the rule. What they share
+is that **the failing region is the absence of something**, and absence has no line number to put a
+test on. A unit test of `classify()` exercises `classify()`; the defect was in `capture/run.py`,
+which does not mention it. That is the standing rule ADR-015 already recorded — *a gate that never
+exercises the failing region is a green test of nothing* — and six repeats say a standing rule was
+not enough.
 
 **Decision.**
 
@@ -1282,7 +1296,10 @@ is a green test of nothing* — and five repeats say a standing rule was not eno
    `plainkeep <verb>` through the real dispatcher and assert the exit code **and the filesystem**;
    run the workflow's own command line; drive the binary. The rejected form is any assertion that
    only shows the rule *would* answer correctly if asked. Instances 1, 3 and 5 all had that
-   assertion and all three shipped unwired.
+   assertion and all three shipped unwired. **A prose claim about another module's behaviour is a
+   rule too** — instance 6 is a comment asserting what the resolver does, and the correct response to
+   writing that sentence is a case that drives the resolver and observes it, in **both** dispatchers.
+   A claim that cannot be pointed at a test is a claim that should not be written as fact.
 
 2. **The detection technique is mutation of the CALL SITE, not of the rule.** Delete or neuter the
    *invocation* and require a product-level test to go red. This is what actually found the
@@ -1310,7 +1327,7 @@ is a green test of nothing* — and five repeats say a standing rule was not eno
 5. **The proof that the consumer calls it is itself a check.** Not a comment, not a convention. Task
    7's `test/run_uirelease.py` asserts that `.github/workflows/release-ui.yml` invokes it with the
    tag, that the workflow no longer carries a second copy of the comparison, and that `run_all.py`
-   lists the suite — because "we wired it up" is exactly the claim that was false five times.
+   lists the suite — because "we wired it up" is exactly the claim that was false six times.
 
 **Applied here, and measured.** `test/run_uirelease.py` is red at `5c4e641` (21 passed, 5 failed, 26
 checks) and green after the two product fixes and three wirings (26/26, from the repo root and from
@@ -1328,13 +1345,17 @@ builds and the artifact appears.
   because its subject is text, but instance 3's proof writes 199 fixture files and runs two real
   `ingest` processes. The rule is not "unit tests are bad" — it is that a unit test may not be the
   *last* word on whether a rule is enforced.
-- **This does not detect a rule that is called and wrong.** It detects a rule that is not called. The
-  five instances were all the second kind, which is why this entry is scoped to it; correctness of a
-  reached rule is what the validated-case oracle is for.
-- **A sixth instance would mean the detection rule itself is unwired**, which is the recursion worth
+- **This does not detect a rule that is called and wrong.** It detects a rule that is not called, and
+  a rule asserted about code that does not implement it. All six instances were one of those two;
+  correctness of a *reached* rule is what the validated-case oracle is for.
+- **The next instance would mean the detection rule itself is unwired**, which is the recursion worth
   saying out loud: nothing currently forces a new gate to carry a call-site mutation. That is
   registered in [`followups.md`](followups.md) rather than solved here, because the honest fix is a
   reviewer's question — *show me it red* — and this repo does not have a mechanism to require one.
+- **Instance 6 is fixed by Task 3's fix wave, not by this entry.** The smallest fix is the dot filter
+  `pluginenv._pack_roots()` already carries, applied in both dispatchers, plus a core-parity case
+  pinning that a verb directory under `plugins/.deps/` resolves in **neither** — demonstrated failing
+  against the `zzrunner` fixture first. This entry records the pattern; the hole is that task's.
 - **Naming.** "Unwired" rather than "dead": dead code is unreachable and harmless. An unwired rule is
   reachable, documented, tested, cited in an ADR, and enforcing nothing — which is worse than absent,
   because everyone downstream reasons as though it holds.

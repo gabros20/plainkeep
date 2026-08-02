@@ -746,8 +746,14 @@ def case_kill_matrix(tmp: Path) -> None:
     et(root, "--install", str(src), "--version", "1.0.0")
     et(root, "--update", str(src), "--version", "2.0.0")
     et(root, "--rollback")                       # 1.0.0 active again, 2.0.0 present but idle
+    fixture_ok = (root / "engine" / "2.0.0").is_dir() and active_version(root) == "1.0.0"
     check(f"kill@{stage}: fixture — the target version exists and is NOT the running one",
-          (root / "engine" / "2.0.0").is_dir() and active_version(root) == "1.0.0")
+          fixture_ok, f"dirs={sorted(p.name for p in (root / 'engine').iterdir())} "
+                      f"active={active_version(root)}")
+    if not fixture_ok:
+        # Report and stop, rather than raising out of the whole batch on the next line. A suite that
+        # dies on a broken fixture reports the crash instead of the damage (ADR-019 D3).
+        return
     unlock(root / "engine" / "2.0.0")
     (root / "engine" / "2.0.0" / "VERSION").unlink()          # make it fail verify() → re-staged
     r = et(root, "--update", str(src), "--version", "2.0.0", PLAINKEEP_ENGINE_KILL_AT=stage)

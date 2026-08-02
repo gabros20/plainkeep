@@ -2,6 +2,7 @@
 """run_files.py — exercises `plainkeep files ingest` (work material filed + shadow note; personal/legal
 proposed-not-moved) and `plainkeep files open`, against temp ~/plainkeep + ~/files."""
 from __future__ import annotations
+import hashlib
 import os
 import subprocess
 import sys
@@ -17,6 +18,13 @@ results = []
 
 def check(name, cond, detail=""):
     results.append((name, cond, detail))
+
+
+def hashes(root: Path) -> dict[str, str]:
+    """Every file under `root` -> sha256. The append-only claim is about BYTES, so it is asserted by
+    walking and hashing, not by an exit code or a mtime."""
+    return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
+            for p in sorted(root.rglob("*")) if p.is_file()}
 
 
 def run(ops, roots, *args, extra=None):
@@ -76,6 +84,26 @@ def main() -> int:
         check("identical bytes are de-duped (no second copy)", "duplicate" in r.stdout
               and not (roots / "files" / "clients" / "acme" / "in" / "brief2.pdf").exists(), r.stdout)
         check("de-dup keeps a single shadow note", len(list((ops / "wiki" / "files").glob("*.md"))) == 1)
+
+        # ---- APPEND-ONLY (Task 1c): a same-NAME, different-BYTES arrival must not touch the first --
+        # The first ingest above is the create half; this is the collision half. `in/` is walled by
+        # `_in_originals`, so both go through `vaultio.move_create_only` — the assertion is that the
+        # already-filed original is byte-identical afterwards, hashed before and after.
+        originals = roots / "files" / "clients" / "acme" / "in"
+        (src / "brief.pdf").write_bytes(b"BRIEF-BYTES-v2-SAME-NAME")   # the first one was moved away
+        before = hashes(originals)
+        r = run(ops, roots, "ingest", str(src / "brief.pdf"), "--client", "acme")
+        after = hashes(originals)
+        check("collision: a same-name arrival lands beside the original as brief-2.pdf",
+              (originals / "brief-2.pdf").exists()
+              and (originals / "brief-2.pdf").read_bytes() == b"BRIEF-BYTES-v2-SAME-NAME",
+              r.stdout + r.stderr)
+        check("collision: the filed original is byte-identical (hashed before and after)",
+              before.get("brief.pdf") == after.get("brief.pdf")
+              and after["brief.pdf"] == hashlib.sha256(b"BRIEF-BYTES-v1").hexdigest(),
+              f"before={before} after={after}")
+        check("collision: nothing else under in/ changed either",
+              {k: v for k, v in after.items() if k != "brief-2.pdf"} == before, f"{before} -> {after}")
 
         r = run(ops, roots, "ingest", str(src / "spec.pdf"), "--client", "ghost")
         check("ingest to a missing hub errors (nothing filed)", r.returncode == 1 and "no wiki hub" in r.stderr, r.stderr)

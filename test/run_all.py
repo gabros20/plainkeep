@@ -21,6 +21,7 @@ SUITES = [
     ("guardrail model (§5)", "run_deterministic.py"),
     ("guardrail enforcement (§5)", "run_guardrail.py"),
     ("path-wall on the write path (§5 Iron Law)", "run_pathwall.py"),
+    ("append-only originals: ~/files/**/in/ (Phase 2 Task 1c)", "run_originals.py"),
     ("vault marker + registry (ADR-014 Task 1a)", "run_vault.py"),
     ("vault discovery: selection + refusals (ADR-014 Task 1b)", "run_discovery.py"),
     ("jobs registry (§15)", "run_jobs.py"),

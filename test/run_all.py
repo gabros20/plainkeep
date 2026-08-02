@@ -52,6 +52,7 @@ SUITES = [
     ("core-fuzz: TS<->Python difflib + bool()/str() differential fuzz (hybrid-core)", "run_fuzz.py"),
     ("core-tui: in-core terminal UI on a real pty (hybrid-core)", "run_tui_pty.py"),
     ("frozen SDK + plainkeep plugin: api.py + trust ceiling (2.2/2.3)", "run_plugin.py"),
+    ("plugin SDK compatibility + dependency contract (ADR-018 Phase 2 Task 3)", "run_pluginsdk.py"),
     ("agent transport: plainkeep mcp stdio server (2.4)", "run_mcp.py"),
     ("core-mcp: in-core MCP server ↔ bin/mcp/run.py protocol differential (hybrid-core)",
      "run_mcp_protocol.py"),

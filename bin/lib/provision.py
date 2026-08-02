@@ -562,10 +562,14 @@ def sync(root: Path | None = None, *, extras_wanted: tuple[str, ...] = (),
     r = subprocess.run(cmd, env=env, capture_output=True, text=True)
     if r.returncode != 0:
         tail = (r.stderr or r.stdout or "").strip().splitlines()[-8:]
-        raise VaultError("uv sync failed:\n  " + "\n  ".join(tail) if tail else "uv sync failed",
-                         code=output.EXIT_UNEXPECTED,
-                         hint="the environment was NOT changed to a half-resolved state — uv sync "
-                              "is transactional over the environment it manages")
+        # Parenthesised deliberately: `a + b if tail else c` parses the way this wants, and relying
+        # on that is the kind of line a later edit gets wrong silently.
+        message = ("uv sync failed:\n  " + "\n  ".join(tail)) if tail else "uv sync failed"
+        raise VaultError(message, code=output.EXIT_UNEXPECTED,
+                         # NOT "the environment is unchanged" — that is uv's business and this module
+                         # has not measured it. What IS known is where to look and what to re-run.
+                         hint=f"the environment uv manages is {project_env(root_p)} — it is "
+                              "reconstructible: remove it and provision again")
     return cmd
 
 

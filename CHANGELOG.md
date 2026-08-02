@@ -89,9 +89,33 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   conventional `~/plainkeep` plus the active one, so selecting vault A no longer authorizes writes
   into vault B; the dispatchers export the vault's *canonical* path (a vault reached through a
   symlink is one vault, not two) plus a new `PLAINKEEP_VAULT_ID`; and a vault inside an iCloud or
-  Dropbox tree is refused outright (exit 5). Gated by `test/run_discovery.py` (117 checks), whose
+  Dropbox tree is refused outright (exit 5). Gated by `test/run_discovery.py` (270 checks), whose
   centre is a two-vault test that walks the filesystem and proves the note landed in the vault you
   selected and nothing moved in the other one.
+  **Three further refusals came out of the review waves, and each one refuses something that used to
+  work.** (1) Selecting a vault that carries a marker but no engine — an ordinary notes vault, which
+  is what most second vaults are — now exits 2 saying so, where it used to fail at the far end of the
+  dispatch with either a raw CPython "can't open file" or a false `unknown verb 'capture'`. A vault
+  carrying `bin/lib` but no verb directory is refused the same way; it used to capture notes on the
+  bash floor and answer `unknown verb` in the compiled core, for one and the same command. (2) A
+  registry holding **two entries that spell one canonical path** (say one through a symlink) is now
+  rejected as a duplicate instead of loading. `vaults.json` is hand-edited, so this can turn a
+  registry that worked yesterday into an exit 2 — remove the redundant entry. (3) **Which paths count
+  as "inside a sync tree" changed shape**, and the direction is deliberate. Matching is no longer a
+  bare substring: a path component must equal a sync marker or begin with one plus a separator, and
+  `~/Library/CloudStorage` is matched as an anchored prefix. That is what it takes to catch the
+  spellings the sync clients really use — `~/Library/CloudStorage/OneDrive-Personal`,
+  `~/Library/CloudStorage/GoogleDrive-<account>`, `~/Dropbox (Team Name)`, `~/Dropbox Personal`,
+  `~/Dropbox.nosync` — every one of which was briefly *accepted* mid-review. The cost, stated
+  plainly: **`~/notes/dropbox-export`, `~/notes/OneDrive-old` and `~/notes/icloud-archive` are
+  refused too**, because nothing in their spelling distinguishes them from a real mount point. Where
+  the two cannot be told apart, plainkeep refuses — the refusal is visible and tells you to run
+  `plainkeep vault rebind <name> <new-path> --yes`, where the miss would silently leave a `.git`
+  inside a live sync client. If one of those names is your vault, rebind it to a path that does not
+  begin with a provider's name. (`~/notes/my.sync-notes`, `~/notes/not-iCloudy` and
+  `~/Pictures-notes` are unaffected.) A related wart is disclosed rather than fixed: the *write* wall
+  still matches substrings, so a path merely containing "icloud" can be selectable yet unwritable —
+  see [`docs/followups.md`](docs/followups.md).
 - **Renamed: `opskit` → `plainkeep`, full consistency** (ADR-012). `opskit` collided with 40+
   same-named GitHub repos, was squatted on npm and PyPI, and read as DevOps tooling on sight — not a
   cosmetic problem, so the rename goes all the way through rather than stopping at the brand: the

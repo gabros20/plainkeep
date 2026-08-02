@@ -5,9 +5,12 @@ Phase 1): each task got a spec review and a quality review, every Critical/Impor
 was fixed and re-reviewed before the task closed, and this is the tail that was deliberately left for
 later. Entries closed by later fix waves have been removed rather than left with a note.
 
-**Nothing here is a known correctness defect in shipped behaviour**, with one qualification worth
-stating plainly rather than burying, because it is a real divergence from the bash floor and not a
-theoretical one:
+**Nothing here is a known correctness defect in shipped behaviour**, with two qualifications worth
+stating plainly rather than burying. The second is under
+[The location wall](#the-location-wall-binlibwallpy): a vault whose path merely *contains* a sync
+marker is selectable but not writable, so it is reachable, user-visible and self-contradictory —
+disclosed rather than fixed, because fixing it means re-recording 51 validated guardrail verdicts.
+The first is a real divergence from the bash floor and not a theoretical one:
 
 > **`resolver.ts:60` sorts directory names in UTF-16 code-unit order where Python's `sorted()` uses
 > code points.** For any verb or pack directory name outside ASCII — astral characters, some
@@ -163,6 +166,31 @@ fixing it needs.
   dispatch on them; a fourth flag with no matching branch would become `--core-gate`.
 - **`index.ts`** — no test exercises the barrel's re-exports, so a broken one is caught only by tsgo,
   and only once something consumes the barrel.
+
+### The location wall (`bin/lib/wall.py`)
+
+- **`wall.py` carries TWO matchers over one marker list, and they disagree about the same path.**
+  `is_walled` / `under_sync_dir` match a marker as a bare SUBSTRING (the semantics guardrail's 51
+  recorded write verdicts were taken against); `vault_is_walled` / `vault_under_sync_dir` match a
+  path COMPONENT (equal to a marker, or beginning with one plus `-`/` `/`.`/`_`) for the bare markers
+  and a path PREFIX for the `$HOME`-anchored ones, and vault SELECTION uses those. So a vault at a
+  path merely *containing* a marker — `~/notes/my.sync-notes`, `~/notes/not-iCloudy` — is now
+  selectable but every write into it is still denied with exit 5 and a reason that is false of that
+  path. *Deferred because converging them means re-recording 51 validated guardrail cases, which is
+  its own task with its own oracle work; the split is disclosed in `wall.py`'s header, in
+  `_policy_verdict`, and in a SUITE-NOTE `test/run_discovery.py` prints on every run.* The honest fix
+  is probably neither matcher: ask whether the path is on a synced VOLUME rather than inferring it
+  from the directory's name. That would also retire the three deliberate false positives the
+  component matcher accepts (`~/notes/dropbox-export`, `~/notes/OneDrive-old`,
+  `~/notes/icloud-archive` — see the CHANGELOG entry for why refusing them is the chosen side of the
+  trade).
+- **`vaultroot.py:require_engine` probes `bin/lib/guardrail.py` plus one verb directory, which is a
+  proxy for "both dispatchers can resolve verbs here".** It is a sufficient probe today only because
+  `resolver.py` (`__file__`-relative) and `resolver.ts` (data-root-relative) agree whenever the root
+  carries a real engine tree. They still disagree in principle, and `bin/lib`-as-a-symlink is the
+  shape where it shows. *Deferred: making `engineBin()` code-relative to match `resolver.py` is the
+  real convergence and it belongs to Phase 2 Task 2 (`PLAINKEEP_ENGINE`), which relocates the engine
+  out of the vault entirely and dissolves the question.*
 
 ## Oracle and tests (`test/`)
 

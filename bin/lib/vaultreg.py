@@ -21,9 +21,16 @@ pointing at nothing: each REFUSES with the offending file named. Nothing is auto
 path, nothing is silently repaired, and there is no last-wins. The registry is created only by
 `vault register`.
 
-Task 1a scope: this module and the `vault` verb. It changes NO discovery behaviour —
-`PLAINKEEP_HOME` still resolves exactly as it did. Discovery (the `--vault` selector, marker walk-up,
-the default) is Task 1b, and it builds on this.
+Scope: this module and the `vault` verb own the two FILES and their validation, and nothing here
+resolves a root. Discovery — the `--vault` selector, `PLAINKEEP_HOME`, marker walk-up, the registry
+default — shipped in Task 1b and lives in `vaultroot.py`, which consumes what is defined here:
+`read_marker` is how a candidate proves it is a vault, and `read_registry`/`find` are how the two
+mechanisms that go THROUGH the registry (a selector and a walked-up marker) are resolved. The layering
+is one-way — `vaultroot` imports `vaultreg`, never the reverse.
+
+(Until Task 1b this said "It changes NO discovery behaviour — `PLAINKEEP_HOME` still resolves exactly
+as it did". That was true of Task 1a and has been false since Task 1b shipped: `PLAINKEEP_HOME` is now
+VALIDATED against this module's marker, and an unmarked root refuses.)
 """
 from __future__ import annotations
 import json

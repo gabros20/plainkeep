@@ -68,7 +68,7 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   directory `PLAINKEEP_HOME` names, or failing that, wherever the engine happens to be installed."
   The second half of that sentence was the problem: for an installed `~/.local/bin/plainkeep-core`
   it resolved to `~`, and because not every write consults the path-wall, a wrong root looked like
-  success — a note filed into the wrong tree with exit 0. That fallback is deleted, in all six
+  success — a note filed into the wrong tree with exit 0. That fallback is deleted, in all nine
   places it lived, and a root is now VALIDATED before the gate runs, before the resolver scans
   plugins, and before any verb is spawned.
   **What you get.** A vault can live anywhere, you can have more than one, and you pick between them

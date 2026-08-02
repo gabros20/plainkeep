@@ -157,7 +157,13 @@ def _is_raw_write(code: str) -> bool:
 # the reason travels with the code it excuses. EVERY entry here is a write the wall as currently
 # written would DENY, for a destination the verb legitimately needs. That is a POLICY gap in the
 # wall's model (it was authored for agent actions, not verb-owned ones), and papering over it by
-# widening the wall would cost more than it buys. ADR-014 / Phase 2 Task 1 is where it gets decided.
+# widening the wall would cost more than it buys.
+#
+# This used to say "ADR-014 / Phase 2 Task 1 is where it gets decided". Task 1b has since SHIPPED and
+# did not decide it — it narrowed `VAULT_ROOTS` to the one selected root (guardrail.py), which is a
+# different question. Whether the wall's model should cover verb-owned writes OUTSIDE the vault
+# (~/work, ~/.Trash, a human-supplied --out) is still open, and is now a Phase 2 follow-up with no
+# task claiming it.
 EXEMPT: dict[str, dict[str, str]] = {
     "bin/lib/guardrail.py": {
         'logdir.mkdir(parents=True, exist_ok=True)':
@@ -271,8 +277,12 @@ def main() -> int:
               f"log, and the vault marker/registry (the writes that ESTABLISH where the wall goes). "
               f"The wall as written DENIES all of them; whether its model should cover verb-owned "
               f"writes outside the three roots is a policy decision, not a wiring fix.")
-    print("SUITE-NOTE: a MISRESOLVED data root is still not detectable here — the wall is anchored "
-          "to the root it would have to doubt. Root validation is ADR-014 / Phase 2 Task 1.")
+    print("SUITE-NOTE: this suite invokes each verb's run.py DIRECTLY with PLAINKEEP_HOME set, so it "
+          "never runs discovery and cannot judge whether the root was resolved correctly — the wall "
+          "is anchored to the root it is handed. What changed with ADR-014 Task 1b (shipped) is who "
+          "hands it over: in a real invocation both dispatchers now VALIDATE the root before the "
+          "gate runs, and guardrail.py's VAULT_ROOTS is that one root and nothing else. Discovery "
+          "itself is gated by test/run_discovery.py, not here.")
     print(f"\n{BOLD}Result:{RESET} {GREEN}{passed} passed{RESET}, "
           f"{(RED if failed else DIM)}{failed} failed{RESET}, {len(results)} checks")
     return 1 if failed else 0

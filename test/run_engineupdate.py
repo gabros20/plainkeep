@@ -196,6 +196,15 @@ def with_core(src: Path) -> Path:
     return src
 
 
+def wipe(p: Path) -> None:
+    """Remove an install root this suite is finished with. Installed trees are sealed 0555, so the
+    unseal has to come first — `shutil.rmtree` cannot descend into a directory it cannot write."""
+    if not p.exists():
+        return
+    unlock(p)
+    shutil.rmtree(p, ignore_errors=True)
+
+
 def unlock(p: Path) -> None:
     """Installed trees are sealed 0555; a fixture that has to be edited or removed needs them back."""
     for q in [p, *p.rglob("*")]:
@@ -735,6 +744,9 @@ def case_kill_matrix(tmp: Path) -> None:
         check(f"kill@{stage}: ...and it is one of the two pairs, never a third thing",
               active in (before_active, target), str(active))
         _converges(root, src, target, vault, cfg, f"kill@{stage}")
+        # Per STAGE, not just per case: eight stages each holding two 62 MB pairs is ~1 GB standing
+        # at once, and this suite has already failed with ENOSPC on a machine that had 2.3 GiB free.
+        wipe(root)
 
     # THE REPLACE WINDOW, on the update path. It is reached only when the target version already
     # has a tree — which happens after an earlier kill left an incomplete one. The window is the
@@ -990,31 +1002,44 @@ def _unguarded_mutations(f: Path, guard_names=_GUARD_NAMES) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------------
+CASES = (case_init, case_init_refusals, case_update_retains_the_previous_pair,
+         case_rollback_is_a_tested_command_sequence, case_prune_never_takes_what_you_need,
+         case_checksum_gate, case_selftest_gate, case_updates_are_serialized,
+         case_the_kill_hook_is_honest, case_kill_matrix, case_the_open_residue,
+         case_doctor_never_mutates)
+
+
 def main() -> int:
     started = time.time()
-    with tempfile.TemporaryDirectory(prefix="pk-engineupdate-") as td:
-        tmp = Path(os.path.realpath(td))
-        try:
-            case_init(tmp)
-            case_init_refusals(tmp)
-            case_update_retains_the_previous_pair(tmp)
-            case_rollback_is_a_tested_command_sequence(tmp)
-            case_prune_never_takes_what_you_need(tmp)
-            case_checksum_gate(tmp)
-            case_selftest_gate(tmp)
-            case_updates_are_serialized(tmp)
-            case_the_kill_hook_is_honest(tmp)
-            case_kill_matrix(tmp)
-            case_the_open_residue(tmp)
-            case_doctor_never_mutates(tmp)
-        finally:
-            # Every installed tree is sealed 0555, which TemporaryDirectory cannot remove.
-            for p in tmp.rglob("*"):
-                try:
-                    if p.is_dir() and not p.is_symlink():
-                        p.chmod(0o755)
-                except OSError:
-                    pass
+    # ONE TEMP DIRECTORY PER CASE, removed before the next one starts. Not tidiness: this suite
+    # installs an engine ~40 times and a pair carrying the compiled core is **62 MB** measured, so a
+    # single shared directory holds every tree every case ever made — several GB at the end of the
+    # run. It failed exactly that way on a machine with 2.3 GiB free: `--update` died with an
+    # ENOSPC copying `plainkeep-core`, and the suite reported it as a convergence failure at the
+    # `provision-replace-window` boundary, which is the wrong diagnosis of a real problem. Per-case
+    # cleanup caps the peak at one case's fixtures.
+    #
+    # Every case is self-contained by construction (each builds its own source copy, engine root and
+    # scratch vault under the `tmp` it is handed), so nothing carries state across this boundary.
+    for case in CASES:
+        with tempfile.TemporaryDirectory(prefix="pk-engineupdate-") as td:
+            tmp = Path(os.path.realpath(td))
+            try:
+                case(tmp)
+            except Exception as e:                              # noqa: BLE001
+                # A case that raises must not take the other eleven with it: the batch would then
+                # report a crash instead of the damage (ADR-019 D3), and this suite's whole subject
+                # is what survives an abrupt failure.
+                check(f"{case.__name__}: completed without raising", False,
+                      f"{type(e).__name__}: {e}")
+            finally:
+                # Every installed tree is sealed 0555, which TemporaryDirectory cannot remove.
+                for p in tmp.rglob("*"):
+                    try:
+                        if p.is_dir() and not p.is_symlink():
+                            p.chmod(0o755)
+                    except OSError:
+                        pass
 
     check("parity: the runnability proofs really ran in BOTH dispatcher modes",
           _modes_used == set(MODES), f"modes actually exercised: {sorted(_modes_used)}")

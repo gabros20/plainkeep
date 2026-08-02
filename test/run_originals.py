@@ -27,6 +27,7 @@ import errno
 import hashlib
 import importlib.util
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -336,7 +337,81 @@ def case_wall_refuses_non_atomic() -> None:
 
 
 # ==============================================================================================
-# C. The race. Two shapes, one harness — the legacy one has to LOSE or the harness is not racing.
+# C. The uniquifier's BOUND. Attempt-and-catch has to stop somewhere, and `_arrive` stops after
+# `UNIQUIFY_LIMIT` names with a refusal that did not exist before this task. A new user-visible
+# refusal whose failing region never executes is a green test of nothing, so it is DRIVEN here —
+# through the real verb, in a real process, because `output.fail` exits the process it refuses.
+# ==============================================================================================
+def _uniquify_limit() -> int:
+    """The bound, read out of the shipped source rather than restated. A test that hardcodes 100
+    stops testing the code the day someone edits the constant, and `bin/files/run.py` cannot simply
+    be imported here — `test/lib` already owns the name `lib` in this process."""
+    src = (REPO / "bin" / "files" / "run.py").read_text(encoding="utf-8")
+    m = re.search(r"^UNIQUIFY_LIMIT\s*=\s*(\d+)\s*$", src, re.M)
+    return int(m.group(1)) if m else -1
+
+
+def _hub_with_names_taken(slug: str, taken: int) -> Path:
+    """A hub whose `in/` already holds the first `taken` names `_arrive` will try for `brief.pdf`
+    (`brief.pdf`, `brief-2.pdf`, …). The sitting tenants are written DIRECTLY: they are fixture,
+    not arrivals, and going through the wall would only re-test the wall."""
+    (VAULT / "wiki" / "clients").mkdir(parents=True, exist_ok=True)
+    (VAULT / "journal").mkdir(exist_ok=True)
+    (VAULT / "wiki" / "clients" / f"{slug}.md").write_text(
+        f"---\ntype: client\ntitle: {slug}\nstatus: active\n---\n# {slug}\n", encoding="utf-8")
+    d = hub(slug)
+    for i in range(1, taken + 1):
+        (d / ("brief.pdf" if i == 1 else f"brief-{i}.pdf")).write_bytes(f"SITTING-TENANT-{i}".encode())
+    return d
+
+
+def _ingest(src: Path, slug: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [sys.executable, str(REPO / "bin" / "files" / "run.py"), "ingest", str(src),
+         "--client", slug], capture_output=True, text=True, env=os.environ)
+
+
+def case_uniquify_limit() -> None:
+    limit = _uniquify_limit()
+    check("uniquifier: the shipped bound is readable from bin/files/run.py",
+          limit > 1, f"UNIQUIFY_LIMIT={limit}")
+    if limit < 2:
+        return
+
+    # The control first. A refusal case on its own would pass just as well against a verb that
+    # refused one name early, or refused everything — this pins the bound to where it is claimed.
+    d = _hub_with_names_taken("limitedge", limit - 1)
+    src = staged("brief.pdf", b"THE LAST REACHABLE NAME")
+    r = _ingest(src, "limitedge")
+    last = d / f"brief-{limit}.pdf"
+    check(f"uniquifier: with {limit - 1} names taken the {limit}th is still USED (the bound is not "
+          f"off by one)",
+          r.returncode == 0 and last.is_file() and last.read_bytes() == b"THE LAST REACHABLE NAME",
+          f"rc={r.returncode} err={r.stderr.strip()[:400]}")
+
+    # And now the failing region: every name the loop is allowed to try is occupied.
+    d = _hub_with_names_taken("limitfull", limit)
+    src = staged("brief.pdf", b"THE ARRIVAL WITH NOWHERE TO GO")
+    before = hashes(d)
+    r = _ingest(src, "limitfull")
+    after = hashes(d)
+    said = r.stdout + r.stderr
+    check(f"uniquifier: all {limit} names taken -> EXIT_UNEXPECTED (1)", r.returncode == 1,
+          f"rc={r.returncode} out={r.stdout.strip()[:400]} err={r.stderr.strip()[:400]}")
+    # `ingest` has other exit-1 refusals (an unknown hub, for one), so the code alone does not say
+    # WHICH branch ran. The message does.
+    check("uniquifier: the refusal is the BOUND's — it names the limit and says nothing moved",
+          str(limit) in said and "was NOT moved" in said, f"said={said.strip()[:400]}")
+    check(f"uniquifier: not one byte under in/ changed ({len(before)} entries walked + hashed)",
+          before == after, f"symmetric-difference={sorted(set(before.items()) ^ set(after.items()))[:6]}")
+    check(f"uniquifier: no `brief-{limit + 1}.pdf` — the loop stopped AT the bound, it did not run on",
+          not (d / f"brief-{limit + 1}.pdf").exists(), str(sorted(p.name for p in d.iterdir()))[:400])
+    check("uniquifier: the arriving original is still where it was, with all of its bytes",
+          src.is_file() and src.read_bytes() == b"THE ARRIVAL WITH NOWHERE TO GO")
+
+
+# ==============================================================================================
+# D. The race. Two shapes, one harness — the legacy one has to LOSE or the harness is not racing.
 # ==============================================================================================
 RACE_N, RACE_ROUNDS = 16, 5
 
@@ -410,6 +485,13 @@ def case_race_real_verb() -> None:
     (VAULT / "journal").mkdir(exist_ok=True)
     (VAULT / "wiki" / "clients" / "racehub.md").write_text(
         "---\ntype: client\ntitle: Racehub\nstatus: active\n---\n# Racehub\n", encoding="utf-8")
+    # Counted as a DELTA, not a total: `case_uniquify_limit` ingests into the same throwaway vault
+    # and leaves shadow notes of its own, and a total would silently report more notes than this
+    # race handed out.
+    def _shadow_count() -> int:
+        d = VAULT / "wiki" / "files"
+        return len(list(d.glob("*.md"))) if d.exists() else 0
+    shadows_before = _shadow_count()
     srcs = [staged("brief.pdf", f"VERB-ORIGINAL-{i}".encode()) for i in range(RACE_N)]
     procs = [subprocess.Popen(
         [sys.executable, str(REPO / "bin" / "files" / "run.py"), "ingest", str(s),
@@ -424,7 +506,7 @@ def case_race_real_verb() -> None:
           landed == want, f"missing={sorted(want - landed)} extra={sorted(landed - want)}")
     check("race (real verb): every process reported success",
           all(p.returncode == 0 for p in procs), str([p.returncode for p in procs]))
-    shadows = len(list((VAULT / "wiki" / "files").glob("*.md"))) if (VAULT / "wiki" / "files").exists() else 0
+    shadows = _shadow_count() - shadows_before
     print(f"MEASURED: {RACE_N} concurrent `files ingest` processes into one hub — "
           f"{len(landed)}/{RACE_N} originals on disk, {shadows}/{RACE_N} shadow notes written.")
     # Stated every run, not only on the runs where it bites: `files._shadow()` picks its slug with an
@@ -454,8 +536,8 @@ def _run(case) -> None:
 def main() -> int:
     for case in (case_create, case_existing_file, case_symlink_live, case_symlink_dangling,
                  case_directory, case_cross_device, case_partial_copy_cleanup,
-                 case_container_mkdir, case_wall_refuses_non_atomic, case_race_ab,
-                 case_race_real_verb):
+                 case_container_mkdir, case_wall_refuses_non_atomic, case_uniquify_limit,
+                 case_race_ab, case_race_real_verb):
         _run(case)
 
     print(f"\n{BOLD}Append-only originals (~/files/**/in/) — {len(results)} checks{RESET}\n")

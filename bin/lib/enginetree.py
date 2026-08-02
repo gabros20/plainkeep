@@ -634,9 +634,30 @@ def install(src: Path, *, version: str | None = None, force: bool = False,
     all and a dangling `current`. `script/setup` runs `--install --force` unconditionally and is also
     what an operator runs to REPAIR a broken install, so the failure window was on the repair path.
     The removal now happens one line before the rename: the exposure shrinks from the whole copy to
-    an `rmtree` plus a `rename`."""
+    an `rmtree` plus a `rename`.
+
+    THAT WINDOW IS STILL OPEN, and the reason is a choice rather than an impossibility — said plainly
+    here because an inaccurate impossibility claim guarding a known window is worse than the window.
+    A kill between `remove_version()` and `os.rename` leaves no engine under the version name and a
+    dangling `current`; a plain `--install` (not `--force`) recovers it. Closing it needs a
+    swap-through-a-temporary-name: unseal `dst`, `rename(dst → .retiring-<v>.<pid>)`,
+    `rename(staging → dst)`, `rmtree` the retired tree afterwards — and that sequence IS expressible,
+    because `remove_version()` already runs the same unseal pass before its own `rmtree`. Measured:
+
+        rename(SEALED dst → .retiring-*)                   EACCES     (the true constraint)
+        _chmod_tree(dst, writable=True) THEN the rename     OK — the old tree survives the window
+        one-syscall replace of a NON-EMPTY unsealed dst     ENOTEMPTY (errno 66)
+
+    So what `os.rename` genuinely cannot do is replace a non-empty directory in one call, which is a
+    narrower claim than "the dance cannot be expressed". It is not implemented here because it adds a
+    third and fourth mutation to the destructive path to shrink a window that already recovers
+    without `--force`; if it is ever implemented, the retired tree wants sweeping the way
+    `.incoming-*` is."""
     src = Path(os.path.abspath(os.path.expanduser(str(src))))
-    version = check_version_name(version, "--version") if version else read_version(src)
+    # `is not None`, not truthiness: `--version ""` is a SUPPLIED value and an invalid one, and a
+    # falsy test quietly re-read the source's VERSION file instead — which made
+    # `check_version_name`'s own "is empty" refusal unreachable from the flag that most needs it.
+    version = check_version_name(version, "--version") if version is not None else read_version(src)
     root = versions_dir()
     dst = root / version
     if dst.exists() and not force:

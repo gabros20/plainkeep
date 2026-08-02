@@ -123,7 +123,11 @@ def case_version_is_not_a_path(tmp: Path) -> None:
 
     for bad, why in ((".." , "the parent directory"), (".", "the install root itself"),
                      ("a/b", "a path with a separator"), (".hidden", "the installer's namespace"),
-                     ("current", "the active-engine symlink")):
+                     ("current", "the active-engine symlink"),
+                     # `--version ""` used to be FALSY, so it silently meant "read the source's
+                     # VERSION file" and `check_version_name`'s own "is empty" refusal could not be
+                     # reached from the flag. A supplied value is validated because it was supplied.
+                     ("", "an empty value, which is supplied and invalid, not absent")):
         r = et(root, "--install", str(REPO), "--version", bad, "--force")
         check(f"--version {bad!r} ({why}) is REFUSED", r.returncode == EXIT_USAGE
               and "Traceback" not in (r.stdout + r.stderr), f"rc={r.returncode} {r.stderr.strip()}")

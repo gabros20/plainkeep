@@ -116,6 +116,34 @@ test("dispatch EXPORTS the canonical root, not the caller's spelling of it", asy
   }
 });
 
+// The third thing dispatch() exports, added in the r2 fix wave. It exists because assigning
+// PLAINKEEP_HOME (two lines above it in dispatch) DESTROYS the evidence of which mechanism chose:
+// a verb re-running the chain finds step 2 already satisfied and can only ever answer
+// "PLAINKEEP_HOME", which is exactly what `vault status` reported for every invocation that can
+// exist. Asserted here as well as end-to-end in run_discovery.py section K because this is the line
+// in the CORE that has to match the floor's `pk_discover` export.
+test("dispatch exports WHICH mechanism chose, not just the root it chose", async () => {
+  const home = vaultDir("pk-home-mech-");
+  const d = path.join(home, "bin", "v");
+  mkdirSync(d, { recursive: true });
+  writeFileSync(path.join(d, "cmd.json"), JSON.stringify({ verb: "v", risk: "read" }));
+  writeFileSync(path.join(d, "run.py"), "raise SystemExit(0)\n");
+  const prevMech = process.env.PLAINKEEP_VAULT_MECHANISM;
+  delete process.env.PLAINKEEP_VAULT_MECHANISM;
+  try {
+    await withHomeAsync(home, async () => {
+      await dispatch(["v"]);
+      // PLAINKEEP_HOME is what selected here, and the value must be the mechanism's own spelling —
+      // vaultroot.MECHANISMS[1] — so `vault status` can match it against the chain it prints.
+      expect(process.env.PLAINKEEP_VAULT_MECHANISM).toBe("PLAINKEEP_HOME");
+    });
+  } finally {
+    if (prevMech === undefined) delete process.env.PLAINKEEP_VAULT_MECHANISM;
+    else process.env.PLAINKEEP_VAULT_MECHANISM = prevMech;
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test("resolveHome REFUSES with no env — there is no executable-relative fallback left", () => {
   const prev = process.env.PLAINKEEP_HOME;
   delete process.env.PLAINKEEP_HOME;

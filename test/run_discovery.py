@@ -773,6 +773,95 @@ def case_vault_without_engine() -> None:
               f"rc={r.returncode} {r.stdout}{r.stderr} {sorted(created)}")
 
 
+# --------------------------------------------------------------------------------------------
+# K. `vault status` reports the REAL mechanism (brief scope item 6).
+#
+# The verb re-runs `vaultroot.discover()` from inside the spawned process, where the dispatcher has
+# already exported PLAINKEEP_HOME — so chain step 2 always won and `selected_by` was the constant
+# string "PLAINKEEP_HOME" for every invocation that can exist. `saw` could never carry the walk-up
+# or registry-default lines, `selection_error` could never be a chain refusal, and VaultError.saw
+# had no reachable reader anywhere in production. That is the surface every other refusal in this
+# task depends on for diagnosability, so this asserts each of the four mechanisms in turn: the
+# suite as it stood could not tell a correct implementation from that one.
+# --------------------------------------------------------------------------------------------
+def case_status_reports_the_real_mechanism() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        sandbox = Path(os.path.realpath(td))
+        (sandbox / "home").mkdir()
+        a, b = sandbox / "vault-a", sandbox / "vault-b"
+        make_vault(a)
+        make_vault(b)
+        register(sandbox, a, "alpha")
+        register(sandbox, b, "beta", default=True)
+
+        cases = [
+            ("--vault", ["--vault", "alpha", "vault", "status", "--json"], sandbox, {}),
+            ("PLAINKEEP_HOME", ["vault", "status", "--json"], sandbox, {"PLAINKEEP_HOME": str(a)}),
+            ("marker walk-up from $PWD", ["vault", "status", "--json"], a, {}),
+            ("registry default", ["vault", "status", "--json"], sandbox, {}),
+        ]
+        for want, argv, cwd, over in cases:
+            for path in PATHS:
+                if path != "floor" and not core_live():
+                    continue
+                env = base_env(sandbox, **over)
+                r = invoke(path, argv, cwd=cwd, env=env)
+                try:
+                    data = json.loads(r.stdout)["data"]
+                except Exception:
+                    check(f"[{path}] status via {want}: readable JSON", False, r.stdout + r.stderr)
+                    continue
+                check(f"[{path}] status names {want!r} as the mechanism that actually chose",
+                      data["selected_by"] == want, f"got {data['selected_by']!r}")
+                # The mechanism the DISPATCHER used has to reach the verb; a status that recomputed
+                # it would be answering a different question and is what this replaces.
+                check(f"[{path}] ...and it came from the dispatcher, not a recomputation",
+                      data.get("selected_by_source") == "dispatcher",
+                      str(data.get("selected_by_source")))
+
+        # `saw` must now be able to carry the lines that were unreachable — steps 3 and 4 are only
+        # asked at all once the re-run drops the PLAINKEEP_HOME the dispatcher exported.
+        env = base_env(sandbox)
+        r = invoke("floor", ["vault", "status", "--json"], cwd=a, env=env)
+        data = json.loads(r.stdout)["data"]
+        check("status: `saw` carries the walk-up line, which no invocation could reach before",
+              "marker" in (data["saw"].get("marker walk-up from $PWD") or ""), json.dumps(data["saw"]))
+        check("status: would_select answers the question it names — what the chain picks with "
+              "PLAINKEEP_HOME out of the way", data["would_select"] == str(a),
+              f"{data['would_select']} != {a}")
+
+        # ...and step 4's line, which needs a cwd where the walk-up finds nothing — a chain that
+        # stopped at step 3 must show step 4 as `not reached`, not as an empty string. Pointed at A
+        # while standing outside every vault, so the two answers genuinely differ.
+        r = invoke("floor", ["vault", "status", "--json"], cwd=sandbox,
+                   env=base_env(sandbox, PLAINKEEP_HOME=a))
+        data = json.loads(r.stdout)["data"]
+        check("status: `saw` carries the registry-default line when the chain reaches step 4",
+              "beta" in (data["saw"].get("registry default") or ""), json.dumps(data["saw"]))
+        check("status: ...and would_select is then the DEFAULT while active_root is still A — the "
+              "difference PLAINKEEP_HOME was hiding",
+              data["would_select"] == str(b) and data["active_root"] == str(a),
+              f"would={data['would_select']} active={data['active_root']}")
+
+        # A chain REFUSAL reaching `selection_error` + `saw` — the reader VaultError.saw never had.
+        # cwd is an unregistered marked vault, so the re-run refuses at step 3 while the invocation
+        # itself succeeds via PLAINKEEP_HOME.
+        stray = sandbox / "stray"
+        stray.mkdir()
+        vaultfx.mark_vault(stray)
+        r = invoke("floor", ["vault", "status", "--json"], cwd=stray,
+                   env=base_env(sandbox, PLAINKEEP_HOME=a))
+        data = json.loads(r.stdout)["data"]
+        check("status: a chain refusal reaches selection_error instead of being unreportable",
+              data["selection_error"] is not None and "not in the registry" in data["selection_error"],
+              str(data["selection_error"]))
+        check("status: ...and the refusal's own `saw` is what gets rendered",
+              str(stray) in (data["saw"].get("marker walk-up from $PWD") or ""),
+              json.dumps(data["saw"]))
+        check("status: ...while selected_by still reports what really chose this invocation",
+              data["selected_by"] == "PLAINKEEP_HOME", str(data["selected_by"]))
+
+
 def main() -> int:
     case_two_vault_identity()
     case_negative_twin()
@@ -785,6 +874,7 @@ def main() -> int:
     case_selector_position_and_parity()
     case_canonical_export()
     case_vault_without_engine()
+    case_status_reports_the_real_mechanism()
 
     print(f"{BOLD}Vault DISCOVERY (ADR-014 Task 1b) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

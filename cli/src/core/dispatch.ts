@@ -540,6 +540,10 @@ export function dispatch(argv: string[], selector: string | null = null): CoreRe
   // construction — and it is what the child inherits.
   process.env.PLAINKEEP_HOME = sel.root;
   process.env.PLAINKEEP_VAULT_ID = sel.id;
+  // ...and WHICH mechanism chose, which the assignment on the line above would otherwise destroy:
+  // the spawned verb sees PLAINKEEP_HOME set and can no longer tell whether that is what selected
+  // the root or merely what carried it. Matches the floor's `pk_discover` export exactly.
+  process.env.PLAINKEEP_VAULT_MECHANISM = sel.mechanism;
 
   // Bare `plainkeep` ON A TERMINAL is the TUI; bare `plainkeep` anywhere else is still the default
   // verb. The rewrite happens HERE, before verbFromArgv and therefore before the gate, so the whole

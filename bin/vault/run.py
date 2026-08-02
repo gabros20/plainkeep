@@ -233,9 +233,18 @@ def cmd_status(_argv):
 
     The two answers are deliberately separate: `active_root` is what THIS process was handed
     (PLAINKEEP_HOME, exported by the dispatcher that spawned it), while `would_select` is what the
-    chain picks from scratch in this cwd with this environment. They differ exactly when the answer
+    chain picks in this cwd WITH PLAINKEEP_HOME OUT OF THE WAY. They differ exactly when the answer
     is interesting — inside a vault while pointed at another one, say — and collapsing them into one
-    field would hide it."""
+    field would hide it.
+
+    **Why the chain is re-run without PLAINKEEP_HOME, and why `selected_by` does not come from that
+    re-run.** This verb runs in a process the dispatcher already exported PLAINKEEP_HOME into, so a
+    plain `discover()` here has step 2 pre-satisfied: it returns "PLAINKEEP_HOME" for EVERY
+    invocation that can exist, steps 3 and 4 are never reached, `saw` can never carry their lines,
+    and `selection_error` can never be a chain refusal. Measured, and it made VaultError.saw a field
+    with no reachable reader in production. So the two questions are separated: `selected_by` is
+    what the dispatcher recorded (PLAINKEEP_VAULT_MECHANISM), and the chain is re-run with
+    PLAINKEEP_HOME removed so the mechanisms BELOW it can be asked at all."""
     active = Path(vaultreg.canonical(paths.PLAINKEEP_HOME))
     reg = vaultreg.read_registry()
     try:
@@ -245,13 +254,38 @@ def cmd_status(_argv):
         marker, marker_err = None, e.message
     entry = vaultreg.entry_for_path(reg, active)
 
-    # Run the chain. A refusal is an ANSWER here, not an error: `vault status` is the verb you reach
-    # for precisely when discovery is refusing, so it reports the refusal and still exits 0.
+    mech = vaultroot.active_mechanism()
+    home_raw = os.environ.get(vaultroot.ENV_HOME)
+
+    # Run the chain with step 2 taken out of the way. A refusal is an ANSWER here, not an error:
+    # `vault status` is the verb you reach for precisely when discovery is refusing, so it reports
+    # the refusal and still exits 0. Restored in a `finally` — this process still has to be able to
+    # find its own root afterwards.
     try:
-        sel = vaultroot.discover()
-        sel_err, saw_on_error = None, {}
-    except vaultreg.VaultError as e:
-        sel, sel_err, saw_on_error = None, e.message, e.saw
+        os.environ.pop(vaultroot.ENV_HOME, None)
+        try:
+            sel = vaultroot.discover()
+            sel_err, saw = None, dict(sel.saw)
+        except vaultreg.VaultError as e:
+            sel, sel_err, saw = None, e.message, dict(e.saw)
+    finally:
+        if home_raw is not None:
+            os.environ[vaultroot.ENV_HOME] = home_raw
+
+    # The re-run cannot see the two mechanisms that were already decided for THIS process — the
+    # selector is gone from argv by the time a verb is spawned, and PLAINKEEP_HOME was popped four
+    # lines up — so those two lines are restored from what actually happened. Everything below them
+    # is the re-run's own honest account, and it is labelled as such in `saw_is`.
+    if mech == vaultroot.MECHANISMS[0]:
+        saw[vaultroot.MECHANISMS[0]] = f"SELECTED this invocation -> {active}"
+    if home_raw is not None:
+        if mech is None:
+            why = "no dispatcher exported a mechanism — this verb was invoked directly"
+        elif mech == vaultroot.MECHANISMS[1]:
+            why = "SELECTED this invocation"
+        else:
+            why = f"exported by the dispatcher after {mech} chose — not what chose"
+        saw[vaultroot.MECHANISMS[1]] = f"{home_raw!r} — {why}"
 
     data = {
         "active_root": str(active),
@@ -262,12 +296,21 @@ def cmd_status(_argv):
         # exactly that — measured: a mutation returning the caller's spelling passed until this
         # field existed.
         "home_env": os.environ.get("PLAINKEEP_HOME"),
-        "selected_by": sel.mechanism if sel else None,
+        # What ACTUALLY chose this process's root. From the dispatcher, never recomputed here.
+        # A directly-invoked verb has no dispatcher: PLAINKEEP_HOME is then the only thing that
+        # pointed it anywhere, which is a true answer rather than a missing one — `selected_by_source`
+        # is what distinguishes the two, so a caller is never left guessing which it got.
+        "selected_by": mech or (vaultroot.MECHANISMS[1] if home_raw else None),
+        "selected_by_source": "dispatcher" if mech else (
+            "PLAINKEEP_HOME (no dispatcher — this verb was invoked directly)" if home_raw else None),
         "would_select": sel.root if sel else None,
         "would_select_id": sel.id if sel else None,
         "selection_error": sel_err,
         # One line per mechanism, in precedence order, INCLUDING the ones that did not win.
-        "saw": _saw_map(sel, saw_on_error),
+        "saw": saw,
+        "saw_is": "the chain re-run in this cwd with PLAINKEEP_HOME removed, so the mechanisms "
+                  "below it can be asked at all; the --vault and PLAINKEEP_HOME lines report what "
+                  "this invocation actually did",
         "marker": str(vaultreg.marker_path(active)) if marker else None,
         "marker_error": marker_err,
         "id": marker["id"] if marker else None,
@@ -289,30 +332,29 @@ def cmd_status(_argv):
             print(f"  marker      {YEL}none{RESET} — mark + register it:")
             print(f"    {CYAN}{vaultroot.bootstrap_hint(active)}{RESET}")
         print(f"  registered  {entry['name'] if entry else YEL + 'no' + RESET}")
+        print(f"  selected by {data['selected_by'] or YEL + 'nothing — no root is selected' + RESET}"
+              + (f"  {DIM}({data['selected_by_source']}){RESET}"
+                 if data["selected_by_source"] and not mech else ""))
         print()
+        # The arrow marks what REALLY chose, which is `selected_by` — not the winner of the re-run
+        # below it. Marking the re-run's winner is what made this display say "PLAINKEEP_HOME" on
+        # every invocation that can exist.
         print("discovery     (the chain, in precedence order)")
         for m in vaultroot.MECHANISMS:
-            won = sel is not None and sel.mechanism == m
-            mark = f"{GREEN}->{RESET}" if won else "  "
+            mark = f"{GREEN}->{RESET}" if data["selected_by"] == m else "  "
             print(f"  {mark} {m:<26} {data['saw'].get(m, DIM + 'not reached' + RESET)}")
         if sel:
-            print(f"  {GREEN}selected{RESET}    {sel.root}  (id {sel.id})")
+            print(f"  {DIM}would select{RESET}  {sel.root}  (id {sel.id})"
+                  f"  {DIM}(ignoring PLAINKEEP_HOME){RESET}")
         else:
-            print(f"  {RED}REFUSED{RESET}     {sel_err}")
+            print(f"  {DIM}would select{RESET}  {RED}REFUSED{RESET} {sel_err}"
+                  f"  {DIM}(ignoring PLAINKEEP_HOME){RESET}")
         print()
         print(f"registry      {vaultreg.registry_path()}"
               + ("" if data["registry_exists"] else f"  {DIM}(does not exist yet){RESET}"))
         dflt = next((v for v in reg["vaults"] if v["id"] == reg["default"]), None)
         print(f"  default     {dflt['name'] if dflt else DIM + 'none' + RESET}")
     return output.emit(data, "vault", human=render)
-
-
-def _saw_map(sel, saw_on_error: dict) -> dict:
-    """What each mechanism saw — from the Selection when discovery succeeded, and from the refusal's
-    own `.saw` when it did not. A mechanism the chain never reached is ABSENT rather than empty:
-    "saw nothing" and "was never asked" are different facts, and the renderer prints the second as
-    `not reached`."""
-    return dict(sel.saw) if sel is not None else dict(saw_on_error)
 
 
 ACTIONS = {"register": cmd_register, "rebind": cmd_rebind, "deregister": cmd_deregister,

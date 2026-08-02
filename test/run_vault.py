@@ -35,10 +35,11 @@ def check(name: str, cond: bool, detail: str = "") -> None:
     results.append((name, bool(cond), detail))
 
 
-def vault(home: Path, cfg: Path, *args, **env_extra):
+def vault(home: Path, cfg: Path, *args, cwd: Path | None = None, **env_extra):
     env = {**os.environ, "PLAINKEEP_HOME": str(home), "PLAINKEEP_CONFIG_HOME": str(cfg), **env_extra}
     return subprocess.run([sys.executable, str(REPO / "bin" / "vault" / "run.py"), *args],
-                          capture_output=True, text=True, env=env)
+                          capture_output=True, text=True, env=env,
+                          cwd=None if cwd is None else str(cwd))
 
 
 def load_vaultreg():
@@ -302,15 +303,32 @@ def case_template_and_discovery() -> None:
         check("...and still nothing landed in the registered default vault",
               not (a / "inbox").exists())
 
-        r = vault(b, cfg, "status", "--json")
+        # `cwd` is pinned to `b` so the chain re-run below is deterministic rather than a function of
+        # wherever the suite was launched from.
+        r = vault(b, cfg, "status", "--json", cwd=b)
         data = json.loads(r.stdout)["data"]
         check("status reports the active root and that it is unregistered",
               data["active_root"] == os.path.realpath(b) and data["registered_as"] is None, r.stdout)
         check("status names the mechanism that selected the root",
               data["selected_by"] == "PLAINKEEP_HOME", r.stdout)
+        # This verb was invoked DIRECTLY, with no dispatcher to record a mechanism — PLAINKEEP_HOME
+        # is then genuinely the only thing that pointed it anywhere, and `selected_by_source` is what
+        # keeps that distinguishable from a dispatcher's answer instead of collapsing the two.
+        check("status says WHERE the mechanism came from, so a direct invocation is not mistaken "
+              "for a dispatched one",
+              data["selected_by_source"].startswith("PLAINKEEP_HOME (no dispatcher"), r.stdout)
+        # REWRITTEN in the r2 fix wave. This used to assert `would_select == realpath(b)`, which was
+        # true for a reason that made the field useless: the chain was re-run in a process where the
+        # dispatcher had ALREADY exported PLAINKEEP_HOME, so step 2 won every time and `would_select`
+        # could not differ from `active_root` in any invocation that can exist. It is now the chain
+        # with PLAINKEEP_HOME taken out of the way — so here it REFUSES, naming `b` as an
+        # unregistered marker, which is a fact the old reading hid.
         check("status reports what EVERY mechanism saw, not just the winner",
               data["saw"].get("--vault") == "not supplied"
-              and data["would_select"] == os.path.realpath(b), r.stdout)
+              and str(b) in data["saw"].get("marker walk-up from $PWD", ""), r.stdout)
+        check("would_select answers the chain WITHOUT PLAINKEEP_HOME — here an unregistered marker",
+              data["would_select"] is None
+              and "not in the registry" in (data["selection_error"] or ""), r.stdout)
 
 
 def main() -> int:

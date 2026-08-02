@@ -103,9 +103,14 @@ export function takeVaultSelector(argv: string[]): { selector: string | null; re
 export interface Root {
   root: string;
   id: string;
+  // WHICH of the four chain steps chose `root`. Carried rather than recomputed: dispatch() exports
+  // PLAINKEEP_HOME before spawning the verb, which destroys the evidence — a verb re-running the
+  // chain finds step 2 already satisfied and can only ever answer "PLAINKEEP_HOME". `vault status`
+  // reads it back out of PLAINKEEP_VAULT_MECHANISM.
+  mechanism: string;
 }
 
-// Run the shared discovery module. stdout is two lines — canonical root, then vault id. A refusal
+// Run the shared discovery module. stdout is three lines — canonical root, vault id, mechanism. A refusal
 // keeps ITS exit code (2 usage / 5 policy-denied) and ITS stderr, which is written through verbatim
 // so the floor and the core are indistinguishable to a caller.
 export function discoverRoot(selector: string | null): Root {
@@ -137,8 +142,9 @@ export function discoverRoot(selector: string | null): Root {
   const lines = (r.stdout ?? "").split("\n");
   const root = lines[0] ?? "";
   const id = lines[1] ?? "";
-  if (!root || !id) {
+  const mechanism = lines[2] ?? "";
+  if (!root || !id || !mechanism) {
     throw new VaultRefusal("plainkeep: vault discovery returned no root — the engine tree is broken");
   }
-  return { root, id };
+  return { root, id, mechanism };
 }

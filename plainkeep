@@ -61,7 +61,11 @@ pk_discover() {
   [ "$rc" -eq 0 ] || exit "$rc"
   PLAINKEEP_HOME="$(printf '%s\n' "$out" | sed -n '1p')"
   PLAINKEEP_VAULT_ID="$(printf '%s\n' "$out" | sed -n '2p')"
-  export PLAINKEEP_HOME PLAINKEEP_VAULT_ID
+  # Line 3 is WHICH mechanism chose, and it has to travel because exporting PLAINKEEP_HOME on the
+  # line above destroys the evidence: a verb re-running the chain would find step 2 already
+  # satisfied and could only ever answer "PLAINKEEP_HOME". `plainkeep vault status` reads it.
+  PLAINKEEP_VAULT_MECHANISM="$(printf '%s\n' "$out" | sed -n '3p')"
+  export PLAINKEEP_HOME PLAINKEEP_VAULT_ID PLAINKEEP_VAULT_MECHANISM
 }
 
 # --------------------------------------------------------------------------------------------------

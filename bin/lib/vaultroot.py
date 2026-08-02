@@ -82,6 +82,12 @@ VaultError = vaultreg.VaultError
 # not).
 ENV_HOME = "PLAINKEEP_HOME"
 ENV_ID = "PLAINKEEP_VAULT_ID"
+# WHICH of the four mechanisms chose the root, carried to the spawned verb because it cannot be
+# recovered there: the dispatcher exports PLAINKEEP_HOME before spawning, so a verb re-running the
+# chain always sees step 2 win and can only ever answer "PLAINKEEP_HOME". `vault status` is the
+# surface every refusal in ADR-014 Task 1b depends on for diagnosability, and without this it
+# reported a constant.
+ENV_MECHANISM = "PLAINKEEP_VAULT_MECHANISM"
 
 MECHANISMS = ("--vault", "PLAINKEEP_HOME", "marker walk-up from $PWD", "registry default")
 
@@ -323,6 +329,16 @@ def active_id() -> str | None:
     return os.environ.get(ENV_ID) or None
 
 
+def active_mechanism() -> str | None:
+    """Which of the four mechanisms chose this process's root, as the dispatcher recorded it.
+
+    None means no dispatcher was involved — a verb invoked directly as `python3 bin/<verb>/run.py`.
+    That is a real answer, not a missing one: such a process was pointed at its root by
+    PLAINKEEP_HOME and by nothing else, and `vault status` says so rather than guessing."""
+    v = os.environ.get(ENV_MECHANISM)
+    return v if v in MECHANISMS else None
+
+
 # --- the dispatcher entry point -------------------------------------------------------------------
 def require_engine(sel: Selection) -> None:
     """Refuse a SELECTED root that carries no copy of the engine, before either dispatcher tries to
@@ -360,8 +376,12 @@ def require_engine(sel: Selection) -> None:
 
 def _select_cli(argv: list[str]) -> int:
     """`vaultroot.py --select [--vault X]` — run the chain and print the answer for a DISPATCHER to
-    export. Two lines on stdout: the canonical root, then the vault id. Any refusal goes to stderr
-    with the frozen exit code.
+    export. THREE lines on stdout: the canonical root, the vault id, then the mechanism that chose
+    it. Any refusal goes to stderr with the frozen exit code.
+
+    The third line exists because the mechanism is the one part of the answer that cannot be
+    recovered downstream: exporting PLAINKEEP_HOME (which the dispatcher must do) destroys the
+    evidence of which step won, so a verb re-running the chain can only ever answer "PLAINKEEP_HOME".
 
     Both dispatchers call exactly this, which is what makes them agree: the bash floor and the
     compiled core share ONE implementation of the safety-critical decision rather than a port and a
@@ -383,7 +403,7 @@ def _select_cli(argv: list[str]) -> int:
     except VaultError as e:
         sys.stderr.write("plainkeep: " + e.message + (f"\n  {e.hint}" if e.hint else "") + "\n")
         return e.code
-    sys.stdout.write(sel.root + "\n" + sel.id + "\n")
+    sys.stdout.write(sel.root + "\n" + sel.id + "\n" + sel.mechanism + "\n")
     return output.EXIT_OK
 
 

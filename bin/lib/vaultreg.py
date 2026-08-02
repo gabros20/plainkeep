@@ -102,7 +102,10 @@ def _same_entry(a: str, b: str) -> bool:
 
 def same_path(a, b) -> bool:
     """Do two CANONICAL paths name one directory? String equality first (the overwhelmingly common
-    case, and free), identity second."""
+    case, and free), identity second.
+
+    Whole strings go to `_same_entry`, so this is spelling-agnostic on both folds at once: case and
+    Unicode normalisation alike are answered by the inode pair rather than by the text."""
     a, b = str(a), str(b)
     return a == b or _same_entry(a, b)
 
@@ -113,16 +116,41 @@ def path_within(inner: str, outer: str) -> bool:
     Both sides must already be canonical. The boundary requirement is what keeps `…/4.0.0-dev-notes`
     from reading as inside `…/4.0.0-dev`; the identity fallback is what keeps `/x/VAULTDIR/sub` from
     reading as OUTSIDE `/x/vaultdir` on a case-folding volume — see `_same_entry`. The stat pair is
-    paid only when the string comparison has already answered "no"."""
+    paid only when the string comparison has already answered "no".
+
+    **The boundary is located by COMPONENT COUNT, never by string length.** That is the whole reason
+    this is not a slice: `outer` and `inner`'s matching ancestor may be two spellings of one
+    directory, and the two folds behave differently under `len()`. Case is length-PRESERVING, so a
+    character slice happened to land on the boundary and identity got its chance. Unicode
+    normalisation is NOT — NFC `café` is 4 characters, NFD `café` is 5 — so `inner[:len(outer)]` cut
+    the wrong place, `inner[len(outer)]` read a letter instead of the separator, and the function
+    answered False for a path that was genuinely inside, BEFORE identity was ever consulted. Counting
+    `/`-separated components is invariant under both folds by construction: no normalisation form and
+    no case ever changes how many separators a path has. So the ancestor of `inner` at `outer`'s depth
+    is picked positionally and handed to the FILESYSTEM, which is the only party that knows whether
+    two spellings are one directory.
+
+    No `.lower()` and no `unicodedata.normalize()` on purpose, for `_same_entry`'s reason: either fold
+    is WRONG on a volume that does not perform it, and would merge two genuinely distinct directories
+    into one — a false "inside" verdict. `stat` answers for the volume the paths actually live on.
+
+    Residue, stated rather than left to be discovered: identity needs both sides to EXIST. For a pair
+    where the ancestor at `outer`'s depth is missing, only the string comparison speaks, so two
+    spellings of one NON-EXISTENT path still read as different. The one caller
+    (`enginetree.disjointness_verdict`) compares a validated vault root against the running engine
+    root — both exist by construction — so this is unreachable there; a future caller that asks about
+    paths not yet created inherits it."""
     outer = outer.rstrip("/") or "/"
     sep = "" if outer == "/" else "/"
     if inner == outer or inner.startswith(outer + sep):
         return True
-    if len(inner) < len(outer):
-        return False
-    if len(inner) > len(outer) and inner[len(outer)] != "/":
-        return False                      # not on a path boundary — a sibling sharing a prefix
-    return _same_entry(inner[:len(outer)], outer)
+    outer_parts = outer.split("/")
+    inner_parts = inner.rstrip("/").split("/")
+    if len(inner_parts) < len(outer_parts):
+        return False                      # `inner` is shallower than `outer` — it cannot be inside it
+    # `inner`'s own ancestor at `outer`'s depth, or `inner` itself when the depths match. The FS then
+    # says whether that ancestor and `outer` are one directory entry, whatever they are spelled like.
+    return _same_entry("/".join(inner_parts[:len(outer_parts)]), outer)
 
 
 # --- the marker ---------------------------------------------------------------------------------

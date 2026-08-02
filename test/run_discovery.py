@@ -36,6 +36,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from lib.hermetic import seal
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
@@ -1091,6 +1092,76 @@ def case_data_only_vault_and_disjointness() -> None:
                   r.returncode == 0 and any(f.startswith("CONTAINER-notes" + os.sep + "inbox")
                                             for f in new_files(sandbox, before)),
                   f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+        # THE UNICODE-NORMALISATION AXIS — the OTHER fold, and the one the case cases cannot stand in
+        # for. Case is length-preserving, so a boundary located by string length still landed on the
+        # separator and the identity check got its chance; normalisation is not — NFC `café` is 4
+        # characters and NFD `café` is 5. A `len(outer)`-sized slice of the inner path therefore cut
+        # mid-name, the character after it was a letter rather than `/`, and `path_within` answered
+        # "not inside" for a directory that IS inside — before identity was ever consulted. macOS
+        # stores NFD (HFS+ normalised on write, APFS preserves what it was given) while Finder, the
+        # shell and completion do not agree on which form they hand over, so both spellings of one
+        # accented directory are in ordinary circulation.
+        #
+        # Skipped rather than faked where the alternate spelling names nothing, for the case axis's
+        # reason: on a normalisation-SENSITIVE volume these are two directories and the right refusal
+        # is a different one.
+        accent = sandbox / unicodedata.normalize("NFC", "café")
+        acc_container = accent / "container"
+        acc_engine = acc_container / "engine"
+        shutil.copytree(REPO / "bin", acc_engine / "bin",
+                        ignore=shutil.ignore_patterns("__pycache__"))
+        shutil.copy2(REPO / "VERSION", acc_engine / "VERSION")
+        shutil.copy2(REPO / "plainkeep", acc_engine / "plainkeep")
+        os.chmod(acc_engine / "plainkeep", 0o755)
+        acc_inside = acc_engine / "bin" / "share"
+        acc_notes = accent / "notes"
+        acc_notes.mkdir()
+        for root, name in ((acc_engine, "accentengine"), (acc_inside, "accentinside"),
+                           (acc_container, "accentcontainer"), (acc_notes, "accentnotes")):
+            vaultfx.mark_vault(root)
+            register(sandbox, root, name)
+
+        def _nfd(p: Path) -> Path:
+            return Path(unicodedata.normalize("NFD", str(p)))
+
+        acc_shim = str(acc_engine / "plainkeep")
+        if not _nfd(acc_container).is_dir() or _nfd(acc_container) == acc_container:
+            print("SUITE-NOTE: the Unicode-normalisation half of the disjointness cases was SKIPPED "
+                  "— this filesystem distinguishes NFC from NFD, so the alternate spelling names "
+                  "nothing. macOS (APFS/HFS+) is where the bug lived.")
+        else:
+            for label, home, expect in (
+                    # The two that the length slice got WRONG. Both directions of the containment
+                    # question, each addressed in the spelling the fixture was NOT created with.
+                    ("the data root is INSIDE the engine tree, spelled NFD",
+                     _nfd(acc_inside), "is inside the engine tree"),
+                    ("the engine tree is INSIDE the data root, spelled NFD",
+                     _nfd(acc_container), "is inside it"),
+                    # Whole-string identity already answered this one; it is here so the axis is
+                    # covered in all three shapes rather than in the two that were broken.
+                    ("the data root IS the engine root, spelled NFD",
+                     _nfd(acc_engine), "IS the engine tree")):
+                before = snapshot(sandbox)
+                r = _run([acc_shim, "capture", "should-never-land"], sandbox,
+                         {**env, "PLAINKEEP_HOME": str(home), "PLAINKEEP_CORE": "off"})
+                out = r.stdout + r.stderr
+                check(f"[off] disjointness · {label} → EXIT_DENY (5)",
+                      r.returncode == EXIT_DENY and expect in out, f"rc={r.returncode} {out}")
+                check(f"[off] disjointness · {label} writes nothing",
+                      not new_files(sandbox, before), str(sorted(new_files(sandbox, before))))
+            # ...and normalising did not become a blanket "everything under an accented parent
+            # overlaps": a vault beside the engine, addressed in the other form, still dispatches.
+            # Without this the three refusals above would pass against a build that refused
+            # every accented root.
+            before = snapshot(sandbox)
+            r = _run([acc_shim, "capture", "nfdworks"], sandbox,
+                     {**env, "PLAINKEEP_HOME": str(_nfd(acc_notes)), "PLAINKEEP_CORE": "off"})
+            created = new_files(sandbox, before)
+            check("...and an accented SIBLING vault, spelled NFD, is still ALLOWED",
+                  r.returncode == 0 and any(os.sep + "notes" + os.sep + "inbox" in os.sep + f
+                                            for f in created),
+                  f"rc={r.returncode} {r.stdout}{r.stderr} {sorted(created)}")
 
         # ...and the refusal is byte-identical across the two dispatchers, which is the whole reason
         # discovery is ONE shared module rather than a port kept in step by a differential.

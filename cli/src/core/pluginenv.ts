@@ -15,7 +15,11 @@
 import path from "node:path";
 
 export const PACK_ENV = "PLAINKEEP_PLUGIN_PACK";
-export const DEPS_DIRNAME = ".deps";
+// AT THE VAULT ROOT, not under `plugins/`. Read pluginenv.py for why: `plugins/` is the directory
+// the resolver enumerates as packs, so an overlay sited inside it made every pip-installed
+// distribution a candidate verb. Moving it out is the fix; the dot filter in resolver.ts covers a
+// vault that still carries the old `plugins/.deps/`.
+export const DEPS_DIRNAME = ".plugin-deps";
 const SOURCE_PLUGIN_PREFIX = "plugin:";
 
 export function packOf(source: string | null | undefined): string | null {
@@ -24,7 +28,7 @@ export function packOf(source: string | null | undefined): string | null {
 }
 
 export function depsDir(vault: string): string {
-  return path.join(vault, "plugins", DEPS_DIRNAME);
+  return path.join(vault, DEPS_DIRNAME);
 }
 
 // ORDER IS THE CONTRACT: the vault's dependency overlay first, then the engine tree. A pack's
@@ -41,15 +45,22 @@ export function prependPath(entries: string[], existing: string | null | undefin
   return entries.join(path.delimiter) + (tail ? path.delimiter + tail : "");
 }
 
-// The environment ADDITIONS for one spawn — empty for an engine verb.
+// The environment DELTA for one spawn: a string value is SET on the child, an `undefined` value is
+// REMOVED from it (spawnVerb() in dispatch.ts deletes the key rather than passing undefined through).
+//
+// An engine verb is `{ [PACK_ENV]: undefined }` — a REMOVAL, not an absence. Returning `{}` here was
+// correct only for a caller whose own environment did not already carry the marker, and a plugin
+// verb that re-enters the dispatcher (the documented pattern) is exactly the caller that does: the
+// marker was inherited to arbitrary depth and any descendant importing `lib.api` then blamed its own
+// missing module on a pack that had nothing to do with it. Mirrors pluginenv.py's `spawn_env`.
 export function spawnEnv(
   engine: string,
   vault: string,
   source: string | null,
   env: Record<string, string | undefined>,
-): Record<string, string> {
+): Record<string, string | undefined> {
   const pack = packOf(source);
-  if (pack === null) return {};
+  if (pack === null) return { [PACK_ENV]: undefined };
   return {
     PYTHONPATH: prependPath(sdkPathEntries(engine, vault), env.PYTHONPATH),
     [PACK_ENV]: pack,

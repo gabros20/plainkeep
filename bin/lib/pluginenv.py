@@ -17,7 +17,7 @@ new is built, so nothing can drift from what it forwards to (ADR-018 D1).
 
 THE TWO THINGS ADDED, and they are added ONLY for a verb the resolver answered `plugin:<pack>`:
 
-  * `PYTHONPATH` — `<vault>/plugins/.deps` then `<engine>/bin`, prepended to whatever the caller had.
+  * `PYTHONPATH` — `<vault>/.plugin-deps` then `<engine>/bin`, prepended to whatever the caller had.
     The deps overlay comes FIRST so a pack's DECLARED dependency beats the engine tree's incidental
     top-level names (`bin/models/`, `bin/files/`, `bin/index/` are all importable namespace packages
     once `bin/` is on the path). The one name that inversion could cost is `lib` itself, which is why
@@ -50,11 +50,25 @@ from pathlib import Path
 # refusal) and by the tests; written by BOTH dispatchers.
 PACK_ENV = "PLAINKEEP_PLUGIN_PACK"
 
-# The vault-local dependency overlay. Under `plugins/` rather than beside it because it is part of a
-# vault's plugin state — the same tree `plugins.lock.json` describes and `script/update` never
-# touches — and dot-prefixed because it is machinery, not a pack (the resolver skips it for the same
-# reason `plugin_names()` never invents a pack called `.deps`).
-DEPS_DIRNAME = ".deps"
+# The vault-local dependency overlay, AT THE VAULT ROOT and deliberately NOT under `plugins/`.
+#
+# It was sited at `plugins/.deps/` and that was wrong in a way a dot prefix does not fix.
+# `plugins/` is the directory `resolver._plugin_packs()` ENUMERATES, and it appends every
+# subdirectory it finds, so every distribution pip unpacked into the overlay became a candidate
+# plugin pack: an ordinary pure-python wheel that ships `<pkg>/run.py` resolved as the verb `<pkg>`,
+# in BOTH dispatchers, attributed to a "pack" named `.deps` that `plugins.lock.json` never recorded,
+# that `plugin list` never showed, and that no user ever consented to. It was also advertised through
+# `plugin_names()`, so it reached help, completion, the TUI and the MCP tool list.
+#
+# The rule is now STRUCTURAL rather than written down: pip content is not inside the tree that is
+# enumerated, so nothing has to consult a rule for an installed package to stay un-dispatchable.
+# (`resolver._plugin_packs()` additionally skips dot-prefixed entries — that is a SECOND line, for a
+# vault that already carries a legacy `plugins/.deps/` from before this move, not the mechanism.)
+DEPS_DIRNAME = ".plugin-deps"
+
+# Where `plugin sync` put the overlay before the move. Nothing reads FROM it; it is named so `doctor`
+# and `plugin sync` can point at a directory that is now inert and should be deleted.
+LEGACY_DEPS_REL = ("plugins", ".deps")
 
 SOURCE_PLUGIN_PREFIX = "plugin:"
 
@@ -62,7 +76,13 @@ SOURCE_PLUGIN_PREFIX = "plugin:"
 def deps_dir(vault) -> Path:
     """The dependency overlay for a vault. May not exist — a missing `PYTHONPATH` entry is skipped by
     CPython, and both dispatchers add it unconditionally so neither has to stat anything to agree."""
-    return Path(vault) / "plugins" / DEPS_DIRNAME
+    return Path(vault) / DEPS_DIRNAME
+
+
+def legacy_deps_dir(vault) -> Path:
+    """The pre-move overlay location (`plugins/.deps/`), for the one thing it is still good for:
+    telling a user that the directory in their vault is stale."""
+    return Path(vault).joinpath(*LEGACY_DEPS_REL)
 
 
 def engine_bin(engine) -> Path:
@@ -90,12 +110,21 @@ def prepend_path(entries: list[str], existing: str | None) -> str:
     return os.pathsep.join(entries) + (os.pathsep + tail if tail else "")
 
 
-def spawn_env(engine, vault, source: str | None, environ=None) -> dict[str, str]:
-    """The environment ADDITIONS for one verb spawn — `{}` for an engine verb. The dispatcher merges
-    this into the child's environment and changes nothing else."""
+def spawn_env(engine, vault, source: str | None, environ=None) -> dict[str, str | None]:
+    """The environment DELTA for one verb spawn. The dispatcher applies it to the child's environment
+    and changes nothing else: a `str` value is set, a `None` value is REMOVED.
+
+    An engine verb is `{PACK_ENV: None}` — a REMOVAL, not an absence, and the difference is the whole
+    finding. `{}` meant "add nothing", which is correct only when the variable was not there to begin
+    with. A plugin verb that re-enters the dispatcher (the documented pattern) passes
+    `PLAINKEEP_PLUGIN_PACK` down to every descendant, and any of them that imports `lib.api` installs
+    the missing-dependency excepthook and reports its OWN `ModuleNotFoundError` as the named pack's
+    fault. Exporting the marker in a shell armed the same hook for every subsequent import. The
+    plugin contract is a REPLACEMENT of the marker, so a verb the resolver did not answer
+    `plugin:<pack>` for cannot run under a pack's name — inherited, spoofed, or otherwise."""
     pack = pack_of(source)
     if pack is None:
-        return {}
+        return {PACK_ENV: None}
     env = os.environ if environ is None else environ
     return {
         "PYTHONPATH": prepend_path(sdk_path_entries(engine, vault), env.get("PYTHONPATH")),
@@ -122,7 +151,9 @@ SDK_PACKAGE = "lib"
 
 def _pack_roots(vault, environ=None) -> list[tuple[str, Path]]:
     """(pack_name, pack_dir) for the vault's own packs and each $PLAINKEEP_PATH root — the same set
-    the resolver treats as packs, minus the dot-prefixed machinery (`.deps` is not a pack)."""
+    the resolver treats as packs. Dot-prefixed entries under `plugins/` are skipped here and by
+    `resolver._plugin_packs()`, in the same words for the same reason: a `.git`, an OS turd or a
+    legacy `plugins/.deps/` overlay is not a pack."""
     env = os.environ if environ is None else environ
     roots: list[tuple[str, Path]] = []
     pdir = Path(vault) / "plugins"

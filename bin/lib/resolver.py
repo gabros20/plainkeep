@@ -44,12 +44,20 @@ def _is_verb_dir(d: Path) -> bool:
 
 def _plugin_packs() -> list[tuple[str, Path]]:
     """(pack_name, pack_dir) for each plugins/<pack>/ under PLAINKEEP_HOME, then each $PLAINKEEP_PATH root (the
-    root itself is the pack). Order is the resolution order after the engine."""
+    root itself is the pack). Order is the resolution order after the engine.
+
+    A DOT-PREFIXED subdirectory is not a pack — `.git`, an OS turd, or a legacy `plugins/.deps/`
+    dependency overlay left by a `plugin sync` from before the overlay moved to `<vault>/.plugin-deps/`
+    (pluginenv.py). This filter used to be absent, and its absence is what let pip content be
+    dispatched: a wheel that ships `<pkg>/run.py` unpacked into `plugins/.deps/` resolved as the verb
+    `<pkg>` under a "pack" no lockfile recorded. The overlay's move out of `plugins/` is what actually
+    fixes that; this line is what covers a vault that already has the old directory on disk. Same
+    words, same reason as `pluginenv._pack_roots()` — the two enumerations agree by construction."""
     packs: list[tuple[str, Path]] = []
     pdir = _ops_home() / "plugins"
     if pdir.is_dir():
         for sub in sorted(pdir.iterdir()):
-            if sub.is_dir():
+            if sub.is_dir() and not sub.name.startswith("."):
                 packs.append((sub.name, sub))
     for root in os.environ.get("PLAINKEEP_PATH", "").split(":"):
         root = root.strip()

@@ -19,6 +19,11 @@ test/last-run-*.json
 # requirements here. Same class as `.venv/` above: it lives inside PLAINKEEP_HOME, it is machine- and
 # interpreter-specific, and it is fully rebuildable from `plugins/plugins.lock.json`, which IS
 # committed. The declarations are the source of truth; the installed bytes are a cache.
+#
+# At the vault ROOT rather than under `plugins/`: that directory is the one the resolver enumerates as
+# packs, and an overlay inside it made every installed distribution a candidate verb. The second entry
+# is the pre-move location, kept ignored so an existing checkout does not suddenly show it as untracked.
+/.plugin-deps/
 /plugins/.deps/
 
 # Run logs — append-only, regenerable

@@ -2,7 +2,7 @@
 // oracle (test/cases/core-parity/dispatcher.json's `plugin-spawn-environment`, which compares the
 // child environment BOTH dispatchers actually produce) plus test/run_pluginsdk.py, which runs a real
 // unmodified plugin through a real dispatch. This file only pins the pure port in-process — the two
-// cases a subprocess differential shows less sharply: the EMPTY answer for an engine verb, and the
+// cases a subprocess differential shows less sharply: the REMOVAL an engine verb gets, and the
 // exact merge with a caller's own PYTHONPATH.
 import { test, expect } from "bun:test";
 import path from "node:path";
@@ -10,7 +10,7 @@ import { PACK_ENV, packOf, depsDir, sdkPathEntries, prependPath, spawnEnv } from
 
 const ENGINE = "/eng/current";
 const VAULT = "/vault";
-const DEPS = path.join(VAULT, "plugins", ".deps");
+const DEPS = path.join(VAULT, ".plugin-deps");
 const BIN = path.join(ENGINE, "bin");
 
 test("packOf reads a resolver source string and nothing else", () => {
@@ -39,9 +39,18 @@ test("prependPath prepends and never replaces", () => {
   expect(prependPath([DEPS, BIN], BIN)).toBe(`${DEPS}:${BIN}:${BIN}`);
 });
 
-test("an ENGINE verb gets NOTHING — the whole per-spawn decision, in one assertion", () => {
-  expect(spawnEnv(ENGINE, VAULT, "engine", { PYTHONPATH: "/caller" })).toEqual({});
-  expect(spawnEnv(ENGINE, VAULT, null, {})).toEqual({});
+test("an ENGINE verb gets the marker REMOVED, not merely not-added", () => {
+  // `{}` here — "add nothing" — was the finding. It is correct only for a caller whose own
+  // environment does not already carry the marker, and a plugin verb that re-enters the dispatcher
+  // is exactly the caller that does: PLAINKEEP_PLUGIN_PACK is inherited to any depth, and anything
+  // below that imports `lib.api` reports its own missing module as the named pack's fault. The
+  // delta is a REPLACEMENT; `undefined` is the deletion spawnVerb() applies with `delete`.
+  expect(spawnEnv(ENGINE, VAULT, "engine", { PYTHONPATH: "/caller" })).toEqual({
+    [PACK_ENV]: undefined,
+  });
+  expect(spawnEnv(ENGINE, VAULT, null, {})).toEqual({ [PACK_ENV]: undefined });
+  // ...and it adds nothing else: PYTHONPATH is the caller's own business for an engine verb.
+  expect(Object.keys(spawnEnv(ENGINE, VAULT, "engine", {}))).toEqual([PACK_ENV]);
 });
 
 test("a PLUGIN verb gets exactly two variables", () => {

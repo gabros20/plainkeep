@@ -89,13 +89,18 @@ function isVerbDir(d: string): boolean {
 
 // (pack_name, pack_dir) for each plugins/<pack>/ under PLAINKEEP_HOME (sorted), then each
 // $PLAINKEEP_PATH root (the root itself is the pack). Order is the resolution order after the engine.
+//
+// A DOT-PREFIXED subdirectory is not a pack — `.git`, an OS turd, or a legacy `plugins/.deps/`
+// dependency overlay left by a `plugin sync` from before the overlay moved to `<vault>/.plugin-deps/`.
+// Ported from resolver.py's `_plugin_packs()` line for line: without it, pip content unpacked under
+// `plugins/` was dispatchable as a verb in THIS dispatcher too.
 function pluginPacks(): Array<[string, string]> {
   const packs: Array<[string, string]> = [];
   const pdir = path.join(opsHome(), "plugins");
   if (isDir(pdir)) {
     for (const name of sortedChildNames(pdir)) {
       const sub = path.join(pdir, name);
-      if (isDir(sub)) packs.push([name, sub]);
+      if (isDir(sub) && !name.startsWith(".")) packs.push([name, sub]);
     }
   }
   for (const raw of (process.env.PLAINKEEP_PATH ?? "").split(":")) {

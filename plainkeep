@@ -162,9 +162,19 @@ pk_floor() {
   # on PYTHONPATH for all 35 of them would hand `<engine>/bin` to every child they spawn for nothing.
   # The values are computed by resolver.py (bin/lib/pluginenv.py holds the rule), never composed here
   # — a shell that knows the policy is a third copy of it.
+  #
+  # The `else` is not symmetry for its own sake. `PLAINKEEP_PLUGIN_PACK` is INHERITED — a plugin verb
+  # that re-enters the dispatcher (the documented pattern) hands it to everything below it, and a
+  # shell can simply export it. Anything that then imports `lib.api` installs the missing-dependency
+  # excepthook and reports its own ModuleNotFoundError as that pack's fault. So the contract is a
+  # REPLACEMENT of the marker rather than an addition to it: a verb the resolver did not answer
+  # `plugin:<pack>` for runs with the marker GONE. PYTHONPATH is left alone — a caller's own value is
+  # legitimately theirs, and the engine entry is scrubbed in-process by lib/api.py.
   if [ -n "$PACK" ]; then
     export PLAINKEEP_PLUGIN_PACK="$PACK"
     export PYTHONPATH="$PP"
+  else
+    unset PLAINKEEP_PLUGIN_PACK
   fi
   exec "$PY" "$CMD" "$@"
 }

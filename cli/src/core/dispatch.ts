@@ -384,7 +384,7 @@ function spawnVerb(
   script: string,
   args: string[],
   home: string,
-  extraEnv: Record<string, string> = {},
+  extraEnv: Record<string, string | undefined> = {},
 ): CoreResult {
   restoreBlockingStdio(py);
   // PLAINKEEP_HOME is the canonical root; PLAINKEEP_VAULT_ID travels with it (Task 1b) so a verb, a
@@ -392,14 +392,26 @@ function spawnVerb(
   // It is read from process.env rather than threaded through, because dispatch() sets both together
   // and an interception's fall-through reaches this same function.
   //
-  // `extraEnv` is the PLUGIN SPAWN CONTRACT (Phase 2 Task 3) and is EMPTY for an engine verb —
-  // pluginenv.ts decides it, spawnPythonVerb() computes it. It is applied after PLAINKEEP_HOME so
-  // the two are one object literal rather than two mutations of process.env: the core must not carry
-  // a plugin's PYTHONPATH in its OWN environment, where an interception or a second spawn in the
-  // same process would inherit it.
+  // `extraEnv` is the PLUGIN SPAWN CONTRACT (Phase 2 Task 3) — pluginenv.ts decides it,
+  // spawnPythonVerb() computes it. It is applied after PLAINKEEP_HOME so the two are one object
+  // literal rather than two mutations of process.env: the core must not carry a plugin's PYTHONPATH
+  // in its OWN environment, where an interception or a second spawn in the same process would
+  // inherit it.
+  //
+  // An `undefined` value is a REMOVAL and is applied as one. For an engine verb the delta is
+  // `{ PLAINKEEP_PLUGIN_PACK: undefined }`, and merely spreading that would leave the key present
+  // with an undefined value — whose fate is the runtime's business, not ours. Deleting it is what
+  // the floor's `unset` does, and it is what stops an inherited or exported marker from making an
+  // engine verb run under some pack's name.
+  const childEnv: Record<string, string | undefined> = {
+    ...process.env, PLAINKEEP_HOME: home, ...extraEnv,
+  };
+  for (const [k, v] of Object.entries(extraEnv)) {
+    if (v === undefined) delete childEnv[k];
+  }
   const r = spawnSync(py, [script, ...args], {
     stdio: "inherit",
-    env: { ...process.env, PLAINKEEP_HOME: home, ...extraEnv },
+    env: childEnv as NodeJS.ProcessEnv,
   });
   return classifySpawnOutcome(r as SpawnOutcome, py);
 }

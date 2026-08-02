@@ -293,7 +293,9 @@ def _select_cli(argv: list[str]) -> int:
 
     Both dispatchers call exactly this, which is what makes them agree: the bash floor and the
     compiled core share ONE implementation of the safety-critical decision rather than a port and a
-    differential. It costs the core one extra process (measured ~23 ms) — the same trade the
+    differential. It costs the core one extra process — measured +28.8 ms median on a `vault list
+    --json` dispatch, 70.2 -> 99.0 ms, over 25 interleaved runs on bun 1.3.14 / macOS arm64 /
+    CPython 3.12 against a build with this call stubbed out. That is the same trade the
     O_NONBLOCK helper takes, and for a stronger reason: a ported registry validator whose refusal
     text must stay byte-identical is precisely the drift this repo has already paid for once."""
     selector = None

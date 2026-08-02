@@ -172,7 +172,7 @@ class Session:
 
         This exists because "the reply is in flight" used to be a `time.sleep(0.05)`, and a sleep is
         an assumption about how long a tool call takes. ADR-014 Task 1b made every dispatch spawn one
-        more process (root discovery, ~23 ms measured), which pushed the child PAST the 50 ms window
+        more process (root discovery, +28.8 ms median measured), which pushed the child PAST the 50 ms window
         — so the SIGTERM landed while the child was still running, the core killed it as designed,
         and the case saw `exit -15` instead of the frame. `select()` on the descriptor answers the
         question the case is actually asking, and it answers it by measurement."""
@@ -992,7 +992,7 @@ def case_sigterm_mid_call(m: Mode) -> None:
         # and the frame is what is in flight; and the reply is ~300 KB against a 64 KiB pipe buffer
         # with nothing read, so it CANNOT have finished writing. This used to be `time.sleep(0.05)`,
         # a guess about how long a tool call takes, and it stopped being true the moment ADR-014
-        # Task 1b added a process to every dispatch (root discovery, ~23 ms): the signal started
+        # Task 1b added a process to every dispatch (root discovery, +28.8 ms median): the signal started
         # landing while the child still ran, the core killed it as designed, and the case saw
         # `exit -15`.
         #

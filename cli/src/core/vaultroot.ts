@@ -13,12 +13,13 @@
 //     a vault registered at another path, a policy-denied location, …), each with its own message
 //     and hint. A hand-ported registry validator whose text must stay byte-equal to Python's is the
 //     drift this repo has already paid for once.
-//   * It COSTS ONE PROCESS PER INVOCATION — measured at ~23 ms on bun 1.3.14 / macOS arm64 / CPython
-//     3.12, against a ~24 ms core dispatch. That dents ADR-013's headline (ONE spawn per verb where
-//     the floor pays three; it is now two vs four). The O_NONBLOCK helper took the same shape of
-//     trade for a weaker reason. If that cost ever matters more than single-sourcing the safety
-//     model, the way out is a real port behind a NEW parity catalog that fixtures vaults, registries
-//     and cwds — not an unproven reimplementation.
+//   * It COSTS ONE PROCESS PER INVOCATION. Measured A/B against a build with this call stubbed out,
+//     25 interleaved runs of `vault list --json` on bun 1.3.14 / macOS arm64 / CPython 3.12:
+//     70.2 ms without, 99.0 ms with — +28.8 ms median, +41%. (The spawn alone is 29.9 ms.) That
+//     dents ADR-013's headline: ONE spawn per verb where the floor pays three becomes two vs four.
+//     The O_NONBLOCK helper took the same shape of trade for a weaker reason. If that cost ever
+//     matters more than single-sourcing the safety model, the way out is a real port behind a NEW
+//     parity catalog that fixtures vaults, registries and cwds — not an unproven reimplementation.
 //
 // The ENGINE location is derived from the executable, and that is CORRECT — note the distinction
 // ADR-014 draws and Task 1b turns into a rule. Deriving the ENGINE from where the code lives is

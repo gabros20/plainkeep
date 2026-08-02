@@ -540,8 +540,10 @@ Phase 1 record and its Phase 2/3 deletion boundary stand unchanged. Basis:
 >    (`python3 <engine>/bin/lib/vaultroot.py --select`). Discovery refuses in roughly fifteen distinct
 >    ways, each with its own message, and two dispatchers whose refusal text must stay byte-equal is
 >    the drift this repo has already paid for once — the same reasoning that kept `classify()` out of
->    `guardrail.ts`. It costs the core one process per invocation (~23 ms measured), which dents
->    ADR-013's one-spawn headline and is stated there rather than hidden.
+>    `guardrail.ts`. It costs the core one process per invocation — measured A/B against a build
+>    with the call stubbed out, 70.2 ms -> 99.0 ms on `vault list --json` (+28.8 ms median, +41%,
+>    25 interleaved runs, bun 1.3.14 / macOS arm64 / CPython 3.12) — which dents ADR-013's
+>    one-spawn headline and is stated there rather than hidden.
 > 4. **A verb invoked DIRECTLY (`python3 bin/<verb>/run.py`) still trusts the `PLAINKEEP_HOME` it is
 >    handed.** Validation belongs to the dispatcher and runs once per invocation; every product
 >    surface (the shim, the core, `job run`, MCP) goes through one. `active_root()` reads the

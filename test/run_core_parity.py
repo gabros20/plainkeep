@@ -1373,7 +1373,7 @@ def _no_repo_read_unreadable_source(binary: str, tmps: list[Path], vault: Path) 
 # (enginetree). Task 3 adds `pluginenv` — 25. The numbers below are what the tree HAS, not what the
 # plan remembered.
 EXPECTED_ENGINE_VERBS = 35
-EXPECTED_ENGINE_LIB_MODULES = 25
+EXPECTED_ENGINE_LIB_MODULES = 26
 
 
 def _installed_manifest_checks(tmps: list[Path]) -> None:

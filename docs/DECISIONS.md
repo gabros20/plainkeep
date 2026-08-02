@@ -464,6 +464,12 @@ outlive this branch's review.
   that one workflow rather than as "CI", because it is not true of the other: `release-ui.yml` still
   says `bun-version: latest`, so the artifact a floor user installs would be built on an unpinned
   toolchain. Moot only because that workflow is dead (see below) — reviving it means pinning it.
+  > **Corrected 2026-08-02 (Phase 2 Task 7).** The last two sentences are false at HEAD and were
+  > false from `45b5fa3` onward: that commit revived the workflow and pinned it to
+  > `bun-version-file: .bun-version`, exactly as `ci.yml` does. Both workflows install from the
+  > pinned file; neither says `latest`. Left in place rather than rewritten because what the entry
+  > recorded was true when it was written — see the correction under the paragraph below for the
+  > same repair and for what actually let a claim about a workflow go stale for a whole phase.
 - **MCP is byte-identical to the Python server with one irreducible exception.** Whole sessions are
   byte-compared across both modes. The exception is key ORDER inside a non-string cmd.json value:
   `JSON.parse` hoists integer-like keys before any serializer sees them, so no serializer can recover
@@ -496,6 +502,27 @@ question. **Until it is repointed or deleted, the floor's `plainkeep-ui` cannot 
 `plainkeep setup ui --yes` still installs the last published asset and a contributor checkout still
 builds from source (`cd cli && bun run build:ui`), but no new release can be cut. The workflow now
 says so at the top of its own file, which is where a maintainer stands when it goes red.
+
+> **Corrected 2026-08-02 (Phase 2 Task 7).** The paragraph above is stale at HEAD and has been since
+> `45b5fa3`, which repointed the workflow at `cli/`: `working-directory: cli`, the version check
+> reading `cli/src/tui/version.ts` instead of `ui/src/version.ts`, and `cli/package.json` dropped
+> from the comparison because its `"version"` is the core workspace's own (`0.0.0`) and would fail
+> every release. **The pipeline is functional; the floor's `plainkeep-ui` can be re-released**, and
+> the banner the last sentence describes is gone from the workflow with it.
+>
+> The correction is left as an amendment rather than a rewrite because the interesting part is not
+> the two wrong sentences — it is that they stayed wrong through a whole phase, and through the
+> reviews of it, while the workflow they described sat two files away. Nothing executed the claim.
+> The rule the workflow enforced (tag == pin == compiled constant) had exactly the same problem: it
+> was an inline shell snippet in a tag-triggered job, so the only thing that could run it was cutting
+> a release, and its `sed` parser had never been exercised at all. Phase 2 Task 7 moved that rule
+> into `test/run_uirelease.py`, which the offline batch runs on every push and which proves on every
+> run that it goes red on each way the three can disagree; the workflow now calls it with the tag.
+> The pattern — five instances of it in this phase alone — is written up as **ADR-019** below.
+>
+> One related deferral in the bullet list above is also closed by that task: `check:bun` **does** now
+> gate `build:ui`, so the artifact a floor user installs can no longer be built by a bun older than
+> 1.2.21. What remains true of that bullet is the `pyJsonDumps`/`pythonRepr` drift.
 
 **Phases 2–3, unchanged from the proposal** and NOT decided by accepting this entry: Phase 2 packages
 `bin/**` as a uv-provisioned `plainkeep-engine` and takes the code out of the vault (and owns the

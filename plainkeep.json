@@ -1174,8 +1174,8 @@
     },
     {
       "verb": "plugin",
-      "summary": "install/list/trust/update/remove plugin packs (untrusted until you trust them)",
-      "usage": "plainkeep plugin add <owner/repo|path>[@tag] --yes | list | trust <name> --yes | update <name> --yes | remove <name> --yes",
+      "summary": "install/list/trust/update/remove/sync plugin packs (untrusted until you trust them)",
+      "usage": "plainkeep plugin add <owner/repo|path>[@tag] --yes | list | trust <name> --yes | update <name> --yes | remove <name> --yes | sync [<name>] --yes",
       "risk": "safe_write",
       "reads": [
         "plugins",
@@ -1206,7 +1206,8 @@
           "trusted": "bool",
           "verbs": "list",
           "source": "string",
-          "commit": "string"
+          "commit": "string",
+          "dependencies": "list"
         }
       },
       "actions": [
@@ -1266,6 +1267,19 @@
               "type": "string",
               "required": true,
               "help": "the installed pack name"
+            }
+          ]
+        },
+        {
+          "name": "sync",
+          "summary": "install packs' declared dependencies into plugins/.deps/; needs --yes",
+          "risk": "confirm",
+          "args": [
+            {
+              "name": "name",
+              "type": "string",
+              "required": false,
+              "help": "one pack, or every pack when omitted"
             }
           ]
         }

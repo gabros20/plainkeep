@@ -1,16 +1,24 @@
 # Follow-ups — known deferred work in the core binary
 
-Every item here was found during the eight-task review pass that built the hybrid core (ADR-013,
-Phase 1): each task got a spec review and a quality review, every Critical/Important/Medium finding
-was fixed and re-reviewed before the task closed, and this is the tail that was deliberately left for
-later. Entries closed by later fix waves have been removed rather than left with a note.
+Every item here was found during a task review pass — first the eight that built the hybrid core
+(ADR-013, Phase 1), then Phase 2's (ADR-014 → ADR-019). Each task got a spec review and a quality
+review, every Critical/Important/Medium finding was fixed and re-reviewed before the task closed, and
+this is the tail that was deliberately left for later. Entries closed by later fix waves have been
+removed rather than left with a note.
 
-**Nothing here is a known correctness defect in shipped behaviour**, with two qualifications worth
-stating plainly rather than burying. The second is under
-[The location wall](#the-location-wall-binlibwallpy): a vault whose path merely *contains* a sync
-marker is selectable but not writable, so it is reachable, user-visible and self-contradictory —
-disclosed rather than fixed, because fixing it means re-recording 59 validated guardrail verdicts.
-The first is a real divergence from the bash floor and not a theoretical one:
+**Every item here carries the measurement it was closed against**, or says outright that it has none.
+An entry that says only "this could be a problem" is doing the thing ADR-019 is about: it looks like
+coverage and it is not. If you add one, add the number you saw.
+
+**Nothing here is a known correctness defect in shipped behaviour**, with three qualifications worth
+stating plainly rather than burying. The third is the shadow-note slug race under
+[The location wall](#the-location-wall-binlibwallpy): it is **measured lossy** — 15 of 16 notes
+survived one 16-process run — and it is a real defect, scoped out of Phase 2 Task 1c because what it
+loses is a regenerable note inside a git working tree rather than a filed original. The second is in
+the same section: a vault whose path merely *contains* a sync marker is selectable but not writable,
+so it is reachable, user-visible and self-contradictory — disclosed rather than fixed, because fixing
+it means re-recording 59 validated guardrail verdicts. The first is a real divergence from the bash
+floor and not a theoretical one:
 
 > **`resolver.ts:60` sorts directory names in UTF-16 code-unit order where Python's `sorted()` uses
 > code points.** For any verb or pack directory name outside ASCII — astral characters, some
@@ -43,9 +51,12 @@ fixing it needs.
    (`only in "shim"` instead of `"shim" in case_id`), so any single character of `s`/`h`/`i`/`m` pulls
    in all 13 shim checks while the documented spelling silently drops them. A filter that covers less
    than it says is the defect class this whole suite exists to catch.
-4. **`cli/package.json:17`** — `build:ui` has no `check:bun` prefix where `build` and `test` do, so
-   the artifact a floor user installs can be built by a bun older than 1.2.21 — the version that
-   silently eats empty-string arguments, which is why the pin exists.
+4. **`bin/files/run.py::_shadow()` loses notes under concurrent ingest, measured.** A 16-process run
+   filed 16 originals and left **15** shadow notes: the slug is chosen by an `exists()`-scan of the
+   whole wiki and then written, so two ingests settle on the same slug and one note overwrites the
+   other. The fix is the one Phase 2 Task 1c applied one tree over — create with an atomic
+   create-only primitive and let `EEXIST` pick the next slug. Full entry under
+   [The location wall](#the-location-wall-binlibwallpy).
 5. **`plainkeep ui` cannot be interrupted once an action has run.** `@clack/prompts` 0.7.0 adds
    SIGINT/SIGTERM listeners in every `spinner()` and never removes them, which drops bun's default
    disposition; `kill -9` is the only way out. Floor and core alike, pinned by `test/run_tui_pty.py`.
@@ -195,17 +206,35 @@ fixing it needs.
 - **`bin/files/run.py::_shadow()` picks a slug with an `exists()`-scan of the whole wiki and then
   writes it** — the exact TOCTOU shape Phase 2 Task 1c removed from `~/files/**/in/`, one tree over.
   Two concurrent `files ingest` runs can settle on the same slug and one shadow note then overwrites
-  the other. *Measured, not theoretical:* `test/run_originals.py`'s 16-process case reports the
-  surviving count on every run. It is deliberately out of Task 1c's scope because the note lives
-  inside the vault — a revertible git diff, not evidence — and the ORIGINALS it points at are proved
-  lossless. The fix is the same one: create the note with an atomic primitive and let EEXIST pick
-  the next slug.
+  the other. *Measured lossy, not theoretical:* `test/run_originals.py`'s 16-process case reported
+  **16 of 16** notes on one run and **15 of 16** on another, and prints the surviving count on every
+  run rather than asserting a loss — so the number in front of you is the number that run saw. It is
+  deliberately out of Task 1c's scope because the note lives inside the vault — a revertible git
+  diff, not evidence — and the ORIGINALS it points at are proved lossless. The fix is the same one:
+  create the note with an atomic primitive and let EEXIST pick the next slug.
 - **The validated-case COUNT is written out in prose in nine places** (`bin/lib/wall.py`,
   `bin/lib/guardrail.py`, `test/lib/guardrail.py`, `test/run_guardrail.py`,
   `test/run_deterministic.py`, `test/run_discovery.py`, this file). Task 1c had to update every one
   of them by hand when the count went 51 -> 59, and nothing fails if the next person misses one. The
   parity check already prints `len(cases)`; the prose should say "the validated cases" and let the
   suite carry the number.
+- **21 raw write sites in `bin/` are not behind the wall**, counted and printed as a SUITE-NOTE by
+  `test/run_pathwall.py` on every run: `~/work` fleet trees, `~/.Trash`, a human-supplied `--out`,
+  the guardrail's own audit log, and the vault marker/registry — the writes that *establish* where
+  the wall goes. The wall as written DENIES all of them. *Whether its model should cover verb-owned
+  writes outside the three roots is a policy decision, not a wiring fix, which is why it is a
+  registered number rather than a bug.*
+- **`create_only` is a claim, and one `.pop()` in `guard()` is what keeps it honest.** It is
+  mutation-tested, and no code in `bin/` forwards `**kwargs` into a `vaultio` call (checked) — but it
+  is a discipline, not a type. `lib/api.py` re-exports `classify` to plugins, so a plugin can *ask*
+  with `create_only: true` and be told ALLOW; the answer is advisory and every write it then makes
+  goes through `guard()` anyway.
+- **`UNIQUIFY_LIMIT = 100` is a refusal that did not exist before Phase 2 Task 1c.** 101 files
+  sharing one stem in one `in/` now fails with EXIT_UNEXPECTED instead of producing `brief-101.pdf`;
+  the old loop was unbounded. An honest bound beats a loop a racing writer can keep alive, but it is
+  a behaviour change nobody asked for. *Its cost is measured: `case_uniquify_limit` writes 199
+  fixture files and runs two real `ingest` processes, ~1s, and that cost rises linearly if the bound
+  is raised.*
 
 ## Oracle and tests (`test/`)
 
@@ -244,20 +273,58 @@ fixing it needs.
   checks invoke the Python script directly and only one routes through the shim.
 - **`test/fuzz/`** — the fuzz harnesses have no runner and no recorded invocation, so they run only
   when someone remembers they exist.
+- **ADR-019's own detection rule is not enforced by anything.** Nothing requires a new gate to ship
+  with a call-site mutation showing it red, which is precisely the shape ADR-019 names — and it would
+  be the next instance if it were claimed as enforced. *Stated rather than solved: the honest
+  mechanism is a reviewer's question ("show me it red"), and this repo has no way to require one. A
+  weaker but real version is available and not taken — a `run_all.py` gate that every suite added
+  after this date carries a recorded RED measurement in its module docstring, which checks that
+  someone wrote a number down, not that the number is true.*
 - **`test/run_core_parity.py:388-393`** — nothing pins that the floor script installed into fixtures
   is verbatim-current; a matching edit to both sides would pass undetected.
 - **`cli/src/core/cli.ts:57-63`** — the sanctioned `--version` floor↔core divergence pins only the
   core side; nothing pins the floor's exit 4.
+- **`test/README.md:21` states a cwd invariant that nothing enforces.** "Either invocation is green
+  from the repo root and from inside `test/`" is true today and is checked by hand. `ci.yml` runs
+  `python3 test/run_all.py` from the repo root in all three of its invocations (`:54`, `:110`,
+  `:112`) and never from `test/`, so the regression it guards against — a suite resolving something
+  through `$PWD` — would land green. *Measured for Task 7's own suite only (`run_uirelease.py`: 26/26
+  from both cwds); the other 57 suites are unmeasured under `cd test`. The fix is one more CI step,
+  or a `run_all.py` that re-execs itself once from the other directory.*
+- **`PLAINKEEP_CORE=require python3 test/run_all.py` is red without an absolute
+  `PLAINKEEP_CORE_BIN`.** Exported over the whole harness, `require` reaches suites that copy a vault
+  to a temp directory where the relative core path does not resolve, and they fail with
+  `PLAINKEEP_CORE=require but no live core binary at '/private/var/…'`. `ci.yml:110` passes
+  `PLAINKEEP_CORE_BIN="$PWD/.local/bin/plainkeep-core"` and is green; the bare gesture is not one.
+  *Registered in Phase 2 Task 2 and still open — it is a harness ergonomics defect, not a product
+  one, and the honest gate is the CI spelling.*
+- **7 of the 17 suites that set `PLAINKEEP_ROOTS_HOME` also harden `PLAINKEEP_TEST_HOME`.** The two
+  hardened during Phase 2 Task 1c were the two whose verbs newly routed through the wall; the other
+  ten were exposed to the same class before that change and still are. *Unmeasured — nobody has
+  checked whether any of the ten can actually reach outside its fixture.*
+- **`skills/operate-plainkeep/SKILL.md` has drifted from the design doc's fenced copy, and nothing
+  checks that they agree.** Measured 2026-08-02: **243 shipped lines vs 164 in
+  `docs/design/PERSONAL_OS_DESIGN.md`**, 5 diff hunks, 0.76 similarity — and growing (Task 1c
+  measured 216 vs 164 across 6 hunks). A rule can therefore be true in one and false in the other,
+  which is how one review miss survived. Task 1c fixed the single line it owned and reconciled
+  nothing else. *The file is engine-owned `NAMED_CONTENT`, so it ships to every vault; the doc is
+  what a reviewer reads.*
 
 ## Toolchain, CI and the shim
 
-- **`cli/package.json:17`** — `build:ui` bypasses the bun version gate (see triage #4).
 - **`cli/package.json:26`** — `"@typescript/native-preview": "^7.0.0-dev"` is a caret range on a
   prerelease, which has surprising semver semantics for a non-frozen `bun install`.
-- **`.github/workflows/release-ui.yml`** — non-functional (it still points at the deleted `ui/`), and
-  separately it installs `bun-version: latest` rather than `.bun-version`, so the artifact a floor
-  user installs would be built on an unpinned toolchain. *The file says the first part at the top of
-  itself; reviving the workflow means fixing both.*
+- **`.github/workflows/release-ui.yml` now depends on `test/`.** Phase 2 Task 7 replaced its inline
+  three-way version check with `python3 test/run_uirelease.py --tag "$GITHUB_REF_NAME"`, which is
+  what stops that rule from drifting unexecuted again — but it does couple cutting a release to the
+  test tree and adds a `setup-python` step to a workflow that previously needed only bun. *Accepted:
+  one implementation that runs on every push beats two that agree by hand. Named here so a future
+  reshuffle of `test/` knows the release depends on it.*
+- **The three-way version check is anchored to `enginetree.NAMED_CONTENT`, which is a manifest of
+  paths, not a schema.** `test/run_uirelease.py` finds the pin by looking for the single entry
+  ending `ui/version.txt`. Two such entries, or none, fail the gate loudly (asserted) — but a rename
+  to something not ending in `ui/version.txt` would too, and the message says "the manifest names
+  zero or several", which is not that. *Unmeasured beyond the two asserted cases.*
 - **`plainkeep:67-68`** — an explicitly **empty** `PLAINKEEP_CORE`/`PLAINKEEP_CORE_BIN` is treated as
   unset and silently falls back, rather than tripping the unrecognised-mode exit 2 the file's own
   principle calls for.
@@ -269,6 +336,18 @@ fixing it needs.
 - **`plainkeep:31-34,42-43`** vs **`cli/src/core/dispatch.ts:236-243`** — the core gates before the
   venv probe where the floor probes first, so a refused verb costs the floor a probe and the core
   none. Undisclosed, and the matrix cannot detect a probe regression on refused verbs.
+- **The core cannot run in a deleted cwd, and that is bun's, not ours.** The bun runtime refuses to
+  start before any plainkeep code runs, so `plainkeep-core` exits 1 with bun's own message whatever
+  discovery would have done; `PLAINKEEP_CORE=auto` degrades to the floor for the same reason and IS
+  gated (`run_discovery.py` C2), `require` exits 1 with the shim's liveness message — truthful about
+  the probe and not about the cause.
+- **`VaultError.saw`'s two restored lines are reconstructed, not observed.** The re-run genuinely
+  cannot see `--vault` or the pre-export `PLAINKEEP_HOME`. Exporting the whole `saw` map would remove
+  the reconstruction; it was judged not worth an env var carrying JSON to every child. *So a refusal
+  message can name a cause the failing process did not itself witness.*
+- **`engineDir()` throwing is a test-only hardening.** It closes the one repo-relative write that
+  Phase 2 Task 2's review found; nothing prevents the next such write from a different helper.
+  *Unmeasured: nobody has swept `test/` for other helpers that compose a path off `REPO`.*
 
 ## The engine tree (Phase 2 Task 2, ADR-017)
 
@@ -336,3 +415,35 @@ deliberately left. Each was reproduced by the reviewer.
   regression — but it is what made the (now closed) `--pip-arg` hole reachable with no human present,
   and no test pins that `--yes` cannot be smuggled. **This is the one item on this list with a
   security consequence, and it is the one worth doing first.**
+
+- **`enginetree.install()` still has an open window between `remove_version()` and `os.rename`, and
+  it is open by choice.** A kill in it leaves no engine under the version name and a dangling
+  `current`; a plain `--install` (not `--force`) recovers. The reason it is not closed is written out
+  with its three measurements in `install()`'s own docstring, so the claim can be checked rather than
+  believed: `rename(SEALED dst → .retiring-*)` gives **EACCES**; `_chmod_tree(dst, writable=True)`
+  first and then the rename **succeeds**, and the old tree survives the window; a one-syscall replace
+  of a non-empty unsealed `dst` gives **ENOTEMPTY (errno 66)**. So the swap-through-a-temporary-name
+  IS expressible — it costs a third and fourth mutation on the destructive path to shrink a window
+  that already recovers without `--force`. If it is ever implemented, the retired tree wants sweeping
+  the way `.incoming-*` is.
+- **The seal check samples 21 paths; it does not walk the tree.** `enginetree._SEAL_SAMPLE` is
+  `VERSION`, `plainkeep`, `bin`, `bin/lib` and `frontends/raycast`, plus all 11 `NAMED_LIB_MODULES`
+  and all 5 `NAMED_CONTENT` files — chosen so every module a hot patch would actually go for
+  (`guardrail.py`,
+  `vaultroot.py`, `resolver.py`, `wall.py`) is stat'd, at a cost of ten extra `stat` calls. It is
+  still a sample: a writable file anywhere else in an activated tree — any of the **35 verb entry
+  points**, for instance — is invisible to it. `verify()` does not use the list at all; it hands over
+  modes it has already paid for and therefore does cover the verb entry points, so the gap is
+  specifically the check run by callers that have NOT already walked the tree. *Deferred: walking is
+  the honest fix and costs a full tree stat on a path that runs per invocation.*
+- **A fresh checkout with no `.plainkeep/vault.json` marker takes four suites red, and the failure
+  does not say so.** Measured in a clean Phase 2 Task 7 worktree (`PLAINKEEP_CORE=require`, core
+  binary built): `run_tui_pty` **0 passed / 13 failed**, `run_mcp` **4 / 12**, `run_mcp_protocol`
+  **3 / 23**, `run_setup_layers` **100 / 1**. All four copy the repo into a temp vault and dispatch
+  through it; since ADR-014 Task 1b an unmarked root is refused with exit 2, and the suites report
+  that as a protocol failure. Marking the checkout (`vault register`, with `PLAINKEEP_CONFIG_HOME`
+  pointed at scratch so the real registry is untouched) takes all four to **24/24, 16/16, 161/161,
+  101/101**. `script/setup` does this for a normal contributor; a worktree created with `git
+  worktree add` gets no marker, because `.plainkeep/` is gitignored. *Nothing detects it: the fix is
+  either a check in `run_all.py` that says "this checkout is not a marked vault, here is the one
+  command", or a suite-level fixture that marks its own copy.*

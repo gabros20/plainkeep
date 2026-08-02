@@ -22,23 +22,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: version consistency (tag == bin/ui/version.txt == cli/src/tui/version.ts)
-        # Two files, not three: `cli/package.json` "version" is the core workspace's own version
-        # (0.0.0, the Phase-1 core skeleton) and NOT the TUI's — the TUI's version travelled with
-        # its source into cli/src/tui/version.ts, which is what gets compiled into the binary and
-        # served by `plainkeep-ui --version`. Re-adding package.json here would fail every release.
-        # bin/ui/version.txt is the engine-owned pin: setuplib downloads `ui-v<that>` and compares
-        # it against the installed binary, so a tag that disagrees would point vaults at a release
-        # that doesn't exist.
-        run: |
-          tag="${GITHUB_REF_NAME#ui-v}"
-          eng="$(tr -d ' \n' < bin/ui/version.txt)"
-          src="$(sed -n 's/^export const VERSION = "\([0-9][0-9.]*\)".*/\1/p' cli/src/tui/version.ts)"
-          if [ "$tag" != "$eng" ] || [ "$tag" != "$src" ]; then
-            echo "version drift: tag=$tag bin/ui/version.txt=$eng cli/src/tui/version.ts=$src"
-            echo "all three must match — vaults pin their download to bin/ui/version.txt"
-            exit 1
-          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: version consistency (tag == the engine-owned pin == cli/src/tui/version.ts)
+        # The rule used to live here, as an inline shell snippet. That is why it could sit stale for a
+        # whole phase: a tag-triggered workflow runs only when someone cuts a release, so nothing ever
+        # executed it, and its `sed` parser — which yields the empty string on a reformatted
+        # declaration, and compares nothing against nothing — had no test at all.
+        #
+        # It now lives in `test/run_uirelease.py`, which the offline batch runs on EVERY push and
+        # which proves on every run that it goes red on each of the ways the three can disagree.
+        # Passing the tag here adds the one leg a batch run cannot have. Two files, not three, on the
+        # source side: `cli/package.json`'s "version" is the core workspace's own (0.0.0, the Phase-1
+        # skeleton), not the TUI's — re-adding it would fail every release.
+        run: python3 test/run_uirelease.py --tag "$GITHUB_REF_NAME"
       - uses: oven-sh/setup-bun@v2
         with:
           # Pinned to .bun-version, the same way ci.yml pins it, and never `latest`: this workflow

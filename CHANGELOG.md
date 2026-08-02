@@ -55,14 +55,27 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   — and the ordinary `ops setup ui --yes` re-downloads, pinned to the expected release tag
   (`ui-v<version>`). The release workflow fails on any drift between the tag, `ui/package.json`,
   `bin/ui/version.txt`, and `ui/src/version.ts`.
-  **Superseded — read this before pushing a `ui-v*` tag:** the hybrid-core work (ADR-013) moved the
-  TUI's source into `cli/` and deleted `ui/`, and that release workflow was left pointing at the old
-  paths. It no longer fails "on drift" — it fails on its first step, every time. The floor's
-  `plainkeep-ui` therefore cannot be re-released until Phase 2/3 repoints or deletes the pipeline;
-  installing the last published asset and building from source both still work. The workflow file
-  says the same at the top.
+  **Superseded twice — read this before pushing a `ui-v*` tag.** The hybrid-core work (ADR-013) moved
+  the TUI's source into `cli/` and deleted `ui/`, and the release workflow was left pointing at the
+  old paths, so for a while it failed on its first step every time rather than "on drift". **That is
+  fixed: the pipeline works again**, and the drift it fails on is between three things, not four —
+  the tag, the engine-owned pin `bin/ui/version.txt`, and `cli/src/tui/version.ts`.
+  `cli/package.json`'s `"version"` is the core workspace's own (`0.0.0`) and is deliberately not in
+  the comparison. The check itself now lives in `test/run_uirelease.py` and runs on every push, not
+  only when a tag is cut — see the Changed entry below.
 
 ### Changed
+- **The `plainkeep-ui` release can be cut again, and the two checks that guard it now actually run**
+  ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-019, Phase 2 Task 7). Two things guard a `ui-v*`
+  release: the three versions must agree (the tag, the engine-owned pin the engine downloads by, and
+  the version compiled into the binary), and the binary must be built by a bun new enough not to eat
+  empty arguments. Both were written down. Neither ran — the version check lived inside the
+  tag-triggered workflow, so nothing but cutting a release could execute it, and the bun floor gated
+  `bun run build` but not `bun run build:ui`, which is the script that actually produces the
+  downloadable binary. **Both are now checked on every push** by `test/run_uirelease.py`, which also
+  proves on each run that the version check goes red on every way the three can disagree; the release
+  workflow calls the same code with the real tag. For contributors this means one visible change:
+  `cd cli && bun run build:ui` refuses on bun older than 1.2.21, the way `bun run build` already did.
 - **Your existing plugins keep working after the engine moved — with no edits**
   ([`docs/DECISIONS.md`](docs/DECISIONS.md) ADR-018, Phase 2 Task 3). Every plugin ever scaffolded
   loads the SDK with `sys.path.insert(0, str(Path(os.environ["PLAINKEEP_HOME"]) / "bin"))`, and after

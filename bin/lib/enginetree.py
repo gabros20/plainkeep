@@ -1232,6 +1232,19 @@ def update(src: Path, *, version: str | None = None, expect: Path | None = None,
                      "or repair this one in place (a plain re-install re-seals a complete tree):\n"
                      f"    python3 {Path(__file__).resolve()} --install <source-checkout>")
 
+        # --- checksum, part 1: the SOURCE against a record made elsewhere ------------------------
+        # Asked BEFORE anything is copied, deliberately: a source that disagrees with its manifest
+        # must not be staged at all, so the refusal costs no copy and leaves nothing to remove. The
+        # second half of the checksum gate — the STAGED TREE against the source — necessarily comes
+        # after the copy, and catches a different failure (a copy that did not survive).
+        source_digests = pair_digests(src)
+        if expected_from_record is not None and source_digests != expected_from_record:
+            raise VaultError(f"the source pair at {src} does not match {expect}:\n  "
+                             + "\n  ".join(digest_problems(src, expected_from_record)[:8]),
+                             code=output.EXIT_DENY,
+                             hint="the recorded manifest and the source disagree — do not install "
+                                  "either until you know which one is wrong")
+
         # --- provision -------------------------------------------------------------------------
         # `install()` is reused rather than re-implemented: it stages under `.incoming-<v>.<pid>`,
         # runs the whole ownership manifest against the staging tree, renames only a COMPLETE tree
@@ -1241,17 +1254,9 @@ def update(src: Path, *, version: str | None = None, expect: Path | None = None,
         if not reused:
             install(src, version=version, force=True, activate_it=False)
 
-        # --- checksum --------------------------------------------------------------------------
+        # --- checksum, part 2: the STAGED TREE against the source it was copied from -------------
         # Over the tree at its FINAL path, sealed — so what is checked is what will be activated,
         # not a staging copy that a rename could still have truncated.
-        source_digests = pair_digests(src)
-        if expected_from_record is not None and source_digests != expected_from_record:
-            bad = digest_problems(src, expected_from_record)
-            remove_version(version)
-            raise VaultError(f"the source pair at {src} does not match {expect}:\n  "
-                             + "\n  ".join(bad[:8]), code=output.EXIT_DENY,
-                             hint="the recorded manifest and the source disagree — do not install "
-                                  "either until you know which one is wrong")
         problems = digest_problems(dst, source_digests)
         _kill_hook("checksum")
         if problems:

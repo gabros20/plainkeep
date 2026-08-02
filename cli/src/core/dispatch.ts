@@ -544,6 +544,15 @@ export function dispatch(argv: string[], selector: string | null = null): CoreRe
   // the spawned verb sees PLAINKEEP_HOME set and can no longer tell whether that is what selected
   // the root or merely what carried it. Matches the floor's `pk_discover` export exactly.
   process.env.PLAINKEEP_VAULT_MECHANISM = sel.mechanism;
+  // ...and the ENGINE root (Task 2). This assignment REPLACES whatever the caller had in
+  // PLAINKEEP_ENGINE, unconditionally and without inspecting it, which is how ADR-014 D2's "caller
+  // input must not control it" is made true: the core never READS the variable to decide where to
+  // load code from (resolver.ts asks engineRoot(), which is execPath-relative), so there is nothing
+  // for a hostile value to steer. It is set for the processes that genuinely cannot self-locate —
+  // a plugin verb under `<vault>/plugins/<pack>/<verb>/`, a frontend script, a scheduled job — and
+  // the value comes from the discovery module rather than from engineRoot() so the floor and the
+  // core export the same canonical spelling.
+  process.env.PLAINKEEP_ENGINE = sel.engine;
 
   // Bare `plainkeep` ON A TERMINAL is the TUI; bare `plainkeep` anywhere else is still the default
   // verb. The rewrite happens HERE, before verbFromArgv and therefore before the gate, so the whole

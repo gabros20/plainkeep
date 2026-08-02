@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths, vaultio  # noqa: E402
+from lib import enginetree, output, paths, vaultio  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 BIN = Path(__file__).resolve().parents[1]
@@ -56,8 +56,14 @@ def _validate(name, job, external):
 
 
 def _plist(name, job) -> str:
+    # THE LAUNCHER IS ENGINE-OWNED (Phase 2 Task 2). This built
+    # `$PLAINKEEP_HOME/plainkeep` — the vault-local shim — and ADR-014 names the line as one that
+    # must change: after the engine moves out, that path is ENOENT at 2am, in a sanitized launchd
+    # environment where nothing will be there to explain it. The plist keeps naming an ABSOLUTE
+    # launcher (a scheduled job must never depend on discovery or on PATH) and both roots are baked
+    # in absolutely: the engine's launcher as the program, the validated vault as PLAINKEEP_HOME.
     toks = job["command"].split()
-    args = [str(paths.PLAINKEEP_HOME / "plainkeep"), *toks[1:]] if toks and toks[0] == "plainkeep" else toks
+    args = [str(enginetree.launcher()), *toks[1:]] if toks and toks[0] == "plainkeep" else toks
     pa = "".join(f"\n      <string>{a}</string>" for a in args)
     s = job["schedule"]
     if "interval_minutes" in s:
@@ -134,7 +140,9 @@ def main(argv):
             # any other caller (and the rendered launchd plists already invoke the dispatcher). The
             # jobs are pre-validated read/safe_write, so the gate is a logged pass-through, never a
             # block. Non-recursive: a job calls ONE non-job verb.
-            cmd = [str(paths.PLAINKEEP_HOME / "plainkeep"), *toks[1:]]
+            # ...through the ENGINE's launcher (Phase 2 Task 2), for the reason `_plist` states: the
+            # vault has no launcher of its own any more.
+            cmd = [str(enginetree.launcher()), *toks[1:]]
         else:
             cmd = toks  # allowlisted external
         logdir = paths.PLAINKEEP_HOME / ".logs" / "jobs"; vaultio.mkdir(logdir)

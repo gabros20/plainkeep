@@ -19,8 +19,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib import output, paths, resolver, vaultio  # noqa: E402
 
+# `templates/project-repo` is USER data — a vault's own house style for a scaffolded repo, editable
+# and versioned with the notes. `templates/verb` is a CODE scaffold that ships with the engine, and
+# since Phase 2 Task 2 it resolves from the engine tree rather than from the vault: it renders a
+# plugin `run.py` whose bootstrap line has to match the engine that will run it, so a stale copy left
+# in someone's vault would scaffold plugins that cannot find `lib`.
 TEMPLATE = paths.PLAINKEEP_HOME / "templates" / "project-repo"
-VERB_TEMPLATE = paths.PLAINKEEP_HOME / "templates" / "verb"
+VERB_TEMPLATE = paths.VERB_TEMPLATES
 RISK_CLASSES = ("read", "safe_write", "draft_only", "confirm", "deny")
 
 

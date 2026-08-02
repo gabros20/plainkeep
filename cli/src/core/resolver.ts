@@ -3,22 +3,29 @@
 // Same one source of truth for turning a verb name into the directory that holds its run.py +
 // cmd.json, in STRICT precedence:
 //
-//   1. <engine bin>/<verb>/       — the engine, RESERVED (a plugin can never shadow it)
+//   1. <engine>/bin/<verb>/       — the engine, RESERVED (a plugin can never shadow it)
 //   2. <home>/plugins/<pack>/<verb>/ — user packs inside the vault (PLAINKEEP_HOME), sorted
 //   3. $PLAINKEEP_PATH roots       — colon-separated extra pack roots, each a dir of <verb>/ folders
 //
 // PLAINKEEP_HOME / PLAINKEEP_PATH are read PER CALL (no caching across calls) so the running process
 // and the test harness see the same resolution, exactly like the Python original.
 //
-// ENGINE_BIN derivation: the Python original pins ENGINE_BIN to the resolver FILE location
-// (`Path(__file__).resolve().parents[1]` == the repo bin/). In Phase 1 the engine (bin/) still lives
-// inside the vault (PLAINKEEP_HOME), so the binary derives engine bin/ as `<home>/bin`. The parity
-// harness canonicalizes its fixture vault root, which makes the Python `.resolve()` a no-op, so
-// `<home>/bin` matches the file-derived ENGINE_BIN byte-for-byte. See .orchestrate/task-2-report.md.
+// ENGINE_BIN derivation (REWRITTEN in Phase 2 Task 2). The Python original pins ENGINE_BIN to the
+// resolver FILE location (`Path(__file__).resolve().parents[1]`), i.e. to the tree the CODE lives in,
+// and it has always been right to do so. This port could not say the same thing: with no file
+// location of its own inside the engine, it derived engine bin/ as `<home>/bin` — correct only for
+// as long as the engine lived inside the vault, and a plain restatement of the assumption ADR-014
+// deletes. Two consequences, both live: a vault that carried a `bin/<verb>/` of its own would have
+// had it resolved as an ENGINE verb (which no plugin may shadow), and a relocated engine would not
+// have been found at all.
+//
+// It is now `engineRoot()/bin` — the same code-relative answer the Python original gives, reached
+// through the executable's own location. `opsHome()` below keeps the data root, and it keeps it for
+// exactly one thing: PLUGIN packs, which are the user's and do live in the vault.
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { requireHome } from "./vaultroot.js";
+import { engineRoot, requireHome } from "./vaultroot.js";
 
 export type Source = "engine" | `plugin:${string}`;
 
@@ -69,8 +76,9 @@ function opsHome(): string {
   return requireHome();
 }
 
+// The ENGINE's bin/ — code-relative, never derived from the data root. See the header.
 function engineBin(): string {
-  return path.join(opsHome(), "bin");
+  return path.join(engineRoot(), "bin");
 }
 
 function isVerbDir(d: string): boolean {

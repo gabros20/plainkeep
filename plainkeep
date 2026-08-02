@@ -19,8 +19,28 @@
 # bin/lib/vaultroot.py, and whichever dispatcher takes the invocation exports the CANONICAL root it
 # returns. `$0`'s directory is still used for the one thing it is a correct answer to: finding the
 # ENGINE (this script ships inside it).
+#
+# WHICH ENGINE (Phase 2 Task 2). The engine is now its own versioned tree — normally
+# `${XDG_DATA_HOME:-$HOME/.local/share}/plainkeep/engine/<version>/`, reached through the `current`
+# symlink beside it — and the vault is data. This script ships INSIDE that tree, so `$0` still
+# answers "where is the engine" and answers nothing else. It is resolved through SYMLINKS before the
+# directory is taken: `~/.local/bin/plainkeep` is a link to `<engine>/plainkeep`, and taking
+# `dirname` of the link would name `~/.local/bin`, which carries no `bin/lib`. The loop costs one
+# `readlink` per link and nothing at all when `$0` is a real file.
 set -euo pipefail
-ENGINE="$(cd "$(dirname "$0")" && pwd)"
+pk_engine_dir() {
+  local src="$1" dir
+  while [ -L "$src" ]; do
+    dir="$(cd -P "$(dirname "$src")" && pwd)"
+    src="$(readlink "$src")"
+    case "$src" in /*) ;; *) src="$dir/$src";; esac
+  done
+  # `cd -P` resolves symlinked ANCESTORS too, so what comes back is the canonical tree — the same
+  # spelling `Path(__file__).resolve()` produces in bin/lib. Two spellings of one directory is how
+  # the engine/data disjointness check silently answers "no".
+  cd -P "$(dirname "$src")" && pwd
+}
+ENGINE="$(pk_engine_dir "$0")"
 
 # --------------------------------------------------------------------------------------------------
 # The global `--vault` selector: PRE-VERB ONLY (Task 1b). `plainkeep --vault work capture x` selects;
@@ -65,7 +85,15 @@ pk_discover() {
   # line above destroys the evidence: a verb re-running the chain would find step 2 already
   # satisfied and could only ever answer "PLAINKEEP_HOME". `plainkeep vault status` reads it.
   PLAINKEEP_VAULT_MECHANISM="$(printf '%s\n' "$out" | sed -n '3p')"
-  export PLAINKEEP_HOME PLAINKEEP_VAULT_ID PLAINKEEP_VAULT_MECHANISM
+  # Line 4 is the ENGINE root, and exporting it REPLACES whatever the caller had in
+  # PLAINKEEP_ENGINE — unconditionally, with no inspection of the inherited value. ADR-014 D2 states
+  # the rule as "caller input must not control it", and the way to make that true is not to validate
+  # the variable but to never read it: nothing in the engine's own Python consults PLAINKEEP_ENGINE
+  # to decide where to load code from (bin/lib resolves code-relative through `__file__`). The
+  # variable is an OUTPUT, for the processes that genuinely cannot self-locate — a plugin verb under
+  # `<vault>/plugins/<pack>/<verb>/`, a raycast frontend, a launchd job.
+  PLAINKEEP_ENGINE="$(printf '%s\n' "$out" | sed -n '4p')"
+  export PLAINKEEP_HOME PLAINKEEP_VAULT_ID PLAINKEEP_VAULT_MECHANISM PLAINKEEP_ENGINE
 }
 
 # --------------------------------------------------------------------------------------------------
@@ -98,16 +126,23 @@ pk_floor() {
   # guardrail (§5): unknown-verb detection (did-you-mean), risk gate, and logging — before anything
   # runs. Exit codes propagate per the protocol (Part 0.3): 0 ok · 2 usage · 3 confirm · 4 not-found ·
   # 5 deny. The `|| exit 1` of old flattened 3/4/5 into 1, so agents couldn't tell them apart.
+  #
+  # SPAWNED FROM THE ENGINE, not from the vault (Task 2). These two lines read `$PK/bin/lib/...`
+  # through Phase 1 — the engine lived inside the vault it acted on, so the two were the same
+  # directory. They are now different things and the code side is the correct one: a vault is data,
+  # and the day a vault carried a `bin/lib/guardrail.py` of its own, the floor would have run it.
   set +e
-  "$PY" "$PK/bin/lib/guardrail.py" "$VERB" "$@"
+  "$PY" "$ENGINE/bin/lib/guardrail.py" "$VERB" "$@"
   local gr=$?
   set -e
   [ "$gr" -eq 0 ] || exit "$gr"
 
   # Multi-root resolution (Part 2.1): engine bin/ (reserved) → plugins/<pack>/ → $PLAINKEEP_PATH. The
-  # resolver is the single source of truth; the dispatcher just asks it for the run.py to exec.
+  # resolver is the single source of truth; the dispatcher just asks it for the run.py to exec. The
+  # ENGINE half of that precedence is now this tree; the PLUGIN half is still under $PLAINKEEP_HOME,
+  # which is why resolver.py reads both and derives neither from the other.
   local CMD
-  CMD="$("$PY" "$PK/bin/lib/resolver.py" "$VERB" 2>/dev/null || true)"
+  CMD="$("$PY" "$ENGINE/bin/lib/resolver.py" "$VERB" 2>/dev/null || true)"
   [ -n "$CMD" ] && [ -f "$CMD" ] || { echo "plainkeep: verb '$VERB' has no run.py" >&2; exit 4; }
   exec "$PY" "$CMD" "$@"
 }

@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, paths, vaultreg, vaultroot  # noqa: E402
+from lib import enginetree, output, paths, vaultreg, vaultroot  # noqa: E402
 
 GREEN, RED, YEL, DIM, CYAN, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[36m", "\033[0m"
 MUTATING = ("register", "rebind", "deregister", "default")
@@ -320,6 +320,23 @@ def cmd_status(_argv):
         "registry_exists": vaultreg.registry_path().is_file(),
         "default": reg["default"],
         "discovery": "task-1b",
+        # THE ENGINE, reported beside the vault (Phase 2 Task 2) — the two roots this invocation
+        # actually used, so "code and data are separate trees" is something an operator can SEE
+        # rather than a claim in a doc. Three fields, and the third is the point:
+        #
+        #   engine_root  — where this process's code IS, derived from `__file__`. Authoritative.
+        #   engine_env   — what PLAINKEEP_ENGINE says. The dispatcher REPLACES any inherited value,
+        #                  so in a real invocation the two agree; when they do not, the variable is
+        #                  wrong and the code is right, which is what `engine_env_matches` says.
+        #
+        # ADR-014 D2 requires that caller input not control where code is loaded from. That is true
+        # here by construction (nothing in bin/lib reads PLAINKEEP_ENGINE), and this is where it
+        # becomes OBSERVABLE: `PLAINKEEP_ENGINE=/evil plainkeep vault status --json` reports the real
+        # tree and `engine_env_matches: true`, because the dispatcher overwrote /evil on the way in.
+        "engine_root": str(paths.ENGINE),
+        "engine_env": os.environ.get(enginetree.ENV_ENGINE),
+        "engine_env_matches": os.environ.get(enginetree.ENV_ENGINE) == str(paths.ENGINE),
+        "engine_intact": not enginetree.verify(paths.ENGINE),
     }
 
     def render(_):
@@ -349,6 +366,21 @@ def cmd_status(_argv):
         else:
             print(f"  {DIM}would select{RESET}  {RED}REFUSED{RESET} {sel_err}"
                   f"  {DIM}(ignoring PLAINKEEP_HOME){RESET}")
+        print()
+        # The OTHER root. Printed after discovery because that is the reading order of the question
+        # an operator brings here — "which notes am I on, and which code is on them".
+        print(f"engine        {data['engine_root']}"
+              + ("" if data["engine_intact"] else f"  {RED}INCOMPLETE{RESET}"))
+        env_eng = data["engine_env"]
+        if env_eng is None:
+            print(f"  exported    {YEL}PLAINKEEP_ENGINE unset{RESET}  "
+                  f"{DIM}(no dispatcher — this verb was invoked directly){RESET}")
+        elif data["engine_env_matches"]:
+            print(f"  exported    PLAINKEEP_ENGINE agrees  "
+                  f"{DIM}(the dispatcher replaces any inherited value){RESET}")
+        else:
+            print(f"  exported    {RED}PLAINKEEP_ENGINE={env_eng}{RESET} — disagrees with the code "
+                  f"actually running")
         print()
         print(f"registry      {vaultreg.registry_path()}"
               + ("" if data["registry_exists"] else f"  {DIM}(does not exist yet){RESET}"))

@@ -71,7 +71,23 @@ export function requireHome(): string {
 // from where the code lives is correct (it is the same thing resolver.py's `ENGINE_BIN` has always
 // done), deriving the VAULT from it is the assumption Task 1b deletes. Nothing below reads a data
 // root, and the probe is for a file that ships with the engine — never for a vault.
+//
+// SYMLINKS ARE RESOLVED (Task 2), and that is not tidiness. The engine is now a versioned tree
+// reached through `<install>/engine/current/`, so a binary at `<install>/engine/current/.local/bin/
+// plainkeep-core` derives an engine root spelled with `current` in it while `bin/lib`'s own
+// `Path(__file__).resolve()` spells it with the VERSION. Those are two names for one directory, and
+// the engine/data disjointness check compares canonical paths: an unresolved spelling makes it
+// answer "disjoint" for a pair that is not. `realpathSync` on a path that does not exist throws, so
+// each candidate is resolved only after it has been shown to carry the discovery module.
 const DISCOVERY_REL = ["bin", "lib", "vaultroot.py"] as const;
+
+function canonical(p: string): string {
+  try {
+    return fs.realpathSync(p);
+  } catch {
+    return p;
+  }
+}
 
 export function engineRoot(): string {
   const candidates = [
@@ -79,11 +95,28 @@ export function engineRoot(): string {
     path.resolve(import.meta.dir, "..", "..", ".."),
   ];
   for (const c of candidates) {
-    if (fs.existsSync(path.join(c, ...DISCOVERY_REL))) return c;
+    if (fs.existsSync(path.join(c, ...DISCOVERY_REL))) return canonical(c);
   }
   throw new VaultRefusal(
     "plainkeep: cannot locate the plainkeep engine — no bin/lib/vaultroot.py under " +
       candidates.join(" or "),
+  );
+}
+
+// PLAINKEEP_ENGINE, read back after dispatch() has set it from the validated discovery result. The
+// same shape as requireHome() and for the same reason: exactly one place could ever grow a fallback.
+//
+// It is READ ONLY BY CONSUMERS THE CORE ITSELF SET IT FOR — resolver.ts asks engineRoot() directly,
+// never this. That asymmetry is the security property ADR-014 D2 asks for spelled as code: the value
+// in the environment is an OUTPUT of the dispatcher, and a caller who exports PLAINKEEP_ENGINE=/evil
+// has it REPLACED before anything reads it, because nothing that decides where to load code from
+// ever consults the variable in the first place.
+export function requireEngine(): string {
+  const env = process.env.PLAINKEEP_ENGINE;
+  if (env) return env;
+  throw new VaultRefusal(
+    "plainkeep: no engine selected — PLAINKEEP_ENGINE is unset (the dispatcher sets it from its " +
+      "own location; a verb reached any other way must be given one)",
   );
 }
 
@@ -108,11 +141,16 @@ export interface Root {
   // chain finds step 2 already satisfied and can only ever answer "PLAINKEEP_HOME". `vault status`
   // reads it back out of PLAINKEEP_VAULT_MECHANISM.
   mechanism: string;
+  // The canonical ENGINE root, as the discovery module's own `Path(__file__).resolve()` spells it
+  // (Task 2). Taken from there rather than from engineRoot() above so that the floor and the core
+  // export byte-identical values for PLAINKEEP_ENGINE — they self-locate differently (a `$0` chain
+  // vs an execPath) and must still agree on one spelling.
+  engine: string;
 }
 
-// Run the shared discovery module. stdout is three lines — canonical root, vault id, mechanism. A refusal
-// keeps ITS exit code (2 usage / 5 policy-denied) and ITS stderr, which is written through verbatim
-// so the floor and the core are indistinguishable to a caller.
+// Run the shared discovery module. stdout is FOUR lines — canonical data root, vault id, mechanism,
+// canonical engine root. A refusal keeps ITS exit code (2 usage / 5 policy-denied) and ITS stderr,
+// which is written through verbatim so the floor and the core are indistinguishable to a caller.
 export function discoverRoot(selector: string | null): Root {
   const script = path.join(engineRoot(), ...DISCOVERY_REL);
   const args = selector === null ? [script, "--select"] : [script, "--select", "--vault", selector];
@@ -143,8 +181,9 @@ export function discoverRoot(selector: string | null): Root {
   const root = lines[0] ?? "";
   const id = lines[1] ?? "";
   const mechanism = lines[2] ?? "";
-  if (!root || !id || !mechanism) {
+  const engine = lines[3] ?? "";
+  if (!root || !id || !mechanism || !engine) {
     throw new VaultRefusal("plainkeep: vault discovery returned no root — the engine tree is broken");
   }
-  return { root, id, mechanism };
+  return { root, id, mechanism, engine };
 }

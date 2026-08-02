@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import guardrail, output, paths, setuplib, vaultio  # noqa: E402
+from lib import enginetree, guardrail, output, paths, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
@@ -138,6 +138,22 @@ def main(argv):
                  "fall back to the stdlib keyword floor (no description, no LLM keywords). Fix: run "
                  "ollama and pull the configured PLAINKEEP_ENRICH_MODEL; or set PLAINKEEP_ENRICH=off.")
 
+    # 1b. the ENGINE tree (Phase 2 Task 2). The full ownership manifest, not the four-file probe the
+    # dispatcher runs on every invocation: doctor is where an operator asks "is my install intact",
+    # and a manifest that only the installer ever consults is a manifest that goes stale between
+    # installs. It reports the tree it is RUNNING FROM (`enginetree.ENGINE_ROOT`, code-relative), not
+    # whatever `current` points at — the question worth answering is about the engine that just ran.
+    engine_problems = enginetree.verify(paths.ENGINE)
+    if engine_problems:
+        for p in engine_problems:
+            fail(f"engine: {p}")
+    else:
+        ok(f"engine: complete tree at {paths.ENGINE}")
+    if str(paths.ENGINE) == str(Path(paths.PLAINKEEP_HOME).resolve()):
+        fail("engine: the engine tree IS the vault — data and code must be separate trees")
+    else:
+        ok("engine: disjoint from the vault (data is data, code is code)")
+
     # 2. folders
     for d in REQUIRED_DIRS:
         p = paths.PLAINKEEP_HOME / d
@@ -219,8 +235,11 @@ def main(argv):
         warn("plainkeep.json not generated yet (run: plainkeep help)")
 
     # 4. agent adapters
+    # The SKILL is engine-owned (Phase 2 Task 2) — it documents the tool, not the notes — so it is
+    # read from the engine tree. AGENTS.md/CLAUDE.md stay vault-owned: they are that vault's own
+    # instructions to its agents.
     agents, claude, skill = (paths.PLAINKEEP_HOME / "AGENTS.md", paths.PLAINKEEP_HOME / "CLAUDE.md",
-                             paths.PLAINKEEP_HOME / "skills" / "operate-plainkeep" / "SKILL.md")
+                             paths.SKILLS / "operate-plainkeep" / "SKILL.md")
     (ok if agents.exists() else fail)(f"adapter: AGENTS.md {'present' if agents.exists() else 'MISSING'}")
     (ok if (claude.exists() and "@AGENTS.md" in claude.read_text()) else fail)(
         "adapter: CLAUDE.md bridges @AGENTS.md" if claude.exists() else "adapter: CLAUDE.md MISSING")

@@ -7,9 +7,10 @@ from datetime import date, datetime
 from pathlib import Path
 
 try:
-    from . import vaultroot  # type: ignore  # (namespace sibling)
+    from . import enginetree, vaultroot  # type: ignore  # (namespace siblings)
 except ImportError:      # imported top-level by a verb that put bin/ on sys.path
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import enginetree  # type: ignore
     import vaultroot  # type: ignore
 
 # The SELECTED data root — from PLAINKEEP_HOME, with NO engine-relative fallback (ADR-014 D2/D3,
@@ -22,8 +23,18 @@ INBOX = PLAINKEEP_HOME / "inbox"
 TASKS = PLAINKEEP_HOME / "tasks"
 JOURNAL = PLAINKEEP_HOME / "journal"
 WIKI = PLAINKEEP_HOME / "wiki"
-BIN = PLAINKEEP_HOME / "bin"
 TASK_STATUSES = ("inbox", "active", "waiting", "done")
+
+# The ENGINE tree and its bin/ — where the CODE is (Phase 2 Task 2). `BIN` read
+# `PLAINKEEP_HOME / "bin"` through Phase 1, which was true only while the engine lived inside the
+# vault; its one consumer (`setuplib`) reads engine-owned files through it — `bin/ui/version.txt`,
+# the pin `plainkeep setup ui` downloads against — and would have looked for them in the user's
+# notes. The vault has no `bin/` of its own to name here: an engine-owned path resolves from the
+# engine, a data path from the data root, and nothing resolves from the other one.
+ENGINE = enginetree.ENGINE_ROOT
+BIN = enginetree.engine_bin()
+VERB_TEMPLATES = ENGINE / "templates" / "verb"
+SKILLS = ENGINE / "skills"
 
 # The sibling roots (§2) — never inside ~/plainkeep. PLAINKEEP_ROOTS_HOME lets tests redirect them
 # off the real ~/.

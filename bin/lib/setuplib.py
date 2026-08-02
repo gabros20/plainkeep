@@ -16,9 +16,16 @@ import sys
 
 from lib import embed, enrichlib, imagelib, paths, vaultio
 
+# The ENGINE's bin/ (paths.BIN) — this module reads engine-owned files through it, `bin/ui/version.txt`
+# above all: the pin `plainkeep setup ui` downloads against and compares the installed binary to.
 BIN = paths.BIN
+# What a DATA vault must contain. `bin` and `skills` left this list in Phase 2 Task 2: both are
+# engine-owned, and demanding them of a vault is the "engine lives in the vault" assumption wearing a
+# readiness check. It was not inert — `plainkeep doctor --init` CREATED both, so every vault grew an
+# empty `bin/` and `skills/` that nothing would ever put anything into, and a data-only vault (the
+# shape Task 5's `init` produces) reported not-ready for lacking a copy of the engine.
 REQUIRED_DIRS = ["wiki", "tasks/inbox", "tasks/active", "tasks/waiting", "tasks/done",
-                 "journal", "inbox", "templates", "jobs", "skills", "bin"]
+                 "journal", "inbox", "templates", "jobs"]
 # Layer status enum (documented in docs/machine-contract.md §7 and docs/setup.md). `not_applicable`
 # (Task 8) means the layer cannot apply on THIS host — e.g. launchd scheduling off macOS — and is
 # advisory-only: it never fails `plainkeep doctor` and never causes a nonzero `--all` exit.

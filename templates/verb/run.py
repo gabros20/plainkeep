@@ -12,17 +12,31 @@ SCAFFOLDED by `plainkeep new verb`. This is a stub — implement main(). Keep th
     existing bin/<verb>/run.py before extending. Regenerate the surface with `plainkeep index --manifest`.
 
 This is a PLUGIN verb (plugins/local/{{name}}/) — user-owned, survives `script/update`. It reaches
-the engine's shared lib via PLAINKEEP_HOME (the dispatcher always exports it); it re-enters through
+the engine's shared lib via PLAINKEEP_ENGINE (the dispatcher always exports it); it re-enters through
 `plainkeep {{name}}`, so the guardrail + logs still gate it — never import lib to skip the dispatcher.
 """
 import os
 import sys
 from pathlib import Path
 
-# Plugin verbs live outside bin/, so locate the engine's lib via PLAINKEEP_HOME (dispatcher-exported);
-# fall back to the plugins/<pack>/<verb>/ layout depth if run outside the dispatcher.
-_BIN = Path(os.environ.get("PLAINKEEP_HOME") or Path(__file__).resolve().parents[3]) / "bin"
-sys.path.insert(0, str(_BIN))
+# WHERE `lib` IS. A plugin verb lives in the VAULT (plugins/<pack>/<verb>/) and the engine does not,
+# so this is the one thing a plugin genuinely cannot work out for itself: its own `__file__` is under
+# the data root, and the engine could be any installed version. PLAINKEEP_ENGINE is what the
+# dispatcher exports for exactly this, and the dispatcher REPLACES any value the caller had — so a
+# plugin loading through it loads the engine that gated it, never one a caller substituted.
+#
+# It read PLAINKEEP_HOME through Phase 1, which was the "engine lives in the vault" assumption
+# (ADR-014): after the engine moved, `$PLAINKEEP_HOME/bin` is a directory a vault does not have, and
+# every scaffolded plugin would have died on the import. There is deliberately NO fallback — a plugin
+# reached outside a dispatch has not been gated either, and guessing a path is how a verb ends up
+# importing a `lib` nobody validated.
+_ENGINE = os.environ.get("PLAINKEEP_ENGINE")
+if not _ENGINE:
+    sys.stderr.write("plainkeep {{name}}: PLAINKEEP_ENGINE is unset — run this through "
+                     "`plainkeep {{name}}`, which selects the engine and the vault and gates the "
+                     "verb\n")
+    raise SystemExit(2)
+sys.path.insert(0, str(Path(_ENGINE) / "bin"))
 from lib import paths  # noqa: E402,F401  (most verbs need paths — keep or drop)
 
 

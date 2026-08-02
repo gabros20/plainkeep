@@ -38,11 +38,19 @@ practice that is enforced by WHERE this runs: both dispatchers call `--select` a
 before the gate (which is what appends the audit line) and before the resolver (which is what scans
 plugins).
 
-**A selected root still has to be DISPATCHABLE.** Phase 1 runs the engine from inside the vault it
-acts on, so a valid, registered, ordinary notes vault — a directory with a marker and nothing else,
-which is what a second vault looks like — cannot be dispatched for. `require_engine()` says that in
-one shared refusal instead of letting each dispatcher fail its own way at the far end of the
-dispatch. It does not lift the constraint; removing it is Phase 2 Task 2 (`PLAINKEEP_ENGINE`).
+**A selected root no longer has to CARRY the engine** (Phase 2 Task 2). Task 1b's `require_engine()`
+refused a vault with no `bin/lib/guardrail.py`, because Phase 1 ran the engine out of the vault it
+acted on and an ordinary notes vault could not be dispatched for. This task moves the engine to its
+own versioned tree, which removes the reason for that probe entirely — and leaving it in place would
+refuse every data-only vault, i.e. every vault Task 5's `init` is meant to produce. It is INVERTED
+rather than deleted: `enginetree.require_intact()` now runs in the same place, in the same shared
+refusal, and asks whether the ENGINE tree is complete. Same seam, opposite subject.
+
+**The engine root and the data root must be DISJOINT** (ADR-014 D3, and this is the task that turns
+it on). Neither may be inside the other. Task 1b wrote the rule down and deliberately did not enforce
+it: while the engine was `<vault>/bin` the rule was unsatisfiable, and a silent legacy exception would
+have defeated the contract. It becomes true here, so it is enforced here — in `validate()`, which
+means it holds for whichever of the four mechanisms selected the root.
 
 **Refusal codes.** Unset / invalid / unregistered / structurally-not-a-vault → 2 (`EXIT_USAGE`).
 A policy-denied location — a vault inside a walled-off or cloud-sync tree, per `guardrail.py`'s
@@ -65,11 +73,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 try:
-    from . import output, vaultreg, wall  # type: ignore  # (namespace siblings)
+    from . import enginetree, output, vaultreg, wall  # type: ignore  # (namespace siblings)
 except ImportError:      # loaded top-level / exec'd standalone with bin/lib on sys.path
     _LIB = os.path.dirname(os.path.abspath(__file__))
     if _LIB not in sys.path:
         sys.path.insert(0, _LIB)
+    import enginetree   # type: ignore
     import output      # type: ignore
     import vaultreg    # type: ignore
     import wall        # type: ignore
@@ -91,32 +100,11 @@ ENV_MECHANISM = "PLAINKEEP_VAULT_MECHANISM"
 
 MECHANISMS = ("--vault", "PLAINKEEP_HOME", "marker walk-up from $PWD", "registry default")
 
-# The engine's own tree — where the CODE is, never where the data is. `resolver.py` draws the same
-# distinction on the same line number for the same reason.
-ENGINE_BIN = Path(__file__).resolve().parents[1]
-
-# What makes a selected root DISPATCHABLE, relative to that root. Phase 1 still runs the engine from
-# INSIDE the vault it acts on — the floor spawns `$PLAINKEEP_HOME/bin/lib/guardrail.py`
-# (plainkeep:98) and the core's resolver looks under the same root (resolver.ts's `engineBin()`) — so
-# an ordinary notes vault, which is a directory with a marker and nothing else, cannot be dispatched
-# for. Relocating the engine is Phase 2 Task 2's job (`PLAINKEEP_ENGINE`); these constants do not
-# lift the constraint, they make the constraint SAY SO.
-#
-# TWO probes, not one, and the second is what makes the first honest. The gate file alone certifies
-# only the floor's FIRST spawn. The floor then resolves verbs through `resolver.py`, whose
-# `ENGINE_BIN` is `__file__`-relative — so if `bin/lib` is a symlink into another checkout, the floor
-# finds that checkout's verbs — while `resolver.ts` looks for them under the selected DATA root. A
-# root carrying `bin/lib` and no verb directories therefore passed a one-file probe and then split
-# the dispatchers: the floor captured a note at exit 0, the core answered `unknown verb 'capture'` at
-# exit 4. Two dispatchers, one argv, different answers to "did a write happen" — which is exactly the
-# divergence `--select` exists to make impossible. So dispatchability is probed as BOTH: the gate the
-# floor spawns, and at least one verb the resolvers can agree on.
-ENGINE_PROBE = ("bin", "lib", "guardrail.py")
-ENGINE_VERB_DIR = "bin"
-# A directory is a verb when it carries `run.py` or `cmd.json` — the same test as `resolver.ts`'s
-# `isVerbDir` and `resolver.py`'s, spelled here so the probe cannot certify a shape the resolvers
-# would then disagree about.
-ENGINE_VERB_FILES = ("run.py", "cmd.json")
+# The engine's own tree — where the CODE is, never where the data is. Owned by `enginetree.py`,
+# re-exported here because this module's refusals name it. `resolver.py` draws the same distinction
+# for the same reason.
+ENGINE_ROOT = enginetree.ENGINE_ROOT
+ENGINE_BIN = enginetree.engine_bin()
 
 
 def bootstrap_hint(path) -> str:
@@ -184,6 +172,24 @@ def validate(candidate, *, how: str, require_registered: bool = False,
     root = vaultreg.canonical(raw)
     if not os.path.isdir(root):
         raise VaultError(f"{how} names {root}, which is not a directory")
+
+    # DISJOINTNESS (ADR-014 D3), enforced from this task on. Asked BEFORE the marker for the same
+    # reason the sync-tree policy is: it is a fact about the LOCATION, true or false whether or not
+    # the directory is a well-formed vault, and answering it first means the operator is told the
+    # thing that actually blocks them rather than a downstream consequence of it.
+    #
+    # It is exit 5 (`EXIT_DENY`), the same code as the walled-off/cloud-sync verdict and for the same
+    # reason: this is a refusal about WHERE, not about a missing or stale selection (which is 2). The
+    # remediation differs, so it is spelled out rather than shared — the fix for "your vault is your
+    # engine" is to install the engine somewhere else, not to rebind the vault.
+    overlap = enginetree.disjointness_verdict(root)
+    if overlap is not None:
+        raise VaultError(
+            f"{how} names {root}, and {overlap}", code=output.EXIT_DENY,
+            hint="the engine is installed separately from the data it acts on:\n"
+                 f"    python3 {ENGINE_BIN / 'lib' / 'enginetree.py'} --install <source-checkout>\n"
+                 "then dispatch through the installed launcher "
+                 f"({enginetree.current_link() / 'plainkeep'})")
 
     # A policy-denied LOCATION is a different refusal from a structural one, and it is the stricter
     # of the two: exit 5, before the marker is even read, because a vault inside iCloud is refused
@@ -375,83 +381,38 @@ def active_mechanism() -> str | None:
 
 
 # --- the dispatcher entry point -------------------------------------------------------------------
-def _has_verb_dir(root: str) -> bool:
-    """Does `<root>/bin` hold at least one VERB the resolvers would find?
+def require_engine() -> None:
+    """Refuse a broken ENGINE tree, before either dispatcher tries to run out of it.
 
-    Deliberately the cheap half of the question: it stops at the first hit and never reads a file, so
-    a dispatchable vault pays one `listdir` and a couple of `stat`s on the happy path. It does not
-    validate the verb — a malformed `cmd.json` is the resolver's problem and has its own refusal —
-    it only establishes that the root has something to dispatch TO, which is the claim
-    `require_engine` makes and could not previously support."""
-    bin_dir = Path(root) / ENGINE_VERB_DIR
-    try:
-        children = sorted(bin_dir.iterdir())
-    except OSError:                 # no bin/ at all, or unreadable — either way, nothing to dispatch
-        return False
-    for child in children:
-        if not child.is_dir():
-            continue
-        if any((child / f).is_file() for f in ENGINE_VERB_FILES):
-            return True
-    return False
+    Task 1b's `require_engine(sel)` asked the opposite question — whether the selected VAULT carried
+    a copy of the engine — and it existed only because Phase 1 ran the engine out of the vault it
+    acted on. Task 2 removes that reason, so the probe is INVERTED rather than deleted: the seam is
+    worth keeping (it is the one function both dispatchers run, which is what makes their refusals
+    byte-identical instead of two spellings that drift), and the subject moves from the data to the
+    code. Leaving the old question in place would have refused every data-only vault — the shape
+    Task 5's `init` exists to produce.
 
-
-def require_engine(sel: Selection) -> None:
-    """Refuse a SELECTED root that carries no copy of the engine, before either dispatcher tries to
-    run one out of it.
-
-    This is a diagnosis, not a policy: selection genuinely succeeded, the vault is genuinely valid,
-    and the invocation genuinely cannot proceed. Without it the failure landed at the far end of the
-    dispatch, in two different places and untruthfully in both — the floor reached
-    `"$PY" "$PK/bin/lib/guardrail.py"` and let CPython answer ("can't open file '<vault>/bin/lib/
-    guardrail.py'", exit 2, with no plainkeep in the message), while the core got as far as the
-    resolver, found no verb directory under the root and said `unknown verb 'capture'` (exit 4) —
-    a FALSE reason, since `capture` exists, with a remediation (`plainkeep help`) that fails the
-    same way and so loops.
-
-    It lives HERE, in the one function both dispatchers run, rather than as a check in each of them:
-    two spellings of one refusal is exactly the drift `--select` exists to prevent, and the brief
-    requires the two to agree byte-for-byte.
-
-    It probes TWO things because one was not enough to support that byte-for-byte claim — see
-    ENGINE_PROBE. A root with `bin/lib/guardrail.py` but no verb directory under `bin/` passed the
-    single-file probe and then diverged: the floor dispatched and WROTE, the core refused. Both
-    halves are required, and the refusal names whichever is missing."""
-    p = Path(sel.root).joinpath(*ENGINE_PROBE)
-    missing = None
-    if not p.is_file():
-        missing = f"no {p}"
-    elif not _has_verb_dir(sel.root):
-        # The gate is there but nothing to dispatch TO. Reported separately because the remediation
-        # is the same but the diagnosis is not, and a message naming a file that exists is a message
-        # that sends the operator looking in the wrong place.
-        missing = (f"{p} is there, but {Path(sel.root) / ENGINE_VERB_DIR} carries no verb directory "
-                   f"(a directory holding {' or '.join(ENGINE_VERB_FILES)})")
-    if missing is None:
-        return
-    name = None
-    try:
-        entry = vaultreg.entry_for_path(vaultreg.read_registry(), sel.root)
-        name = entry["name"] if entry else None
-    except VaultError:
-        pass          # a registry we cannot read must not turn THIS refusal into a different one
-    who = f"vault '{name}'" if name else "the selected vault"
-    raise VaultError(
-        f"{who} at {sel.root} does not carry the plainkeep engine ({missing}) — selection itself "
-        f"SUCCEEDED, via {sel.mechanism}; Phase 1 still runs the engine from inside the vault it "
-        f"acts on, so a vault holding only notes cannot be dispatched for",
-        hint="put the engine in that vault (script/setup), or select one that already carries it:"
-             "\n    plainkeep vault list")
+    Thin on purpose: `enginetree.require_intact()` owns the probe, this owns WHERE it is asked."""
+    enginetree.require_intact()
 
 
 def _select_cli(argv: list[str]) -> int:
     """`vaultroot.py --select [--vault X]` — run the chain and print the answer for a DISPATCHER to
-    export. THREE lines on stdout: the canonical root, the vault id, then the mechanism that chose
-    it. Any refusal goes to stderr with the frozen exit code.
+    export. FOUR lines on stdout: the canonical data root, the vault id, the mechanism that chose it,
+    then the canonical ENGINE root. Any refusal goes to stderr with the frozen exit code.
 
     The third line exists because the mechanism is the one part of the answer that cannot be
     recovered downstream: exporting PLAINKEEP_HOME (which the dispatcher must do) destroys the
     evidence of which step won, so a verb re-running the chain can only ever answer "PLAINKEEP_HOME".
+
+    The FOURTH line (Task 2) is the engine root, and it is not redundant with each dispatcher's own
+    derivation. Both dispatchers self-locate to FIND this module — the floor from `$0`, the core from
+    its execPath — and both must then export `PLAINKEEP_ENGINE`. Taking the value from here rather
+    than from their own arithmetic means the exported path is the same canonical, symlink-resolved
+    spelling the disjointness check compares against, in both dispatchers, by construction: reached
+    through `<install>/engine/current/plainkeep`, `$0`'s directory is the SYMLINK's name and
+    `__file__`'s resolution is the version's. Two spellings of one tree is how a disjointness check
+    silently answers "no".
 
     Both dispatchers call exactly this, which is what makes them agree: the bash floor and the
     compiled core share ONE implementation of the safety-critical decision rather than a port and a
@@ -468,12 +429,16 @@ def _select_cli(argv: list[str]) -> int:
             return output.EXIT_USAGE
         selector = argv[i + 1]
     try:
+        # The ENGINE is checked FIRST, before discovery: a broken engine cannot be diagnosed by
+        # anything downstream of it, and asking about the vault first would report a vault problem
+        # for a code problem.
+        require_engine()
         sel = discover(selector)
-        require_engine(sel)
     except VaultError as e:
         sys.stderr.write("plainkeep: " + e.message + (f"\n  {e.hint}" if e.hint else "") + "\n")
         return e.code
-    sys.stdout.write(sel.root + "\n" + sel.id + "\n" + sel.mechanism + "\n")
+    sys.stdout.write(sel.root + "\n" + sel.id + "\n" + sel.mechanism + "\n"
+                     + str(ENGINE_ROOT) + "\n")
     return output.EXIT_OK
 
 

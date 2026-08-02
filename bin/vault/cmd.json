@@ -1,7 +1,7 @@
 {
   "verb": "vault",
   "summary": "register, name and re-point plainkeep vaults (marker + registry)",
-  "usage": "plainkeep vault list | status | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
+  "usage": "plainkeep vault list | status | init <path> [--name <slug>] [--default] --yes | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
   "risk": "safe_write",
   "reads": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
   "writes": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
@@ -34,8 +34,19 @@
       "args": []
     },
     {
+      "name": "init",
+      "summary": "create a DATA-ONLY vault (content dirs, plugins/, plainkeep.json, marker, registry entry — no engine code); needs --yes",
+      "risk": "confirm",
+      "dry_run": false,
+      "args": [
+        { "name": "path", "type": "string", "required": true, "help": "where the new vault goes; created if absent, refused if it already carries a marker or engine code", "example": "~/notes" },
+        { "name": "--name", "type": "string", "required": false, "help": "registry name (lowercase slug); defaults to the directory name", "example": "notes" },
+        { "name": "--default", "type": "flag", "required": false, "help": "also make it the default vault" }
+      ]
+    },
+    {
       "name": "register",
-      "summary": "mark a directory as a vault (if unmarked) and add it to the registry; needs --yes",
+      "summary": "adopt an EXISTING directory as a vault: mark it (if unmarked) and add it to the registry; needs --yes",
       "risk": "confirm",
       "dry_run": false,
       "args": [

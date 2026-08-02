@@ -37,9 +37,25 @@ def main() -> int:
         # registers the vault it creates, and the registry lives OUTSIDE every vault — in the real
         # ~/.config unless redirected. Without this the suite would write an entry into the
         # developer's own registry (and fail the moment their vault already holds the name).
+        # PLAINKEEP_ENGINE_HOME redirects the ENGINE INSTALL (Phase 2 Task 2) the same way
+        # PLAINKEEP_CONFIG_HOME redirects the registry: setup now installs a versioned engine tree
+        # and puts THAT on PATH, and without this it would install into the developer's real
+        # ~/.local/share.
+        #
+        # PLAINKEEP_CORE_BIN and PLAINKEEP_CORE are POPPED, and that is not tidiness — it was a live
+        # hole. run_all.py runs this suite with PLAINKEEP_CORE_BIN pointed at the REPOSITORY's core
+        # binary, and since Task 2 the core derives its engine root from its own execPath: the vault
+        # under test dispatched through the repo's engine, so the engine/data overlap this setup is
+        # arranged to avoid was never actually exercised. The suite was green under `run_all` and RED
+        # when run directly, which is the worst possible arrangement. The engine here is the one
+        # setup installs, and nothing in the ambient environment may substitute another.
         env = {**os.environ, "PLAINKEEP_ROOTS_HOME": str(home), "PLAINKEEP_BIN_DIR": str(bindir),
                "PLAINKEEP_COMP_DIR": str(compdir), "PLAINKEEP_HOME": str(vault),
-               "PLAINKEEP_CONFIG_HOME": str(tmp / "config")}
+               "PLAINKEEP_CONFIG_HOME": str(tmp / "config"),
+               "PLAINKEEP_ENGINE_HOME": str(tmp / "engine-install")}
+        for k in ("PLAINKEEP_CORE", "PLAINKEEP_CORE_BIN", "PLAINKEEP_ENGINE"):
+            env.pop(k, None)
+        engine_current = tmp / "engine-install" / "engine" / "current"
 
         # dry-run changes nothing
         subprocess.run([str(vault / "script" / "setup"), "--lean", "--yes", "--dry-run",
@@ -53,8 +69,27 @@ def main() -> int:
                             "--upstream", UPSTREAM], capture_output=True, text=True, env=env)
         ok = r.returncode == 0
         check("setup completes", ok, r.stdout + r.stderr)
-        check("plainkeep put on PATH (symlink)", (bindir / "plainkeep").is_symlink()
-              and os.readlink(bindir / "plainkeep") == str(vault / "plainkeep"))
+        # PATH points at the INSTALLED engine's launcher, through `current/` — not at the
+        # checkout's. That single line is Task 2's user-visible shape: the thing on PATH is the
+        # engine, the checkout is the source it was built from and the vault it acts on.
+        check("plainkeep put on PATH (symlink to the INSTALLED engine, not the checkout)",
+              (bindir / "plainkeep").is_symlink()
+              and os.readlink(bindir / "plainkeep") == str(engine_current / "plainkeep")
+              and (engine_current / "plainkeep").is_file(),
+              os.readlink(bindir / "plainkeep") if (bindir / "plainkeep").is_symlink() else "no symlink")
+        check("the installed engine is a VERSIONED tree with a `current` symlink",
+              engine_current.is_symlink()
+              and os.path.basename(os.path.realpath(engine_current))
+              == (REPO / "VERSION").read_text().strip(),
+              str(sorted(p.name for p in (tmp / "engine-install" / "engine").iterdir())))
+        check("the installed engine is READ-ONLY (it cannot be hot-patched in place)",
+              not os.access(os.path.realpath(engine_current) + "/VERSION", os.W_OK),
+              "VERSION is writable in the installed tree")
+        # ...and the two roots are DISJOINT, which is what makes the invocation below legal at all.
+        check("the installed engine is outside the vault, and the vault outside it",
+              not str(os.path.realpath(engine_current)).startswith(str(vault) + os.sep)
+              and not str(vault).startswith(os.path.realpath(engine_current) + os.sep),
+              f"engine={os.path.realpath(engine_current)} vault={vault}")
         check("zsh completion installed (symlink)", (compdir / "_plainkeep").is_symlink()
               and os.readlink(compdir / "_plainkeep") == str(vault / "script" / "completions" / "_plainkeep"))
         check("sibling roots created", (home / "work").is_dir() and (home / "files").is_dir())
@@ -65,8 +100,18 @@ def main() -> int:
         check("lean: test/ dropped from the vault", not git(vault, "ls-files", "test/").stdout.strip())
         check("lean: engine kept (bin/)", bool(git(vault, "ls-files", "bin/").stdout.strip()))
         check("lean: design docs kept", bool(git(vault, "ls-files", "docs/design/").stdout.strip()))
-        check("doctor passes after setup", subprocess.run(
-            [str(vault / "plainkeep"), "doctor"], capture_output=True, text=True, env=env).returncode == 0)
+        d = subprocess.run([str(bindir / "plainkeep"), "doctor"], capture_output=True, text=True,
+                           env=env)
+        check("doctor passes after setup (through the installed launcher)", d.returncode == 0,
+              d.stdout[-1500:] + d.stderr[-1500:])
+        # The refusal the split exists to produce: dispatching the CHECKOUT's own launcher against
+        # the checkout-as-vault is engine == data, and it is denied (5) rather than quietly acting.
+        # Without this, "setup installs the engine elsewhere" would be a claim with no consequence.
+        o = subprocess.run([str(vault / "plainkeep"), "doctor"], capture_output=True, text=True,
+                           env=env)
+        check("...and the checkout's OWN launcher refuses against the checkout-as-vault (exit 5)",
+              o.returncode == 5 and "IS the engine tree" in (o.stdout + o.stderr),
+              f"rc={o.returncode} {o.stdout[-400:]}{o.stderr[-400:]}")
 
         # update guards cleanly with no reachable remote
         u = subprocess.run([str(vault / "script" / "update"), "--remote", "nope"],

@@ -11,10 +11,28 @@ description: >
 # Operating the system
 
 ## 1. What this is, in one breath
-`~/plainkeep` (git) is the single source of truth for knowledge and work records. `~/work`
+The **vault** (git) is the single source of truth for knowledge and work records. `~/work`
 holds code (each project its own repo). `~/files` holds binaries (find them via their
 shadow notes, never by trawling). You act ONLY through `plainkeep <verb>` and by reading and
 writing plaintext files. You add no capabilities of your own.
+
+**The vault is DATA. plainkeep itself is not in it.** The engine — every verb, `bin/lib`,
+the launcher — is a separate, versioned, READ-ONLY tree installed at
+`${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/`, and a vault that carries a
+`bin/` directory of its own is carrying inert files that nothing will ever run. Two
+consequences you must act on:
+
+* **There is no `~/plainkeep`.** The vault is wherever it is, it may not be the only one,
+  and its path is not part of your instructions. Run `plainkeep vault status` (or
+  `--json`) at the start of a session to learn which vault you are on and where it is; the
+  same command reports the engine root beside it. Every path in this document written
+  `<vault>/…` means that root.
+* **You cannot change plainkeep by editing files.** Fixing a verb is not a vault edit — the
+  installed tree is read-only, and editing a copy of it inside a vault changes nothing. A
+  change to the engine is a change to its SOURCE checkout, reviewed and installed as a new
+  version. What you CAN add without touching the engine is a plugin: `plainkeep new verb
+  <name>` scaffolds one into `<vault>/plugins/local/<name>/`, which is user-owned, survives
+  an engine upgrade, and re-enters through the dispatcher so the guardrail still gates it.
 
 ## 2. The one rule about capabilities
 `plainkeep.json` (or `plainkeep help`) is the authoritative, complete list of what you can do.
@@ -46,15 +64,16 @@ guess a permanent home.
 
 | You have… | It goes… | Via |
 |---|---|---|
-| A passing thought / note (text) | `~/plainkeep/inbox/` then triaged to wiki or a task | `plainkeep capture "<text>"` |
-| Durable knowledge (something learned, a decision, a how-to) | `~/plainkeep/wiki/` (notes/ for atomic ideas; the entity hub for client/project facts) | edit the note; `plainkeep wiki new` for a new one |
-| Multi-step work to track | `~/plainkeep/tasks/<status>/` | `plainkeep task add` |
+| A passing thought / note (text) | `<vault>/inbox/` then triaged to wiki or a task | `plainkeep capture "<text>"` |
+| Durable knowledge (something learned, a decision, a how-to) | `<vault>/wiki/` (notes/ for atomic ideas; the entity hub for client/project facts) | edit the note; `plainkeep wiki new` for a new one |
+| Multi-step work to track | `<vault>/tasks/<status>/` | `plainkeep task add` |
 | A binary doc you RECEIVED (brief, contract draft, asset, research PDF) | `~/files/<area>/…/in/` or `research/`, + a shadow note in the wiki | `plainkeep files ingest` |
 | An ingested PDF/audio/video/image you want to search or read as text | a sibling derived note `wiki/files/<slug>.extract.md` (markdown/transcript/OCR) | `plainkeep files extract <slug>` |
 | A link/article/URL you want saved and searchable | `wiki/bookmarks/` (a `type: bookmark` note; readable text pulled in) | `plainkeep bookmark <url>` |
 | A binary you PRODUCED (invoice, export, report) | the project's `~/files/.../out/`, linked from its wiki note | the producing verb writes it there |
 | A personal/legal/family doc (tax, medical, ID, signed master) | iCloud — **you do NOT file this; you PROPOSE the destination and stop** | report the suggested path |
 | **A code repo** | see the routing tree below — this is where misfiling happens | `plainkeep new project` / by hand |
+| A new plainkeep CAPABILITY | `<vault>/plugins/local/<name>/` — never the engine tree, which is read-only | `plainkeep new verb <name>` |
 
 ### 4a. Repo routing tree (the cloned-tool-in-projects trap)
 A directory with code is NOT automatically a "project." Decide with these questions, top
@@ -162,7 +181,8 @@ Discover the live, authoritative set with `plainkeep help`; this is the working 
 - Business:          `plainkeep invoice <client>` (DRAFT only; reads tax-formula.md; never sends)
 - System:            `plainkeep status` · `plainkeep doctor` · `plainkeep setup [<layer>] [--all] [--yes|--wizard]`
   (layered installer; paired with `plainkeep doctor` as checker; see
-  [`docs/setup.md`](../../docs/setup.md)) · `plainkeep backup` · `plainkeep index` · `plainkeep job …` · `plainkeep sweep`
+  [`docs/setup.md`](../../docs/setup.md)) · `plainkeep vault status|list` (which vault am I on,
+  which engine is running, how was it chosen) · `plainkeep backup` · `plainkeep index` · `plainkeep job …` · `plainkeep sweep`
   · `plainkeep complete --json` (completion candidates) · `plainkeep ui` (human TUI — not for agents;
   installed by `plainkeep setup ui --yes` as a compiled binary into `.local/bin/`)
 
@@ -195,8 +215,15 @@ happen for the next operator.
   and you (and the next agent) will file that case correctly next time.
 
 ## 10. Hard rules (the guardrails enforce these; respecting them keeps your freedom broad)
-- Operate ONLY inside `~/plainkeep`, `~/files`, and the ONE `~/work` repo of the current task.
+- Operate ONLY inside the SELECTED vault, `~/files`, and the ONE `~/work` repo of the current
+  task. The vault is the one `plainkeep vault status` reports and no other — registering a
+  second vault does not widen the wall to it, and an invocation acts on exactly one.
   NEVER touch iCloud or family/personal paths.
+- NEVER edit the engine tree. It is code, it lives outside every vault, it is installed
+  read-only, and a write there is not a note you can revert — it is a change to the tool
+  that is about to act on somebody's notes. Propose an engine change; do not make one. A
+  capability you can add safely is a PLUGIN (`plainkeep new verb`), which lives in the vault
+  and is yours to write.
 - iCloud-bound documents (tax, legal, medical, ID, family, signed masters): PROPOSE the
   destination, never write there yourself.
 - `~/files/**/in/` is APPEND-ONLY (client originals are evidence): an original may arrive,

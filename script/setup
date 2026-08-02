@@ -4,10 +4,20 @@
 #
 #   ~/plainkeep/script/setup [--lean|--full] [--yes] [--dry-run] [--no-commit] [--upstream URL]
 #
-# What it does: puts `plainkeep` on PATH, creates the sibling roots (~/work, ~/files), adds the
-# template as `upstream` (so `script/update` can pull engine fixes), optionally strips dev-only
-# test/+ref/ for a lean vault, runs `plainkeep doctor --init`, and makes the first commit. Then it
-# tells you how to point the vault at your own GitHub and push.
+# What it does: INSTALLS THE ENGINE out of this checkout into its own versioned tree, puts that
+# tree's `plainkeep` on PATH, creates the sibling roots (~/work, ~/files), adds the template as
+# `upstream` (so `script/update` can pull engine fixes), optionally strips dev-only test/+ref/ for a
+# lean vault, marks + registers this checkout as a VAULT, runs `plainkeep doctor --init`, and makes
+# the first commit. Then it tells you how to point the vault at your own GitHub and push.
+#
+# PHASE 2 TASK 2 — THE CHECKOUT IS TWO THINGS, AND THEY ARE NO LONGER THE SAME THING. It is the
+# engine SOURCE (what gets installed) and it is a VAULT (data the installed engine acts on). Those
+# two roles used to be one directory: `plainkeep` on PATH pointed at `$ROOT/plainkeep`, so the engine
+# that ran was the checkout, acting on itself. The data root and the engine root must now be
+# DISJOINT (ADR-014 D3) and an invocation where they overlap is refused with exit 5 — so setup
+# installs the engine ELSEWHERE and points PATH at the installed copy. `script/update` still pulls
+# engine fixes into the checkout; re-running this script is what turns a pulled fix into a running
+# one.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -44,12 +54,30 @@ TREE_WAS_CLEAN=0
 
 say "plainkeep setup — making this clone your ~/plainkeep vault"
 echo "  repo:  $ROOT"
-[ "$ROOT" = "$ROOTS_HOME/plainkeep" ] || echo "  note:  for the path-wall, the vault should live at ~/plainkeep (you're at $ROOT)"
+# The path-wall follows the SELECTED root since ADR-014/ADR-015 — a vault at any path is fine, and
+# the old "it should live at ~/plainkeep" note described a constraint that no longer exists.
 echo
 
-say "1. put 'plainkeep' on PATH"
+say "1. install the engine (a versioned, read-only tree outside every vault)"
+# The install root is XDG-correct and sits beside the vault registry's config dir.
+# PLAINKEEP_ENGINE_HOME relocates it (tests, or a second install); the module owns the default.
+ENGINE_CURRENT="$(python3 "$ROOT/bin/lib/enginetree.py" --print install-root)/engine/current"
+if [ "$DRY" = 1 ]; then
+  echo "  + python3 $ROOT/bin/lib/enginetree.py --install $ROOT --force"
+else
+  # --force: re-running setup on the same VERSION must REPLACE the installed tree, not refuse it.
+  # An installed engine is immutable, so "replace" is remove-and-rewrite, staged and verified before
+  # anything is activated. The full ownership manifest is checked there; an incomplete tree is never
+  # left behind and never becomes `current`.
+  python3 "$ROOT/bin/lib/enginetree.py" --install "$ROOT" --force | sed 's/^/  installed: /'
+fi
+echo "  ok:    active engine -> $ENGINE_CURRENT"
+
+say "1a. put 'plainkeep' on PATH (the INSTALLED launcher, not this checkout's)"
 run mkdir -p "$BIN_DIR"
-run ln -sf "$ROOT/plainkeep" "$BIN_DIR/plainkeep"
+# Pointed at `current/`, not at the version directory: activating a new version then re-points one
+# symlink and every shell picks it up, with no PATH surgery and no stale link to a removed tree.
+run ln -sf "$ENGINE_CURRENT/plainkeep" "$BIN_DIR/plainkeep"
 case ":$PATH:" in *":$BIN_DIR:"*) : ;; *) echo "  note:  $BIN_DIR is not on PATH — add it to your shell rc" ;; esac
 
 say "1b. shell completion (zsh — tab-complete verbs, note slugs, task ids)"
@@ -147,7 +175,9 @@ fi
 rm -f "$REG_LOG"
 
 say "5. validate the skeleton"
-run env PLAINKEEP_HOME="$ROOT" "$ROOT/plainkeep" doctor --init
+# Through the INSTALLED launcher, which is the whole point of step 1: `$ROOT/plainkeep` would make
+# the engine root and the data root the same directory, and discovery refuses that with exit 5.
+run env PLAINKEEP_HOME="$ROOT" "$ENGINE_CURRENT/plainkeep" doctor --init
 
 say "6. first commit"
 if [ "$COMMIT" = 1 ]; then

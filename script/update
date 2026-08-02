@@ -7,6 +7,14 @@
 # bin/, skills/, the dispatcher, the contract files, and the design docs are refreshed, while your
 # wiki/ tasks/ journal/ jobs/registry.json and a lean vault's dropped test/ are left exactly as they
 # are. Changes are STAGED, not committed: review `git diff --staged`, then commit when you're happy.
+#
+# SINCE PHASE 2 TASK 2 THIS UPDATES THE SOURCE, NOT THE RUNNING ENGINE. The engine is installed as
+# its own versioned, read-only tree outside every vault, and what this script refreshes is the
+# CHECKOUT those files are installed from. Pulling a fix and running it are now two steps:
+#   script/update      # pull engine files into this checkout (staged, reviewable)
+#   script/setup --yes # install them as a version and re-point `current`
+# That is the trade the split buys — an update you have not installed cannot break a running vault,
+# and a rollback is re-activating the previous version.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -99,7 +107,14 @@ fi
 
 printf '%s\n' "$UPSTREAM_SHA" > "$REFFILE"; g add -- .plainkeep-engine-ref   # single clean write: one SHA + newline, never appended
 
-"$ROOT/plainkeep" help >/dev/null 2>&1 || true   # regenerate plainkeep.json from any new cmd.json
+# `plainkeep.json` is regenerated from any new cmd.json — through the INSTALLED launcher, and only
+# if there IS one. Running `$ROOT/plainkeep` here would be the engine acting on itself (engine root
+# == data root), which discovery refuses with exit 5 since Phase 2 Task 2; and the freshly PULLED
+# engine files are source, not an installed version, so they are not what should regenerate anything
+# until `script/setup` installs them. Best-effort, exactly as it was: a vault with no engine on PATH
+# yet gets its manifest on the first real invocation.
+command -v plainkeep >/dev/null 2>&1 \
+  && env PLAINKEEP_HOME="$ROOT" plainkeep help >/dev/null 2>&1 || true
 echo
 if [ "${#CONFLICTS[@]}" -gt 0 ]; then
   printf '\033[1m\033[33m%d file(s) have merge conflicts — resolve before committing:\033[0m\n' "${#CONFLICTS[@]}"
@@ -109,8 +124,9 @@ fi
 if git -C "$ROOT" diff --cached --quiet; then
   printf '\033[1malready up to date.\033[0m\n'
 else
-  printf '\033[1mengine updated (staged).\033[0m review then commit:\n'
+  printf '\033[1mengine updated (staged).\033[0m review, INSTALL, then commit:\n'
   echo "  git -C '$ROOT' diff --staged       # what changed"
+  echo "  '$ROOT/script/setup' --yes                # install the pulled engine + re-point PATH"
   echo "  plainkeep doctor                          # confirm healthy"
   echo "  git -C '$ROOT' commit -m 'plainkeep: update engine from upstream'"
 fi

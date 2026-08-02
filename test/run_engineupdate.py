@@ -273,6 +273,40 @@ def case_init(tmp: Path) -> None:
     check("init: the captured notes really landed in the new vault's inbox",
           len(list((target / "inbox").glob("*.md"))) >= 2)
 
+    # ...AND THROUGH THE REAL DISPATCHER. Everything above used the bootstrap invocation, which is
+    # the path for a machine with no vault; the ordinary path is `plainkeep vault init`, and it has
+    # to survive the gate, the resolver and the verb spawn. ADR-019 D1: a rule is not enforced until
+    # a test drives the product's own entry point, and "init works" is exactly such a rule.
+    for mode in MODES:
+        second = tmp / f"second-vault-{mode}"
+        d = dispatch(root, target, cfg, "vault", "init", str(second), "--name", f"second{mode}",
+                     "--yes", "--json", mode=mode)
+        check(f"init: `plainkeep vault init` works through the real dispatcher "
+              f"(PLAINKEEP_CORE={mode})", d.returncode == EXIT_OK,
+              f"rc={d.returncode} {(d.stdout + d.stderr)[-250:]}")
+        if d.returncode == EXIT_OK:
+            payload = json.loads(d.stdout)["data"]
+            check(f"init: ...it made a data-only vault (PLAINKEEP_CORE={mode})",
+                  payload["data_only"] is True and not (second / "bin").exists(),
+                  str(payload.get("engine_paths")))
+            check(f"init: ...the vault it acted on is NOT the one it was dispatched from "
+                  f"(PLAINKEEP_CORE={mode})",
+                  payload["path"] == str(os.path.realpath(second)), payload["path"])
+        e = dispatch(root, target, cfg, "vault", "init", str(tmp / f"no-yes-{mode}"), mode=mode)
+        check(f"init: ...and still refuses without --yes through the dispatcher "
+              f"(PLAINKEEP_CORE={mode})",
+              e.returncode == EXIT_CONFIRM and not (tmp / f"no-yes-{mode}").exists(),
+              f"rc={e.returncode} {(e.stdout + e.stderr)[:200]}")
+
+    # The action is on the SURFACE: `plainkeep.json` is what an agent reads to learn what exists, and
+    # an action absent from it is one no agent will ever call (the frozen machine contract, §4.3).
+    surface = json.loads((target / "plainkeep.json").read_text(encoding="utf-8"))
+    vault_verb = next((v for v in surface["verbs"] if v.get("verb") == "vault"), None) \
+        if isinstance(surface.get("verbs"), list) else surface.get("verbs", {}).get("vault")
+    blob = json.dumps(vault_verb or surface)
+    check("init: the action is declared in plainkeep.json, so an agent can find it",
+          '"init"' in blob and "DATA-ONLY" in blob, blob[:200])
+
     # A SECOND init of the same path is refused rather than half-repeated.
     r2 = subprocess.run([PY, str(eng / "bin" / "vault" / "run.py"), "init", str(target), "--yes"],
                         capture_output=True, text=True,

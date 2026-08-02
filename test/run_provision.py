@@ -428,6 +428,12 @@ def case_seal_interaction(tmp: Path) -> None:
           "last step, silently, without this)",
           any("tools/ is read-only" in p for p in problems), str(problems))
     tools.chmod(0o755)
+    # A CHECKOUT is not required to carry tools/ — it is created on first provisioning — so the
+    # absence check is scoped to installed trees. Proved in both directions rather than asserted:
+    check("4a seal: a CHECKOUT with no tools/ still verifies clean (it is created on first use)",
+          enginetree.verify(REPO, check_seal=False) == []
+          or all("tools" not in p for p in enginetree.verify(REPO, check_seal=False)),
+          str(enginetree.verify(REPO, check_seal=False))[:200])
     # Removing it needs the ROOT unsealed — an unlink is a write to the containing directory. Worth
     # noting rather than working around silently: the seal makes `tools/` un-DELETABLE while leaving
     # it writable, which is the shape wanted (provisioning may fill it; nothing may remove it).

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, guardrail, output, paths, pluginenv, setuplib, vaultio  # noqa: E402
+from lib import enginetree, guardrail, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
@@ -177,6 +177,35 @@ def main(argv):
         fail(f"engine: the vault and the engine tree are not disjoint — {overlap}")
     else:
         ok("engine: disjoint from the vault (data is data, code is code)")
+
+    # 1c. PROVISIONING (Phase 2 Task 4 / ADR-019). Three rows, and each of them exists because an
+    # operator has a different next move:
+    #
+    #   * the pinned uv — absent means `plainkeep setup` will try to download it, which needs network;
+    #   * the engine interpreter — absent means the engine has never been synced;
+    #   * a SYSTEM uv — present means the operator has one and might reasonably expect it to be used.
+    #     It is NOT. This row is the whole of the "one line saying so" the pin's design allows: a
+    #     silently-ignored tool that the operator installed on purpose is a support question waiting
+    #     to happen, and answering it here is cheaper than answering it later.
+    #
+    # None of them can FAIL doctor, and none is even a WARN: an unprovisioned engine is a NORMAL
+    # state (the stdlib floor is the contract — ADR-009), not a broken one. They ride in the `ok`
+    # bucket and are worded so that reading one as assurance says only what was measured.
+    try:
+        uv = provision.uv_path(paths.ENGINE)
+        if uv.is_file():
+            ok(f"engine: pinned uv {provision.load_pin(paths.ENGINE)['version']} present")
+        else:
+            ok(f"engine: pinned uv not provisioned yet ({uv}) — `plainkeep setup` fetches it")
+        epy = provision.engine_python(paths.ENGINE)
+        ok(f"engine: interpreter {epy}" if epy
+           else "engine: no provisioned interpreter yet (the stdlib floor is the contract)")
+        sysuv = provision.system_uv()
+        if sysuv:
+            ok(f"engine: a system uv at {sysuv} is IGNORED — the engine runs its own pinned uv "
+               "(ADR-019 D3), so your uv's version and config never steer this resolution")
+    except Exception as exc:                 # a broken pin must not take doctor down with it
+        warn(f"engine: cannot read the uv pin ({exc})")
 
     # THE PRECEDENCE INVERSION (Phase 2 Task 3, ADR-018 D2). The SDK reaches a plugin on PYTHONPATH
     # now, and PYTHONPATH loses to `sys.path[0]` — the verb's own directory. A pack shipping a

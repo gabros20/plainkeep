@@ -557,13 +557,20 @@ def verify(root: Path, *, check_seal: bool = True, check_digests: bool = False) 
     # it must still be writable, because it is where provisioning lands and a sealed one turns every
     # `plainkeep setup` into a permission error at the last step. Its mode is deliberately NOT added
     # to `modes` — that list feeds the seal check, and this is the one path exempt from it.
-    tools = root / PROVISION_DIR
-    tm = _mode_of(tools)
-    if tm is None or not stat.S_ISDIR(tm):
-        problems.append(f"missing engine tree: {PROVISION_DIR}/")
-    elif _looks_installed(root) and not tm & stat.S_IWUSR:
-        problems.append(f"{PROVISION_DIR}/ is read-only — the engine cannot provision uv or its "
-                        "Python environment into it")
+    #
+    # Asked of an INSTALLED tree only, and that scope is load-bearing rather than cautious: `install()`
+    # creates the directory, so its absence from an installed tree means the install is incomplete —
+    # while a contributor's CHECKOUT has never been provisioned into and creates it on first use.
+    # Demanding it there would have reddened `plainkeep doctor` on every fresh clone, which is the
+    # opposite of what a completeness check is for.
+    if _looks_installed(root):
+        tools = root / PROVISION_DIR
+        tm = _mode_of(tools)
+        if tm is None or not stat.S_ISDIR(tm):
+            problems.append(f"missing engine tree: {PROVISION_DIR}/")
+        elif not tm & stat.S_IWUSR:
+            problems.append(f"{PROVISION_DIR}/ is read-only — the engine cannot provision uv or its "
+                            "Python environment into it")
     if check_seal:
         problems.extend(seal_problems(root, modes=modes))
     if check_digests:

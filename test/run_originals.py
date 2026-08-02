@@ -113,19 +113,22 @@ def staged(name: str, data: bytes) -> Path:
 
 @contextmanager
 def no_hardlinks():
-    """Force the CROSS-DEVICE branch by making `link(2)` report EXDEV — ACROSS DIRECTORIES only.
+    """Force the CROSS-DEVICE branch by making `link(2)` report EXDEV for the INCOMING SOURCE only.
 
     This exercises the branch, not a second volume: the suite mounts nothing. What it does prove is
     that the fallback's create-only guarantee is `O_EXCL`'s and not a leftover of `os.link`.
 
-    A link between two names in the SAME directory is left working on purpose. EXDEV means "these
-    two paths are on different volumes", and the staging leaf `_create_only_copy` links onto the
-    destination sits beside it — a real EXDEV there is impossible, so faking one would be simulating
-    a filesystem that cannot exist and would test the wrong branch."""
+    A link FROM A STAGING LEAF is left working on purpose. EXDEV means "these two paths are on
+    different volumes", and the leaf `_create_only_copy` mints is placed on the destination's own
+    volume by construction (`vaultio._staging_dir` walks up only while the device is unchanged), so a
+    real EXDEV there is impossible — faking one would simulate a filesystem that cannot exist and
+    would test the wrong branch. The fixture keys on the staging PREFIX rather than on directory
+    identity, which was the same claim while staging happened to sit beside the destination and
+    stopped being true when it moved out of the append-only tree (NEW-3)."""
     real = os.link
 
     def fake(src, dst, **kw):
-        if Path(src).parent != Path(dst).parent:
+        if not Path(src).name.startswith(vaultio.ARRIVING_PREFIX):
             raise OSError(errno.EXDEV, "forced cross-device link")
         return real(src, dst, **kw)
     os.link = fake
@@ -154,8 +157,17 @@ def no_hardlinks_at_all():
 
 
 def arriving_debris(d: Path) -> list[str]:
-    """Staging leaves left under `in/`. Append-only means anything here is permanent."""
-    return sorted(p.name for p in d.iterdir() if p.name.startswith(".pk-arriving-"))
+    """Staging leaves left behind, under `in/` AND in the directory staging actually uses.
+
+    Both are walked on purpose. A leaf under `in/` is PERMANENT — append-only forbids removing it —
+    and one in the staging directory is merely litter, but a check that looked only where debris can
+    no longer appear would be green by construction. Names are returned prefixed with where they were
+    found so a failure says which of the two it is."""
+    seen = []
+    for where in {d, vaultio._staging_dir(d / "x")}:
+        seen += [f"{'in/' if where == d else 'staging/'}{p.name}" for p in where.iterdir()
+                 if p.name.startswith(vaultio.ARRIVING_PREFIX)]
+    return sorted(seen)
 
 
 @contextmanager
@@ -441,6 +453,21 @@ elif op == "create_only":
 print("NOT REFUSED", file=sys.stderr)
 '''
 
+# A copy killed after some bytes are down, with NO unwinding: `os._exit` skips every `finally`, which
+# is what makes it a faithful stand-in for SIGKILL and why it needs its own process.
+KILL_MIDCOPY = '''
+import os, shutil, sys
+sys.path.insert(0, {binpath!r})
+from lib import vaultio
+dst, src = sys.argv[1], sys.argv[2]
+def fake(inp, out, *a, **kw):
+    out.write(b"HALF")
+    out.flush()
+    os._exit(137)
+shutil.copyfileobj = fake
+vaultio.move_create_only(src, dst)
+'''
+
 
 def case_wall_refuses_non_atomic() -> None:
     d = hub("wall")
@@ -608,6 +635,120 @@ def case_source_under_originals() -> None:
           not (dest / "brief.pdf").exists() and before == hashes(d))
 
 
+def case_move_and_replace_source() -> None:
+    """The OTHER two primitives that take a source away. `move_create_only` got the source guard;
+    `move` and `replace` — eleven lines up, same file, same seam — did not, and `shutil.move` /
+    `rename(2)` removed the source with exit 0. The destination is an ordinary `~/files/**/out/`
+    write, so the DESTINATION wall has nothing to say: the only thing that can refuse this is the
+    source being classified, which is the whole point.
+
+    Latent rather than live — `move`'s one production caller sweeps `~/Desktop` into `~/.Trash` — so
+    the control row matters as much as the refusals: a guard that denied every move would have broken
+    that caller silently."""
+    d = hub("moveguard")
+    out = ROOTS / "files" / "clients" / "moveguard" / "out"
+    vaultio.mkdir(out, parents=True, exist_ok=False)
+    (d / "evidence.pdf").write_bytes(b"THE ORIGINAL")
+    (d / "second.pdf").write_bytes(b"ANOTHER ORIGINAL")
+    worker = STAGE / "worker.py"
+    worker.write_text(WORKER.format(binpath=str(REPO / "bin")), encoding="utf-8")
+    before = hashes(d)
+
+    for op, leaf in (("move", "evidence.pdf"), ("replace", "second.pdf")):
+        r = subprocess.run([sys.executable, str(worker), op, str(out / leaf), str(d / leaf)],
+                           capture_output=True, text=True, env=os.environ)
+        check(f"move guard: `vaultio.{op}` refuses a source under in/ with EXIT_DENY (5)",
+              r.returncode == 5, f"rc={r.returncode} out={r.stdout.strip()[:200]} "
+                                 f"err={r.stderr.strip()[:200]}")
+        check(f"move guard: `{op}` names the append-only rule, not a stray reason",
+              "append-only" in (r.stdout + r.stderr), (r.stdout + r.stderr).strip()[:200])
+        check(f"move guard: `{op}` left the original where it was and put nothing in out/",
+              before == hashes(d) and not (out / leaf).exists(), f"in={hashes(d)} out={hashes(out)}")
+
+    # The control. `move` OUT of a directory that is not an originals tree must still work, or the
+    # guard has broken sweep's ~/Desktop -> ~/.Trash caller rather than protected anything.
+    ordinary = staged("receipt.pdf", b"NOT EVIDENCE")
+    r = subprocess.run([sys.executable, str(worker), "move", str(out / "receipt.pdf"),
+                        str(ordinary)], capture_output=True, text=True, env=os.environ)
+    check("move guard: an ordinary move is still ALLOWED (the guard is not denying every move)",
+          r.returncode == 0 and (out / "receipt.pdf").is_file() and not ordinary.exists(),
+          f"rc={r.returncode} err={r.stderr.strip()[:200]}")
+
+
+def case_env_in_source_path() -> None:
+    """The source guard must enforce the APPEND-ONLY rule and nothing else.
+
+    `classify` tests `(^|/)\\.env($|\\.|/)` BEFORE it reaches its delete branch, so routing the source
+    through it wholesale imported an unrelated rule: an ordinary evidence file that merely SAT under
+    a `.env/` directory came back DENY "reading .env / secret values is denied" and the ingest became
+    a hard refusal. Nothing was being read and nothing was a secret — the file was being moved.
+
+    The second row is the control that keeps the fix from being a hole: the DESTINATION rule is
+    untouched, so a leaf that would land as `in/.env.backup` is still refused. That refusal is the
+    write wall's and predates this task."""
+    d = hub("envsrc")
+    envdir = Path(tempfile.mkdtemp(dir=STAGE)) / ".env" / "sub"
+    envdir.mkdir(parents=True)
+    src = envdir / "quarterly.pdf"
+    src.write_bytes(b"AN ORDINARY QUARTERLY REPORT")
+    dst = vaultio.move_create_only(src, d / "quarterly.pdf")
+    check("env source: an ordinary file under a `.env/` directory is FILED, not refused",
+          dst.is_file() and dst.read_bytes() == b"AN ORDINARY QUARTERLY REPORT", str(hashes(d)))
+    check("env source: and the source was taken away, so it was a move", not src.exists())
+
+    secret = staged(".env.backup", b"TOKEN=hunter2")
+    before = hashes(d)
+    err = None
+    try:
+        vaultio.move_create_only(secret, d / ".env.backup")
+    except BaseException as e:   # noqa: BLE001
+        err = e
+    check("env source: a `.env*` DESTINATION under in/ is still refused (the write wall, untouched)",
+          isinstance(err, SystemExit) and err.code == 5, repr(err))
+    check("env source: and nothing under in/ changed", before == hashes(d))
+
+
+def case_crash_orphan_is_removable() -> None:
+    """A hard kill mid-copy must not leave debris that NOTHING can ever remove.
+
+    `_create_only_copy` staged inside `in/`. An exception unwinds into the `finally` that drops the
+    staging leaf; a `SIGKILL` does not — and the `.pk-arriving-*` leaf left under `in/` was then
+    permanent by construction, because `classify({"kind": "delete"})` denies it and `_guard_delete`
+    enforces that. The feature created litter it forbade itself to clean up.
+
+    Staging now happens OUTSIDE the append-only tree, so the residue is removable without the rule
+    being widened by one path. Killed with `os._exit`, which runs no `finally` — the only faithful
+    stand-in for SIGKILL, and the reason this needs its own process."""
+    d = hub("crashorphan")
+    src = staged("brief.pdf", b"X" * 4096)
+    link = src.parent / "link.pdf"
+    os.symlink(src, link)                       # a symlink source takes the COPY branch
+    killer = STAGE / "killer.py"
+    killer.write_text(KILL_MIDCOPY.format(binpath=str(REPO / "bin")), encoding="utf-8")
+    r = subprocess.run([sys.executable, str(killer), str(d / "brief.pdf"), str(link)],
+                       capture_output=True, text=True, env=os.environ)
+
+    check("crash orphan: the process really died mid-copy without unwinding", r.returncode == 137,
+          f"rc={r.returncode} err={r.stderr.strip()[:200]}")
+    check("crash orphan: the destination name never appeared", not (d / "brief.pdf").exists())
+    under_in = [p for p in d.iterdir() if p.name.startswith(vaultio.ARRIVING_PREFIX)]
+    check("crash orphan: NO staging leaf is left under in/, where nothing could remove it",
+          under_in == [], str([p.name for p in under_in]))
+
+    stage_dir = vaultio._staging_dir(d / "x")
+    orphans = [p for p in stage_dir.iterdir() if p.name.startswith(vaultio.ARRIVING_PREFIX)]
+    check("crash orphan: the residue is outside the append-only tree", not orphans or
+          all(not vaultio._under_originals(p) for p in orphans), str(stage_dir))
+    # ...and the mechanism that made it can remove it, which is the property that was missing.
+    removed = False
+    if orphans:
+        vaultio._guard_delete(orphans[0])       # exits 5 if the wall refuses — that WAS the bug
+        os.unlink(orphans[0])
+        removed = not orphans[0].exists()
+    check("crash orphan: the tooling's own delete verdict ALLOWS clearing it", removed or not orphans,
+          f"orphans={[p.name for p in orphans]}")
+
+
 def case_unmovable_source() -> None:
     """`_arrive` used to catch only `FileExistsError`, so every other `OSError` escaped as a raw
     TRACEBACK: exit 1 because that is Python's default, not because the protocol produced it, and
@@ -769,7 +910,8 @@ def main() -> int:
                  case_directory, case_symlink_source, case_hardlinked_source, case_cross_device,
                  case_no_hardlinks_at_all, case_destination_never_partial,
                  case_partial_copy_cleanup, case_container_mkdir, case_wall_refuses_non_atomic,
-                 case_uniquify_limit, case_source_under_originals, case_unmovable_source,
+                 case_uniquify_limit, case_source_under_originals, case_move_and_replace_source,
+                 case_env_in_source_path, case_crash_orphan_is_removable, case_unmovable_source,
                  case_race_ab, case_race_real_verb):
         _run(case)
 

@@ -880,9 +880,23 @@ pinning that `create_only` launders nothing (not iCloud through a symlink, not a
 three roots, not another task's `~/work` repo), the rest covering the `in/` container, a case-folded
 `IN/`, and delete under `in/` by path and by realpath. 51 cases -> 59. `paths.ROOTS_HOME` now mirrors
 `wall.HOME`'s precedence, because from this change the two anchor the same tree from opposite sides
-and disagreeing produces a DENY on a correct path. `test/run_originals.py` (91 checks) keeps the BASE
+and disagreeing produces a DENY on a correct path. `test/run_originals.py` (107 checks) keeps the BASE
 loop alive inside the test and ASSERTS THAT IT STILL LOSES FILES, so the concurrency gate cannot
 quietly stop racing.
+
+The **delete** half of the rule is enforced at the same seam and ratcheted structurally.
+`vaultio._guard_delete` runs on the source of every primitive that takes a name away —
+`move_create_only`, `_unlink_arrived_source`, and (from the r3 fix wave) `move` and `replace`, which
+had been left behind on the same seam. `run_pathwall.py` (17 checks) reads those call sites out of
+the **AST** rather than grepping the file for a string: the first version of that check was
+`'_guard_delete' in seam`, and since that substring lives in the helper's own `def` and docstring it
+stayed GREEN with every call site deleted — a green check of nothing, inside the ratchet that exists
+to stop exactly that. The delete scan also matches `os.replace` / `Path.replace` now; `rename(2)`
+destroys a name as surely as `unlink` does, and one live unpinned site (`vaultreg.py`'s registry
+write) had been sitting under that blind spot. `_guard_delete` is scoped to the append-only question
+alone — routing sources through `classify` wholesale imported its `.env` secret rule, so an ordinary
+evidence file under a `.env/` directory became a hard refusal citing "reading .env / secret values is
+denied", which is the wrong rule and the wrong message for a file that is being moved.
 
 **What this does NOT do.** The shadow note `files._shadow()` writes beside each original picks its
 slug with an `exists()`-scan of the wiki and then writes — the same shape, one tree over, and it is
@@ -892,10 +906,23 @@ exercised by forcing `link(2)` to report EXDEV; no second volume is mounted, so 
 that the fallback's guarantee is `O_EXCL`'s.
 
 It also does not make the copy crash-safe on a filesystem with **no hard links at all** (exFAT, some
-FUSE mounts). Everywhere else the copy is STAGED — filled under a `.pk-arriving-*` name beside the
-destination, verified, then `link`ed onto it — so the destination name never exists in a partial
-state. Where no second name can be minted, `O_EXCL` is applied straight to the destination and there
-is a window between the create and the last byte in which the leaf is SHORT. An exception unwinds and
-removes it; a `SIGKILL` or a power loss does not, and append-only means that truncated leaf can never
-afterwards be replaced. There is no atomic create-only rename to fix this with; the residue is stated
-in `_direct_create_only_copy`'s docstring, which is where a reader meets it.
+FUSE mounts). Everywhere else the copy is STAGED — filled under a `.pk-arriving-*` name, verified,
+then `link`ed onto the destination — so the destination name never exists in a partial state. Where
+no second name can be minted, `O_EXCL` is applied straight to the destination and there is a window
+between the create and the last byte in which the leaf is SHORT. An exception unwinds and removes it;
+a `SIGKILL` or a power loss does not, and append-only means that truncated leaf can never afterwards
+be replaced. There is no atomic create-only rename to fix this with; the residue is stated in
+`_direct_create_only_copy`'s docstring, which is where a reader meets it.
+
+**Where the staging leaf lives, and why it is not under `in/`.** It used to be filled *beside* the
+destination — inside the append-only tree — which made the same `SIGKILL` leave a second, subtler
+residue: a `.pk-arriving-*` orphan under `in/` that **nothing could ever remove**, because
+`classify({"kind": "delete", …})` denies it and `vaultio._guard_delete` enforces that. The feature
+created permanent litter it forbade itself to clean up. `vaultio._staging_dir` now walks up from the
+destination to the nearest directory that is *not* inside an originals tree, staging there instead —
+so a crash orphan sits outside the rule and stays removable. The append-only rule itself is unchanged;
+the marker simply stopped being subject to it, which is the fix that does not cost a hole. The walk
+stops if it would leave the **filesystem** (an `in/` that is its own mount), because the staging leaf
+is `link`ed onto the destination and that link must not fail EXDEV; in that case staging falls back
+beside the destination and the old residue returns, which is the pre-existing behaviour and never
+worse than it.

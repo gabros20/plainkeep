@@ -20,7 +20,10 @@ The seam is not destination-only. A move TAKES a file away as well as putting on
 `classify({"kind": "delete", …})` has always denied a path under `~/files/**/in/` — append-only cuts
 both ways — with no caller anywhere on a verb's path. That was the same defect this module was
 written to fix, one branch over: a validated rule with no seam. `_guard_delete()` is that seam, and
-`move_create_only` runs it on its SOURCE before it creates anything.
+EVERY primitive here that destroys a name runs it on that name: `move_create_only` before it creates
+anything, `move` and `replace` before `shutil.move` / `rename(2)` take the source away, and
+`_unlink_arrived_source` at the syscall itself. `test/run_pathwall.py` holds that list structurally —
+a source-destroying primitive that does not call it fails the delete ratchet.
 
 One write SHAPE is distinguished besides its path: an ATOMIC CREATE (`move_create_only`, and
 `mkdir(exist_ok=False)`). `~/files/**/in/` is append-only — an original may ARRIVE, and no existing
@@ -102,6 +105,24 @@ def _guard(path, **action) -> Path:
     return p
 
 
+# The one question this seam owns, in the wall's own words. `guardrail.classify` is still the source
+# of the VERDICT; this string is only needed for the case where the `.env` rule pre-empts the delete
+# branch (see `_guard_delete`) and `classify` therefore hands back the right verdict with the wrong
+# reason. `test/run_pathwall.py` asserts it still matches what `classify` says, so the two cannot
+# drift apart silently.
+_APPEND_ONLY = "~/files/**/in/ is append-only: an original is never deleted"
+
+
+def _under_originals(*paths) -> bool:
+    """Is any of these paths inside an append-only originals tree (`~/files/**/in/`)?
+
+    Asked of `guardrail` rather than re-implemented here, so the wall's own notion of what an
+    originals tree is — its roots, its `~` expansion, its case folding — stays the single source of
+    truth and this seam cannot drift from the model it enforces."""
+    return any(guardrail._in_originals(n)
+               for n in (guardrail._norm(str(p)) for p in paths) if n)
+
+
 def _guard_delete(path) -> Path:
     """Classify a REMOVAL of `path` and return it, or refuse and exit 5.
 
@@ -110,16 +131,27 @@ def _guard_delete(path) -> Path:
     destination wall cannot see. Until this helper that branch had no caller outside the test
     harness, so `move_create_only` could rename an original out of `in/` and report it filed.
 
-    Only a DENY is enforced. `classify` answers CONFIRM for an ordinary delete, and whether a human
-    confirms one is the verb's business, not this seam's; treating a non-ALLOW as a refusal here
-    would break every legitimate move."""
+    Only a DENY is enforced, and only the APPEND-ONLY one. `classify` answers CONFIRM for an ordinary
+    delete, and whether a human confirms one is the verb's business, not this seam's; treating a
+    non-ALLOW as a refusal here would break every legitimate move.
+
+    SCOPED to originals on purpose. `classify` tests the `.env` secret rule BEFORE it reaches the
+    delete branch, so `~/backups/.env.backup` — or an ordinary PDF sitting under a `.env/` directory —
+    came back DENY "reading .env / secret values is denied", and this seam turned that into a hard
+    refusal to FILE the file. Nothing was being read and nothing was a secret. A DENY raised by a rule
+    this seam does not own is not this seam's to enforce: the wall still refuses those actions
+    wherever they are actually performed."""
     p = Path(path)
     raw = str(p)
-    d = guardrail.classify({"kind": "delete", "path": raw, "realpath": os.path.realpath(raw)})
-    if d.verdict == guardrail.DENY:
-        output.fail(output.EXIT_DENY, f"guardrail: {d}",
-                    hint="this file may not be taken away from where it is — nothing was moved",
-                    verb=_verb())
+    real = os.path.realpath(raw)
+    d = guardrail.classify({"kind": "delete", "path": raw, "realpath": real})
+    if d.verdict != guardrail.DENY or not _under_originals(raw, real):
+        return p
+    if d.reason != _APPEND_ONLY:
+        d = guardrail.Decision(guardrail.DENY, _APPEND_ONLY, "deny")   # the .env rule shadowed it
+    output.fail(output.EXIT_DENY, f"guardrail: {d}",
+                hint="this file may not be taken away from where it is — nothing was moved",
+                verb=_verb())
     return p
 
 
@@ -163,8 +195,17 @@ def open_append(path, encoding: str = "utf-8", **action):
 
 
 def move(src, dst, **action) -> Path:
-    """Guarded `shutil.move`. The DESTINATION is the write; the source leaving is the verb's own
-    business (it is a rename inside the vault in every current caller)."""
+    """Guarded `shutil.move`. BOTH ends are classified: the destination as a write, and the source as
+    the removal that `shutil.move` performs on it.
+
+    The source side used to be waved through as "the verb's own business", which was true of the
+    destinations the current callers pick (`bin/sweep/run.py` moves `~/Desktop` / `~/Downloads` items
+    into `~/.Trash`, and neither end resolves under `~/files`) and false as a property of the
+    primitive. A move TAKES a file away, and under `~/files/**/in/` taking one away is the half of
+    append-only the destination wall cannot see — the same defect `move_create_only` was fixed for,
+    one function up. `_guard_delete` answers CONFIRM outside an originals tree, so no existing caller
+    changes behaviour."""
+    _guard_delete(src)
     p = guard(dst, **action)
     shutil.move(str(src), str(p))
     return p
@@ -182,10 +223,42 @@ _LINK_FALLBACK = {errno.EXDEV, errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP, err
 # destination and say nothing about the destination's own filesystem, so they are not here.
 _NO_HARDLINKS = {errno.EPERM, errno.EOPNOTSUPP, errno.ENOTSUP}
 
-# Prefix for the staging leaf. Dot-prefixed and self-describing on purpose: on the one filesystem
-# where it can be left behind (see `_create_only_copy`) a reader has to be able to tell it from an
-# original at a glance.
+# Prefix for the staging leaf. Dot-prefixed and self-describing on purpose: where one can be left
+# behind (see `_staging_dir`) a reader has to be able to tell it from an original at a glance.
 ARRIVING_PREFIX = ".pk-arriving-"
+
+
+def _staging_dir(dst: Path) -> Path:
+    """Where `_create_only_copy` stages: the nearest directory at or above `dst`'s that is NOT itself
+    inside an append-only originals tree — as long as it is on the same filesystem.
+
+    It used to be `dst.parent`, i.e. inside `in/`, and that made the staging leaf PERMANENT DEBRIS on
+    a hard kill. An exception unwinds into the `finally` that removes it; a `SIGKILL` or a power loss
+    does not, and the `.pk-arriving-*` leaf then left under `in/` could never afterwards be removed by
+    anything: `classify({"kind": "delete", …})` denies it and `_guard_delete` enforces that, so the
+    feature created litter it forbade itself to clean up. Staging one level OUT keeps that residue
+    removable — by `_guard_delete`'s own verdict, which is CONFIRM outside an originals tree — without
+    widening the append-only rule by a single path. The rule is untouched; the marker simply stops
+    being subject to it.
+
+    SAME FILESYSTEM is a requirement, not a preference: `_create_only_copy` links the staging leaf
+    onto the destination, and that link is what must not fail EXDEV. If the walk would leave the
+    volume — an `in/` that is its own mount — we stage beside `dst` as before and accept the residue
+    there, which is strictly the old behaviour and never worse than it."""
+    here = dst.parent
+    try:
+        dev = os.stat(here).st_dev
+        while _under_originals(here):
+            up = here.parent
+            if up == here:
+                return dst.parent                       # walked to the filesystem root
+            st = os.stat(up)
+            if st.st_dev != dev or not os.access(up, os.W_OK):
+                return dst.parent                       # another volume: link(2) would fail EXDEV
+            here = up
+    except OSError:
+        return dst.parent
+    return here
 
 
 def _sha256(path) -> str:
@@ -234,15 +307,17 @@ def _create_only_copy(src: Path, dst: Path) -> None:
     original that another name can still be written through is not append-only, it is a file that
     happens to be listed under `in/`. A copy mints an inode with exactly one name.
 
-    STAGED, so the destination never exists in a partial state: copy into a temporary leaf beside
-    `dst`, verify the bytes, then `os.link(tmp, dst)` — the same directory, so that link cannot fail
-    EXDEV — and drop the staging name. `dst` appears complete or not at all, and the create-only
-    guarantee is still `link(2)`'s EEXIST rather than any prior test. Only a filesystem with no hard
-    links at all falls back to `_direct_create_only_copy`, whose window is documented there.
+    STAGED, so the destination never exists in a partial state: copy into a temporary leaf on the
+    destination's own volume but OUTSIDE the append-only tree (`_staging_dir`, which is what keeps a
+    hard kill from leaving debris nothing may remove), verify the bytes, then `os.link(tmp, dst)` —
+    same filesystem, so that link cannot fail EXDEV — and drop the staging name. `dst` appears
+    complete or not at all, and the create-only guarantee is still `link(2)`'s EEXIST rather than any
+    prior test. Only a filesystem with no hard links at all falls back to `_direct_create_only_copy`,
+    whose window is documented there.
 
     The bytes are VERIFIED against the source in both shapes before this returns, because the caller
     is about to unlink what may be the file's only other name."""
-    fd, tmpname = tempfile.mkstemp(dir=str(dst.parent), prefix=ARRIVING_PREFIX)
+    fd, tmpname = tempfile.mkstemp(dir=str(_staging_dir(dst)), prefix=ARRIVING_PREFIX)
     tmp = Path(tmpname)
     try:
         with os.fdopen(fd, "wb") as out, open(src, "rb") as inp:
@@ -261,8 +336,9 @@ def _create_only_copy(src: Path, dst: Path) -> None:
                 raise
             _direct_create_only_copy(src, dst)
     finally:
-        # The staging leaf is this call's own, was never an original and was never reachable under a
-        # name that could be mistaken for one. Removing it is the whole reason it exists.
+        # The staging leaf is this call's own, was never an original, was never reachable under a
+        # name that could be mistaken for one, and (see `_staging_dir`) does not sit inside the
+        # append-only tree. Removing it is the whole reason it exists.
         try:
             os.unlink(tmp)
         except OSError:
@@ -369,6 +445,9 @@ def copytree(src, dst, **kwargs) -> Path:
 
 
 def replace(src, dst, **action) -> Path:
+    """Guarded `Path.replace`. `rename(2)` destroys BOTH names — the source's and whatever occupied
+    the destination — so the source is classified as a removal for the same reason as in `move`."""
+    _guard_delete(src)
     p = guard(dst, **action)
     Path(src).replace(p)
     return p

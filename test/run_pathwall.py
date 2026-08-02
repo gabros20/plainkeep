@@ -15,14 +15,20 @@ checked too, but it is never the proof.
 Offline, stdlib only.
 """
 from __future__ import annotations
+import ast
 import os
 import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from lib.hermetic import seal
+from lib.hermetic import scratch_root, seal
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
+# `_seam_report` loads bin/lib/vaultio.py in-process to read the wall's own wording back, and every
+# engine module resolves its data root AT IMPORT with no fallback since Task 1b. A marked throwaway
+# vault answers that without being anybody's notes — and anything that inherits the variable writes
+# its audit log there rather than into the developer's real one.
+os.environ.setdefault("PLAINKEEP_HOME", scratch_root())
 
 REPO = Path(__file__).resolve().parents[1]
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
@@ -236,8 +242,29 @@ EXEMPT: dict[str, dict[str, str]] = {
 # reviewer looking at it and answering the only question that matters: can this path resolve under
 # `~/files/**/in/`? For every line below the answer is no — vault notes, ~/work trees, the registry
 # file, a plugin staging dir, a downloaded asset — and the one site that COULD is behind the seam.
-RAW_DELETE = re.compile(r"(\w+)?\.(unlink|rmdir|rename)\s*\(|\bos\.(remove|rename|unlink|rmdir)\s*\("
-                        r"|\bshutil\.rmtree\s*\(")
+METHOD_DELETE = re.compile(r"(\w+)?\.(unlink|rmdir|rename)\s*\(")
+OS_DELETE = re.compile(r"\bos\.(remove|rename|unlink|rmdir|replace)\s*\(")
+TREE_DELETE = re.compile(r"\bshutil\.rmtree\s*\(")
+
+# `.replace()` is TWO different functions sharing a name, and the first version of this ratchet
+# matched neither: `os.replace(tmp, f)` and `Path(src).replace(p)` are `rename(2)`, which destroys a
+# name exactly as `os.rename` does, while `s.replace(a, b)` and `dt.replace(tzinfo=…)` are string and
+# datetime methods that destroy nothing. A source scan has no types, so they are told apart by the
+# only signal that is actually in the text: ARITY. The filesystem method takes exactly ONE positional
+# argument; the string method takes two; the datetime one is passed by keyword. `os.replace` is
+# unambiguous and is matched by name above regardless of arity.
+PATH_REPLACE_DELETE = re.compile(r"(\w+)?\.replace\s*\(\s*[^,()=]+\s*\)")
+
+
+def _is_raw_delete(code: str) -> bool:
+    """A removal or rename that is NOT going through the guarded seam. Receiver-aware for the same
+    reason `_is_raw_write` is: `vaultio.replace(...)` IS the seam, so it is not a raw delete."""
+    for pat in (METHOD_DELETE, PATH_REPLACE_DELETE):
+        for m in pat.finditer(code):
+            if (m.group(1) or "") not in GUARDED_RECEIVERS:
+                return True
+    return bool(OS_DELETE.search(code) or TREE_DELETE.search(code))
+
 
 PINNED_DELETES: dict[str, set[str]] = {
     "bin/archive/run.py": {"shutil.rmtree(repo)"},
@@ -245,7 +272,10 @@ PINNED_DELETES: dict[str, set[str]] = {
     "bin/lib/setuplib.py": {"shutil.rmtree(venv, ignore_errors=True)",
                             "asset_path.unlink(missing_ok=True)",
                             "checksums_path.unlink(missing_ok=True)"},
-    "bin/lib/vaultreg.py": {"self.path.unlink(missing_ok=True)"},
+    "bin/lib/vaultreg.py": {"self.path.unlink(missing_ok=True)",
+                            # the atomic write of the registry file itself, which lives outside every
+                            # vault by design — so it can never resolve under `~/files/**/in/`
+                            "os.replace(tmp, f)"},
     "bin/plugin/run.py": {"shutil.rmtree(staging, ignore_errors=True)",
                           "shutil.rmtree(dest, ignore_errors=True)"},
     "bin/repo/run.py": {"shutil.rmtree(nm); freed += 1"},
@@ -256,6 +286,113 @@ PINNED_DELETES: dict[str, set[str]] = {
 }
 
 
+# --------------------------------------------------------------------------------------------
+# F2. The seam ITSELF, checked structurally rather than by grepping the file for a string.
+#
+# Every primitive in `vaultio.py` that TAKES A NAME AWAY must classify that name first. The list is
+# spelled out here so it reads as the claim it makes, and so a NEW destroying primitive cannot be
+# added without a reviewer putting it on one of these two lists.
+SEAM = REPO / "bin" / "lib" / "vaultio.py"
+
+# function -> the syscall it makes on somebody else's name. Each MUST call `_guard_delete`.
+SOURCE_DESTROYING = {
+    "move_create_only": "unlinks its source once the original has arrived",
+    "_unlink_arrived_source": "os.unlink — the syscall itself",
+    "move": "shutil.move takes the source away",
+    "replace": "rename(2) destroys the source name and whatever occupied the destination",
+}
+
+# function -> {exact removal call: why it needs NO verdict}. Every one of these unlinks a leaf THIS
+# module just created, that nothing else has ever had a name for — so there is no original to
+# classify and no append-only question to ask. Pinned rather than allowed by pattern: a new removal
+# inside the seam cannot join them silently.
+SELF_CLEANUP = {
+    "_direct_create_only_copy": {"os.unlink(dst)": "the half-written leaf this call just created"},
+    "_create_only_copy": {"os.unlink(tmp)": "this call's own staging leaf"},
+    "move_create_only": {"os.unlink(p)": "backs out a destination this call created moments ago"},
+}
+
+_DESTROYING_CALLS = {"os.unlink", "os.remove", "os.rename", "os.replace", "os.rmdir",
+                     "shutil.move", "shutil.rmtree"}
+
+
+def _is_destroying_call(n: ast.Call) -> bool:
+    if _callname(n.func) in _DESTROYING_CALLS:
+        return True
+    # `<anything>.replace(one_positional_arg)` is `rename(2)`; `s.replace(a, b)` is the string method
+    # and `dt.replace(tzinfo=…)` the datetime one. Same arity signal `PATH_REPLACE_DELETE` uses, and
+    # here it is read off the parse tree rather than guessed from the text.
+    return (isinstance(n.func, ast.Attribute) and n.func.attr == "replace"
+            and len(n.args) == 1 and not n.keywords)
+
+
+def _callname(node: ast.AST) -> str:
+    """`os.unlink` for `os.unlink(x)`, `_guard_delete` for `_guard_delete(x)`, `.replace` for
+    `Path(s).replace(p)` — enough to recognise a removal without resolving types."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        base = _callname(node.value)
+        return f"{base}.{node.attr}" if base else f".{node.attr}"
+    return ""
+
+
+def _seam_report() -> list[tuple[str, bool, str]]:
+    tree = ast.parse(SEAM.read_text(encoding="utf-8"))
+    src = SEAM.read_text(encoding="utf-8").splitlines()
+    funcs = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    out: list[tuple[str, bool, str]] = []
+
+    missing = []
+    for name, what in SOURCE_DESTROYING.items():
+        fn = funcs.get(name)
+        guarded = fn is not None and any(
+            isinstance(n, ast.Call) and _callname(n.func) == "_guard_delete" for n in ast.walk(fn))
+        if not guarded:
+            missing.append(f"vaultio.{name}() — {what} — does not call _guard_delete"
+                           if fn is not None else f"vaultio.{name}() has GONE from the seam")
+    out.append(("delete ratchet: every source-destroying primitive in vaultio classifies its source",
+                not missing, "\n        " + "\n        ".join(missing)))
+
+    # A removal ANYWHERE in the seam is either inside a function that classifies, or pinned above.
+    stray = []
+    for name, fn in funcs.items():
+        pinned = SELF_CLEANUP.get(name, {})
+        classifies = any(isinstance(n, ast.Call) and _callname(n.func) == "_guard_delete"
+                         for n in ast.walk(fn))
+        for n in ast.walk(fn):
+            if not (isinstance(n, ast.Call) and _is_destroying_call(n)):
+                continue
+            text = src[n.lineno - 1].strip()
+            if any(text.startswith(k) for k in pinned) or classifies:
+                continue
+            stray.append(f"vaultio.{name}():{n.lineno}  {text}")
+    out.append(("delete ratchet: no removal inside the seam is unclassified and unpinned",
+                not stray, "\n        " + "\n        ".join(stray)))
+
+    # The reason `_guard_delete` falls back on when the `.env` rule pre-empts `classify`'s delete
+    # branch must still be the wall's OWN words — otherwise the seam refuses with a message the
+    # validated model no longer uses, which is how the wrong-reason bug got in.
+    # Anything the seam does not supply is a FAILED CHECK, never an exception: a ratchet that dies
+    # reports the crash instead of the damage, and this one is loaded against modified trees by
+    # design (that is how it gets mutation-tested).
+    try:
+        sys.path.insert(0, str(REPO / "bin"))
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("pw_vaultio", SEAM)
+        vio = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(vio)
+        said = vio.guardrail.classify(
+            {"kind": "delete", "path": "~/files/clients/acme/in/brief.pdf",
+             "realpath": "~/files/clients/acme/in/brief.pdf"}).reason
+        ok, why = said == vio._APPEND_ONLY, f"classify={said!r} seam={vio._APPEND_ONLY!r}"
+    except BaseException as e:   # noqa: BLE001
+        ok, why = False, f"could not read the seam's wording back: {type(e).__name__}: {e}"
+    out.append(("delete ratchet: the seam's append-only reason is still the wall's own wording",
+                ok, why))
+    return out
+
+
 def scan_raw_deletes() -> dict[str, dict[int, str]]:
     found: dict[str, dict[int, str]] = {}
     for f in sorted((REPO / "bin").rglob("*.py")):
@@ -264,7 +401,7 @@ def scan_raw_deletes() -> dict[str, dict[int, str]]:
             continue
         for i, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             code = line.split("#", 1)[0]
-            if RAW_DELETE.search(code):
+            if _is_raw_delete(code):
                 found.setdefault(rel, {})[i] = line.strip()
     return found
 
@@ -279,11 +416,14 @@ def case_delete_ratchet() -> None:
             if t not in set(found.get(rel, {}).values())]
     check("delete ratchet: no stale pins (a removed site must leave the list)", not gone, str(gone))
 
-    # And the seam the pin exists to protect: vaultio's source removal is CLASSIFIED, not raw.
-    seam = (REPO / "bin" / "lib" / "vaultio.py").read_text(encoding="utf-8")
-    check("delete ratchet: vaultio classifies the source it unlinks (`kind: delete`)",
-          '"kind": "delete"' in seam and "_guard_delete" in seam,
-          "the source side of move_create_only is unguarded again")
+    # And the seam the pin exists to protect. This check USED to be `'"kind": "delete"' in seam and
+    # "_guard_delete" in seam` — a substring grep over the whole file, and both of those strings live
+    # inside `_guard_delete`'s own `def` and docstring. Deleting every CALL to the guard while leaving
+    # the helper defined kept it GREEN: the one check whose name claimed the property was the one that
+    # did not test it. It is structural now — the call sites are read out of the AST, per function, so
+    # removing one is exactly what makes this fail.
+    for name, ok, why in _seam_report():
+        check(name, ok, why)
 
 
 def scan_raw_writes() -> dict[str, dict[int, str]]:

@@ -149,21 +149,44 @@ INIT_JOBS_REGISTRY = {
 }
 
 
+def _nearest_existing(p: Path) -> Path:
+    """The closest ancestor of `p` that is actually there — `p` itself when it exists.
+
+    The location questions below are IDENTITY questions: `vaultreg.path_within` walks parents
+    comparing `(st_dev, st_ino)`, and a path with no inode falls back to comparing strings, which is
+    exactly the comparison that module's docstring documents two post-mortems for (case folding on
+    APFS, macOS firmlinks). Asking them of an ancestor is sound in the direction that matters —
+    containment is inherited downwards, so a parent inside the engine tree means the child would be
+    too — and it means the refusal happens BEFORE anything is created."""
+    q = Path(os.path.abspath(os.path.expanduser(str(p))))
+    while not q.exists() and q.parent != q:
+        q = q.parent
+    return q
+
+
 def _init_refusals(target: Path) -> None:
     """Every reason `target` may not become a new vault. Each one exits; there is no partial init.
 
     The order is the order an operator can act on: what the LOCATION is (which no amount of fixing
-    the directory changes), then what is already there."""
+    the directory changes), then what is already there.
+
+    Called TWICE by `cmd_init`: once on the path as given (which may not exist yet, so the location
+    questions fall back to the nearest existing ancestor and only the two downward-inherited shapes
+    are asked — see `enginetree.inside_engine_verdict`), and once on the canonical path after it has
+    been created, where the full verdict and the real inode comparisons apply."""
+    exists = target.exists()
+    probe = target if exists else _nearest_existing(target)
     # DISJOINTNESS and the location policy, asked with the same functions `vaultroot.validate()` asks
     # them with on every dispatch. Creating a vault the dispatcher would then refuse with exit 5 is
     # the worst outcome available here: it succeeds, and every command afterwards fails.
-    overlap = enginetree.disjointness_verdict(str(target))
+    overlap = (enginetree.disjointness_verdict(str(probe)) if exists
+               else enginetree.inside_engine_verdict(str(probe)))
     if overlap is not None:
         output.fail(output.EXIT_DENY, f"cannot init a vault at {target}, and {overlap}",
                     hint="a vault is data and an engine is code — pick a path outside "
                          f"{enginetree.ENGINE_ROOT}",
                     verb="vault")
-    denied = vaultroot._policy_verdict(str(target))
+    denied = vaultroot._policy_verdict(str(probe))
     if denied is not None:
         output.fail(output.EXIT_DENY, f"cannot init a vault at {target}, and {denied}",
                     hint="pick a local path outside that tree", verb="vault")
@@ -226,15 +249,21 @@ def cmd_init(argv):
     if raw.exists() and not raw.is_dir():
         output.fail(output.EXIT_USAGE, f"not a directory: {raw}", verb="vault")
 
-    # Created BEFORE the location checks, because those checks are identity questions the filesystem
-    # answers — `vaultreg.path_within` walks parents comparing (st_dev, st_ino), and a path that does
-    # not exist has no inode to compare, so asking first would fall back to string comparison and
-    # miss exactly the case-fold and firmlink pairs that comparison exists to catch. If a check then
-    # refuses, the directory this call created (and only that) is removed again.
+    # THE LOCATION CHECKS RUN FIRST, against the nearest existing ancestor when the target is not
+    # there yet (see `_nearest_existing`). Creating the directory first would let init `mkdir` inside
+    # a sealed engine tree — which fails with a raw EACCES traceback rather than the disjointness
+    # refusal that is the true and actionable answer — and would leave a directory behind on every
+    # refusal after it.
+    _init_refusals(raw)
     created_dir = not raw.exists()
     if created_dir:
-        raw.mkdir(parents=True)
+        try:
+            raw.mkdir(parents=True)
+        except OSError as e:
+            output.fail(output.EXIT_UNEXPECTED, f"cannot create {raw}: {e}", verb="vault")
     target = Path(vaultreg.canonical(raw))
+    # Asked AGAIN on the canonical path now that it exists, so the identity comparisons run with
+    # real inodes rather than on an ancestor. Cheap, and it is the one that is authoritative.
     try:
         _init_refusals(target)
     except SystemExit:

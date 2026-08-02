@@ -490,16 +490,35 @@ def disjointness_verdict(data_root: str, engine_root: Path | None = None) -> str
     `/x/vaultdir` survived it as two spellings and this function answered "disjoint" for one
     directory. Both comparisons below therefore go through `vaultreg`'s identity-aware pair rather
     than through `==` / `startswith`."""
-    eng = str(engine_root or ENGINE_ROOT)
-    eng = vaultreg.canonical(eng)
+    inside = inside_engine_verdict(data_root, engine_root)
+    if inside is not None:
+        return inside
+    eng = vaultreg.canonical(str(engine_root or ENGINE_ROOT))
+    data = vaultreg.canonical(data_root)
+    if _is_within(eng, data):
+        return f"the engine tree ({eng}) is inside it"
+    return None
+
+
+def inside_engine_verdict(data_root: str, engine_root: Path | None = None) -> str | None:
+    """The two shapes of `disjointness_verdict` that a PARENT directory inherits DOWNWARD: this path
+    is the engine tree, or it lives inside one.
+
+    Split out for `vault init`, which has to ask the question about a directory that does not exist
+    yet. `vaultreg.path_within` compares inodes and a missing path has none, so init asks the nearest
+    existing ANCESTOR — and only these two shapes survive that substitution. The third ("the engine
+    is inside it") does NOT: every ancestor of a target eventually reaches a directory that contains
+    the engine tree somewhere below it (`/tmp`, `$HOME`, `/`), and asking it of an ancestor answers
+    "overlap" for every path on the machine. Measured — it refused every `init` into a temp
+    directory that also held the fixture engine. The full verdict is re-asked on the real path once
+    it exists."""
+    eng = vaultreg.canonical(str(engine_root or ENGINE_ROOT))
     data = vaultreg.canonical(data_root)
     if vaultreg.same_path(data, eng):
         return (f"it IS the engine tree ({eng}) — a vault is data and an engine is code, and one "
                 f"directory cannot be both")
     if _is_within(data, eng):
         return f"it is inside the engine tree ({eng})"
-    if _is_within(eng, data):
-        return f"the engine tree ({eng}) is inside it"
     return None
 
 
@@ -1198,7 +1217,12 @@ def update(src: Path, *, version: str | None = None, expect: Path | None = None,
                 # state the system is already in. Reporting failure there is what turns a converging
                 # sequence into one that needs a human to read it.
                 return {"result": "already-active", "version": version, "previous": was_active,
-                        "activated": False, "engine": str(dst)}
+                        "activated": False, "engine": str(dst),
+                        # Reported on the NO-OP too: "which pair am I one command away from" is the
+                        # question an operator brings to a re-run after an interruption, and a
+                        # convergent run that answers nothing sends them looking for it elsewhere.
+                        "rollback_to": rollback_target(),
+                        "core": (dst / CORE_REL).is_file()}
             raise VaultError(
                 f"refusing to update INTO the running engine {version}, and {conflict} — "
                 f"it is also not healthy:\n  " + "\n  ".join(problems),

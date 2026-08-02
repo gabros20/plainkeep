@@ -130,6 +130,8 @@ plainkeep plugin remove greeter --yes               # delete dir + lock entry
 plainkeep plugin sync greeter --yes                 # install its declared dependencies into this vault
 ```
 
+`plugins/.deps/` itself is a rebuildable cache — gitignore it; `plugins.lock.json` is what you commit.
+
 Every install and trust decision is recorded in the committed `plugins/plugins.lock.json` (resolved commit sha + accepted risk ceiling). Your vault's plugin state stays reproducible and auditable.
 
 ---

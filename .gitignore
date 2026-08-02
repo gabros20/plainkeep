@@ -15,6 +15,12 @@ test/last-run-*.json
 # python3 when present (see the `plainkeep` script + docs/agent-terminal-search.md).
 /.venv/
 
+# The plugin DEPENDENCY OVERLAY (ADR-018) — `plainkeep plugin sync` pip-installs a pack's declared
+# requirements here. Same class as `.venv/` above: it lives inside PLAINKEEP_HOME, it is machine- and
+# interpreter-specific, and it is fully rebuildable from `plugins/plugins.lock.json`, which IS
+# committed. The declarations are the source of truth; the installed bytes are a cache.
+/plugins/.deps/
+
 # Run logs — append-only, regenerable
 .logs/
 

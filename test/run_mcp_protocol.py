@@ -49,6 +49,7 @@ import tempfile
 import time
 from pathlib import Path
 from lib.hermetic import seal
+from lib import vaultfx
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -1144,6 +1145,14 @@ def main() -> int:
         tmp = Path(td)
         vault = tmp / "plainkeep"
         shutil.copytree(REPO, vault, ignore=IGNORE)
+        # MARKED HERE rather than inherited from the copy — `IGNORE` does not list `.plainkeep`, so
+        # this fixture took whatever marker the developer's checkout happened to carry (`script/setup`
+        # step 4b writes one). Since Task 1b an unmarked `PLAINKEEP_HOME` is refused, so in a bare
+        # worktree every session died with "not a plainkeep vault" before a single JSON-RPC frame,
+        # and all 23 differential checks reported "stdout closed with no frame" — a symptom that
+        # names the transport and not the cause. Masked further because the suite SKIPS entirely
+        # without a compiled core, which is gitignored.
+        vaultfx.mark_vault(vault)
         (vault / "wiki" / "notes" / "widget.md").write_text(
             "---\ntype: note\ntitle: Widget design\nstatus: active\ntags: [demo]\n---\n"
             "# Widget design\n\nThe widget subsystem is the heart of the demo.\n", encoding="utf-8")

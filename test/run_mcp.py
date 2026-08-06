@@ -15,7 +15,7 @@ import sys
 import tempfile
 from pathlib import Path
 from lib.hermetic import seal
-from lib.vaultfx import dispatchable_vault
+from lib.vaultfx import dispatchable_vault, mark_vault
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -45,7 +45,13 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         vault = Path(td) / "plainkeep"
         shutil.copytree(REPO, vault,
-                        ignore=shutil.ignore_patterns(".git", ".index", ".logs", "__pycache__", "*.pyc"))
+                        ignore=shutil.ignore_patterns(".git", ".index", ".logs", ".plainkeep",
+                                                      "__pycache__", "*.pyc"))
+        # MARKED HERE, not copied. Same stale fixture as `run_mcp_protocol.py` and `run_tui_pty.py`:
+        # the marker used to arrive by copying the developer's registered checkout, so this suite was
+        # green on their machine and dead in a bare worktree — every session refused with "not a
+        # plainkeep vault" before the first frame, which reads as a protocol failure.
+        mark_vault(vault)
         # THE ENGINE IS A SEPARATE TREE (Phase 2 Task 2), installed through the real installer and
         # invoked through `current/`. The vault's own `plainkeep` is no longer a launcher a dispatch
         # may use — pointing it at its own directory is engine == data, refused with exit 5 — and

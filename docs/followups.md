@@ -356,7 +356,7 @@ fixing it needs.
   Consequences). `PYTHONPYCACHEPREFIX` would recover it at the cost of a third location to reason
   about; not taken, and deliberately left as a measured number rather than a fix.
 - ~~**`bin/lib/enginetree.py:activate`** — rollback is unit-covered and has never been used in the
-  field. Nothing prunes old versions either.~~ **Closed by Phase 2 Task 5** (ADR-020):
+  field. Nothing prunes old versions either.~~ **Closed by Phase 2 Task 5** (ADR-021):
   `--rollback` is a recorded target executed as a runbook in
   `run_engineupdate.py::case_rollback_is_a_tested_command_sequence`, and `prune()` (default
   `--keep 2`) runs after every activation and refuses to remove the active version or the rollback
@@ -369,7 +369,7 @@ fixing it needs.
   followed by `--print pairs` shows the version with `checksums: false`. *Deferred because
   `--install` is also the repair path, and a manifest written by the same run that wrote the tree
   proves less than one written elsewhere.*
-- **The `remove_version()` → `os.rename` window is still open on `--install --force`.** ADR-020 D7
+- **The `remove_version()` → `os.rename` window is still open on `--install --force`.** ADR-021 D7
   carries the measurement in both directions: killed there, `--install --force` over the ACTIVE
   version leaves **no runnable engine** and a dangling `current` (recovered by a plain `--install`),
   while `--update` cannot reach the state because it refuses the running version as a target.
@@ -472,3 +472,61 @@ deliberately left. Each was reproduced by the reviewer.
   worktree add` gets no marker, because `.plainkeep/` is gitignored. *Nothing detects it: the fix is
   either a check in `run_all.py` that says "this checkout is not a marked vault, here is the one
   command", or a suite-level fixture that marks its own copy.*
+
+## Provisioning: the uv bootstrap and the delivered lock (Phase 2 Task 4, ADR-020)
+
+Registered by the r1 fix wave from the deferred MINOR/INFO list of
+`.orchestrate/review-task-p2-4-r1.md`. The wave's BLOCKING finding (the uv pin sat outside the
+checksum gate, so a hot-patched `bin/lib/uvpin.json` installed and executed an attacker-supplied
+`uv`) and its three IMPORTANT ones are fixed and are NOT here. Every item below was re-measured
+during the wave rather than copied across; the line numbers are post-fix.
+
+One item from that list is **closed rather than deferred**: `repoint_pin` shipping as an unasserted
+exploit primitive is now `case_pin_is_gated`, which drives the tamper on both implementations and
+both verbs and asserts exit 5 with an empty `tools/` and an unexecuted payload.
+
+- **`bin/lib/provision.py:243` — the Python offline refusal nests its multi-line hint in
+  parentheses.** Measured side by side on one engine: the module prints `cannot download uv 0.12.1
+  (offline) (plainkeep needs uv 0.12.1 and cannot reach the network…` — the whole seven-line manual
+  recipe, closing paren included — where `plainkeep-core --core-provision ensure-uv --offline` prints
+  the same recipe clean. The "byte-identical refusal" claim holds for the hint TEXT and not for what
+  the operator sees, and the difference is `output.fail`'s `f" ({hint})"` meeting a hint that was
+  written to stand alone.
+- **`bin/lib/provision.py:244` — an offline refusal exits `EXIT_UNEXPECTED` (1), not `EXIT_DENY`
+  (5).** Measured `rc=1` on **both** implementations, so this is a shared spelling rather than a
+  divergence (the review recorded it against the Python side only). Refusing to download because the
+  operator asked for offline is a policy decision the caller made, not an unexpected failure, and the
+  exit code is the only part of the refusal a script can branch on.
+- **`cli/src/core/provision.ts:201` — `spawnSync("tar", …)` resolves `tar` from `PATH`** inside the
+  binary whose reason for existing is to need nothing from the host. It runs *after* the sha256 check,
+  so it is not a gate bypass; it is a host dependency in the one code path that claims not to have
+  any.
+- **The checksum gate is LAYOUT-DERIVED, and outside that layout there is silently no gate.** Both
+  `enginetree._looks_installed` and `deliveredDigestProblems` decide whether a tree is "installed" by
+  asking whether its parent directory is named `engine`. Measured: a tree at `<…>/engine/4.0.0-dev/`
+  is gated, while the identical tree at `<…>/engines/4.0.0-dev/` or `<…>/opt/4.0.0-dev/` returns
+  `_looks_installed=False` and `digest_problems=[]` — no digests, no gate, no word said. Nothing
+  produces those layouts today, and this is now the shape of the whole provisioning security
+  boundary rather than of a completeness check.
+- **`bin/lib/enginetree.py:_seal_installed` raises when `tools/` is absent.** Measured on a tree with
+  no `tools/`: `FileNotFoundError: … /engine/9.9.9/tools`. Reachable by re-sealing a tree from a
+  pre-Task-4 build through the repair branch of `install()`. Untested. The r1 wave made the sealing
+  walk skip `PROVISION_DIR` outright, so the `chmod` on the next line is now a repair for
+  already-0555 trees rather than the load-bearing half — but it still assumes the directory is there.
+- **Nothing provisions the engine in the field, so the ADR-013 interpreter repoint is inert.** No
+  `plainkeep` verb reaches `provision.sync()` or `ensure_uv` — the r1 wave fixed doctor's row to say
+  so, but did not add the verb. The consequence rides one layer down: `enginePython()`
+  (`cli/src/core/provision.ts`) returns `null` on any engine nobody hand-provisioned, so
+  `blockingRestoreInterpreter` (`dispatch.ts`) falls straight back to the old bare `python3`. The
+  O_NONBLOCK parity case is green, and it is green THROUGH THAT FALLBACK rather than through the
+  repoint it is meant to exercise. Correct code, unreachable until a `plainkeep` verb provisions.
+- **INFO — `run_provision.py`'s uv-driven cells depend on a gitignored `<repo>/tools/`.** They skip,
+  loudly, on a checkout nobody has provisioned: a bare `git archive` export of this commit reports
+  `SKIPPED — uv sync --frozen cells (this checkout has not provisioned uv — run
+  python3 bin/lib/provision.py --ensure-uv once)`, where the registered checkout runs them. Coverage
+  varies with the machine; the skip says so rather than passing quietly.
+- **INFO — five of the six pinned uv targets are never exercised**, and `platform_target()`'s musl
+  detection is a heuristic on both implementations: `platform.libc_ver()` returns `('', '')` on musl,
+  which is the cheapest stdlib signal available, and a glibc interpreter on a musl host would be
+  misread (`bin/lib/provision.py:164`). Only this machine's `aarch64-apple-darwin` is ever downloaded
+  in anger.

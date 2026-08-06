@@ -19,9 +19,10 @@ import type { CoreResult } from "./cli.js";
 import { completeIntercept } from "./complete.js";
 import { EXIT_NOT_FOUND, EXIT_OK, mainCli } from "./guardrail.js";
 import { spawnEnv } from "./pluginenv.js";
+import { enginePython } from "./provision.js";
 import { runPy, sourceOf } from "./resolver.js";
 import { bareTtyLaunchesUi, uiIntercept } from "./ui.js";
-import { discoverRoot, requireEngine, requireHome } from "./vaultroot.js";
+import { discoverRoot, engineRoot, requireEngine, requireHome } from "./vaultroot.js";
 
 // Exit codes for a spawn that never became a child. OFF the frozen gate protocol (0/2/3/4/5) by
 // design — these are the shell's own conventions, and the floor reaches them through bash's `exec`
@@ -306,8 +307,9 @@ export function classifySpawnOutcome(r: SpawnOutcome, py: string): CoreResult {
 // stdio at exit), #35953 and #36066 (poll instead of spin on an EAGAIN pipe).
 //
 // The day we move to a bun carrying #33560: delete `RESTORE_BLOCKING_PY`, `isPipeLike`,
-// `stdioNeedsBlockingRestore`, `blockingRestoreFailure`, `restoreBlockingStdio` and its call in
-// `spawnVerb` — the piped path drops back to one spawn and its ~14 ms. The test that proves the
+// `stdioNeedsBlockingRestore`, `blockingRestoreFailure`, `blockingRestoreInterpreter`,
+// `restoreBlockingStdio` and its call in `spawnVerb` — the piped path drops back to one spawn and
+// its ~14 ms. The test that proves the
 // deletion is safe already exists and must stay green WITHOUT the helper: the
 // `large-output-across-the-pipe-buffer` case in test/cases/core-parity/dispatcher.json, whose three
 // invocations push 500 KB through a pipe and assert a tail marker that a truncating build cannot
@@ -359,8 +361,47 @@ export function blockingRestoreFailure(r: SpawnOutcome): string | null {
 // is the machine channel (`--json`, and the MCP session's frames); the line is short enough not to be
 // the write that blocks, and the write is itself guarded because the descriptor it warns about is the
 // one it is writing to.
-function restoreBlockingStdio(py: string): void {
+// WHICH INTERPRETER CLEARS THE FLAG — ADR-013's carried dependency inversion, fixed (Phase 2 Task 4a).
+//
+// This helper used to run whatever `pickPython()` answered, whose floor is a BARE `python3` from
+// PATH. Inside a binary whose entire selling point is not needing Python on the machine, that is the
+// inversion stated plainly: on a host with no `python3` the helper cannot start, and what fails is
+// the sole mitigation for a SILENT truncation bug — so the piped path loses output past the pipe
+// buffer and says so in a warning, on exactly the machines this binary exists for.
+//
+// The engine's own provisioned interpreter (`<engine>/tools/venv/bin/python3`, created by `uv sync`
+// against the delivered lock) is preferred instead. It is pinned, it belongs to the engine rather
+// than to the host, and it is present on any engine that has been provisioned at all.
+//
+// THE FALLBACK IS KEPT, and it is not a hedge: between `--install` and the first `plainkeep setup`
+// there is a real window in which the engine has no interpreter of its own, and refusing to dispatch
+// during it would be a worse answer than using the caller's `py` exactly as before. `engineRoot()`
+// is wrapped because it THROWS when the tree cannot be located, and a dispatch must not die inside a
+// best-effort mitigation.
+// WHAT THIS DOES NOT FIX, measured rather than implied. Repointing the helper does not make a whole
+// DISPATCH work without a system `python3`, because two other spawns on that path still take one:
+// the discovery spawn (`vaultroot.ts` runs `python3 <engine>/bin/lib/vaultroot.py --select`) and
+// `pickPython`'s floor. Measured on an installed engine with a PATH carrying no python3 at all, the
+// run dies before it ever reaches here:
+//
+//     plainkeep: could not run vault discovery (ENOENT) — expected <engine>/bin/lib/vaultroot.py
+//
+// Both of those are PARITY surfaces — the bash floor spawns bare `python3` in the same two places,
+// and `test/cases/core-parity/dispatcher.json` compares the two dispatchers' behaviour — so moving
+// them is a change to the floor as well, and it is not this task's. What IS fixed here is the one
+// spawn that had no business needing an interpreter from the host: a best-effort MITIGATION whose
+// failure mode is a warning about possibly-truncated output.
+export function blockingRestoreInterpreter(py: string): string {
+  try {
+    return enginePython(engineRoot()) ?? py;
+  } catch {
+    return py;
+  }
+}
+
+function restoreBlockingStdio(pyArg: string): void {
   if (!stdioNeedsBlockingRestore()) return;
+  const py = blockingRestoreInterpreter(pyArg);
   let why: string | null;
   try {
     const r = spawnSync(py, ["-c", RESTORE_BLOCKING_PY], { stdio: ["ignore", "inherit", "inherit"] });

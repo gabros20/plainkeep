@@ -1,5 +1,11 @@
 # plainkeep — optional dependencies.
 #
+# NOT THE SOURCE OF TRUTH ANY MORE (Phase 2 Task 4c). `pyproject.toml`'s `[project.optional-
+# dependencies]` is what `plainkeep setup` installs and what `uv sync --frozen` resolves; this file is
+# the human-followable `pip install -r` story for someone who wants to do it by hand, and it is a
+# MIRROR. `test/run_provision.py` reddens if the two disagree, so it cannot drift silently — but when
+# they do disagree, the pyproject wins and this file is what gets corrected.
+#
 # Stage-1 search (plainkeep index/search, keyword + wikilink graph) needs NOTHING beyond Python
 # 3.10+ stdlib (sqlite3 with FTS5). The deterministic test suites are stdlib-only too. (3.10 is the
 # true floor: the verbs use PEP 604 `str | None` syntax.)

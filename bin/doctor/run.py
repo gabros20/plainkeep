@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, guardrail, output, paths, pluginenv, setuplib, vaultio  # noqa: E402
+from lib import enginetree, guardrail, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
@@ -239,7 +239,53 @@ def main(argv):
     else:
         ok("vault: data-only (no engine code inside the vault)")
 
-    # 1e. THE MUTATION POLICY, stated where it is observable. See the module docstring: doctor is a
+    # 1e. PROVISIONING (Phase 2 Task 4 / ADR-020). Three rows, and each of them exists because an
+    # operator has a different next move:
+    #
+    #   * the pinned uv — absent means nothing has downloaded it yet, and the download needs network.
+    #     The row names `plainkeep-core --core-provision sync`, not `plainkeep setup`: no `plainkeep`
+    #     verb reaches `provision.ensure_uv` or `provision.sync()` at all (Phase 2 Task 4 r1 review),
+    #     so the old wording sent operators to a verb that pip-installs into the VAULT's .venv and
+    #     leaves this row exactly as it was;
+    #   * the engine interpreter — absent means the engine has never been synced;
+    #   * a SYSTEM uv — present means the operator has one and might reasonably expect it to be used.
+    #     It is NOT. This row is the whole of the "one line saying so" the pin's design allows: a
+    #     silently-ignored tool that the operator installed on purpose is a support question waiting
+    #     to happen, and answering it here is cheaper than answering it later.
+    #
+    # None of them can FAIL doctor, and none is even a WARN: an unprovisioned engine is a NORMAL
+    # state (the stdlib floor is the contract — ADR-009), not a broken one. They ride in the `ok`
+    # bucket and are worded so that reading one as assurance says only what was measured.
+    try:
+        uv = provision.uv_path(paths.ENGINE)
+        if uv.is_file():
+            ok(f"engine: pinned uv {provision.load_pin(paths.ENGINE)['version']} present")
+        else:
+            # NAMES THE COMMAND THAT ACTUALLY DOES IT. This row used to say "`plainkeep setup`
+            # fetches it", and it does not: no verb reaches `provision.ensure_uv` or
+            # `provision.sync()` — the only entry points are the module CLI and the core's
+            # `--core-provision`. An operator following the old text ran `plainkeep setup`, got a
+            # vault `.venv` pip install, and watched this row not change.
+            ok(f"engine: pinned uv not provisioned yet ({uv}) — `plainkeep-core --core-provision "
+               "sync` fetches it (no `plainkeep` verb provisions the engine yet)")
+        epy = provision.engine_python(paths.ENGINE)
+        if epy:
+            # The COUNT, not the list: it is the cheap signal that distinguishes "synced with no
+            # extras" (the base project declares nothing, so zero is correct and expected) from
+            # "synced with [search]" — and it is read from the `.dist-info` directories on disk
+            # rather than by running pip, which a uv-managed environment does not have.
+            n = len(provision.installed_dists(paths.ENGINE))
+            ok(f"engine: interpreter {epy} ({n} distribution(s) from the delivered lock)")
+        else:
+            ok("engine: no provisioned interpreter yet (the stdlib floor is the contract)")
+        sysuv = provision.system_uv()
+        if sysuv:
+            ok(f"engine: a system uv at {sysuv} is IGNORED — the engine runs its own pinned uv "
+               "(ADR-020 D3), so your uv's version and config never steer this resolution")
+    except Exception as exc:                 # a broken pin must not take doctor down with it
+        warn(f"engine: cannot read the uv pin ({exc})")
+
+    # 1f. THE MUTATION POLICY, stated where it is observable. See the module docstring: doctor is a
     # DIAGNOSTIC and mutates nothing without an explicit consent flag. Printing which consent this
     # run was given is what keeps the policy from becoming the kind of rule ADR-019 catalogues — one
     # that is written down, agreed, and quietly stopped being true.

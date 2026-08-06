@@ -68,3 +68,11 @@ cli/node_modules/
 # The vault marker (ADR-014 / Task 1a). A plain clone of the template must NOT be adoptable as a
 # vault — no marker means walk-up can never select an arbitrary checkout.
 .plainkeep/
+
+# Provisioning artifacts (Phase 2 Task 4). In an INSTALLED engine `tools/` lives inside the versioned
+# tree and is the one writable directory in it (enginetree.PROVISION_DIR); in a CHECKOUT it is the
+# same path relative to the same engine root, so a contributor who runs `plainkeep setup search` from
+# the checkout provisions here. Machine-specific and reconstructible from bin/lib/uvpin.json + uv.lock
+# by deleting it — `pyproject.toml` and `uv.lock` themselves ARE committed, since they are the
+# artifact that ships.
+/tools/

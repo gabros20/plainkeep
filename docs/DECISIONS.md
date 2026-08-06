@@ -1406,7 +1406,190 @@ builds and the artifact appears.
   reachable, documented, tested, cited in an ADR, and enforcing nothing — which is worse than absent,
   because everyone downstream reasons as though it holds.
 
-## ADR-020 — `init` creates data, `update` switches one pointer, and neither can leave you with nothing (2026-08-02)
+---
+
+## ADR-020 — uv is downloaded and pinned; the lock ships inside the engine; the matrix is frozen (2026-08-02)
+
+**Status.** **Accepted** (2026-08-02). Basis: Phase 2 Task 4, implemented against a green suite. It
+answers the question ADR-017 and ADR-018 both left standing: an engine is now a versioned read-only
+tree and a plugin can declare dependencies, but nothing said **how the engine's own Python
+distributions get onto a machine, or by whose resolution.** Every claim below was measured or
+mutation-tested; the numbers are from this machine (macOS arm64, CPython 3.12 / bun 1.3.14).
+
+**Decision.**
+
+1. **uv is DOWNLOADED, never vendored, and PINNED by exact version + sha256 — both recorded in the
+   engine tree** (`bin/lib/uvpin.json`). A uv binary is ~30 MB per platform and six targets are
+   pinned; vendoring them would roughly triple the release artifact to carry something that moves on
+   its own cadence. Pinning is what keeps "downloaded" from meaning "whatever is upstream today":
+   the resolver would otherwise change underneath an engine version that is immutable in every other
+   respect. The digests are the ones astral-sh publishes beside each asset, not digests computed
+   from a download of our own — which would only prove we hashed what we received.
+
+2. **It installs to `<engine-root>/tools/uv/<version>/uv`, INSIDE the versioned engine directory** —
+   so it is replaced atomically with the engine and rolls back with it. **Where that lands relative
+   to ADR-017 D4's seal, stated rather than implied, because it is the one place this task moves
+   that decision:** `install()` creates `tools/` in its staging tree, seals the whole engine exactly
+   as before, and then `chmod 0755` on `tools/` **alone** — `chmod` needs ownership rather than a
+   writable parent, so nothing else is unsealed even momentarily. Provisioned ARTIFACTS are sealed
+   after their checksum verifies (`tools/uv/<version>/` and the binary in it go to 0555); `tools/venv`
+   is necessarily writable because uv owns it. Nothing under `tools/` is in the ownership manifest,
+   so `verify()`'s seal walk never sees these modes and never special-cases them; the exception is in
+   the model instead — `verify()` asks the INVERSE question about that one path (is it there, is it
+   still writable) and reddens if a stray `chmod` sealed it. Measured consequence worth knowing: the
+   seal leaves `tools/` **writable but not deletable** (unlinking it is a write to the 0555 root),
+   which is the shape wanted.
+
+   It is not a hole in D4's claim as that entry states it. What must not be hot-patchable is the
+   CODE; `tools/` holds a verified third-party binary and a package environment, both reconstructible
+   from the pin and the lock by deleting the directory.
+
+3. **A uv already on the machine is IGNORED** — not preferred, not fallen back to. Neither
+   implementation reads `PATH` for it, and both set `UV_NO_CONFIG=1` so the operator's `uv.toml`
+   cannot steer a resolution either. Borrowing the operator's uv un-pins the thing the pin exists
+   for. `--print system-uv` reports one line about it for `doctor`, and nothing dispatches to it.
+
+4. **Offline REFUSES, with the exact manual command** — URL, expected sha256, destination path, as
+   copy-pasteable shell — and leaves **no partial provisioning**: the staging directory is removed on
+   every failure path, the checksum refusal included. A refusal that says "no network" and stops is
+   what turns an air-gapped machine into a dead end.
+
+5. **The bootstrap is reachable from the COMPILED CORE, not only from Python** (`--core-provision`,
+   `cli/src/core/provision.ts`). This is forced rather than chosen: on a machine with no system
+   `python3`, `bin/lib/provision.py` cannot run, and that is precisely the state a fresh install is
+   in. The two implementations share the pin file and produce byte-identical refusals;
+   `test/run_provision.py` runs both and compares rather than trusting that they agree.
+
+   **Gate, run end to end on a PATH carrying no `python3` at all:** the core fetched and verified uv
+   0.12.1, then `uv sync --frozen` provisioned a managed CPython 3.14.6 into `<engine>/tools/python/`
+   and built `<engine>/tools/venv` from it. `--core-provision python` then names that interpreter.
+
+6. **ADR-013's carried O_NONBLOCK inversion is fixed.** `dispatch.ts`'s helper — the mitigation for a
+   SILENT stdout-truncation bug — spawned whatever `pickPython()` answered, whose floor is a bare
+   `python3` from PATH, inside a binary whose selling point is not needing one. It now prefers the
+   pinned engine interpreter (D5's `tools/venv/bin/python3`), keeping the old value as a fallback for
+   the real window between `--install` and the first provisioning run. The
+   `large-output-across-the-pipe-buffer` parity case stays green.
+
+   **What this does NOT fix, measured rather than implied:** a whole DISPATCH still needs a system
+   `python3`, because the discovery spawn (`vaultroot.ts` → `vaultroot.py --select`) and
+   `pickPython`'s floor both take one. On a PATH with no python3 the run dies before it reaches the
+   helper at all: `plainkeep: could not run vault discovery (ENOENT)`. Both are PARITY surfaces — the
+   bash floor spawns bare `python3` in the same two places — so moving them is a change to the floor
+   as well, and it is registered here as a follow-up rather than smuggled into this task.
+
+7. **The engine's `pyproject.toml` and `uv.lock` ship as ONE artifact with the code** (they joined
+   `enginetree.OWNED_FILES`), and provisioning is `uv sync --frozen` against the DELIVERED pair — not
+   `pip install -r`, and not an install of a wheel, neither of which imposes the project's exact
+   transitive resolution. A lock that does not travel with the code it locks is a lock in name only.
+
+8. **The 4b gate is NOT "byte-identical environments".** That is not a credible claim — an installed
+   environment holds platform-specific artifacts and absolute paths — and a gate that says so gets
+   waived the first time it runs. What is gated instead: the delivered tree and lock match their
+   **recorded checksums**; `uv sync --frozen` resolves to the exact versions and hashes the lock names
+   for this platform (the delivered lock carries 1,257 `sha256:` entries); and the resulting
+   environment **imports** every declared dependency. Measured once by hand, against the real index:
+   `[search]` → 39 dists, lancedb 0.36.0 / fastembed 0.8.0 / pyarrow 25.0.0 (transitively, as
+   documented), all importing; `[models]` → 68 dists, mlx-vlm 0.6.8 / Pillow 12.3.0 /
+   trafilatura 2.2.0, **no torch**, all importing.
+
+9. **A digest manifest is recorded OUTSIDE the sealed tree** —
+   `<install-root>/engine/.digests/<version>.json`, written at install time from the staging tree,
+   removed with the version it describes. ADR-017's `seal_problems` says in so many words that a
+   mode check cannot catch an edit whose author put the mode back; this is the thing that entry said
+   was "not shipped". `provision.sync()` checks the two files it is about to hand to uv BEFORE uv
+   reads them, so **a tampered lock fails its checksum rather than installing** — and **both**
+   provisioning paths enforce it: `--core-provision sync` runs the same narrow check
+   (`provision.ts:deliveredDigestProblems`), because on a machine with no system python3 the core IS
+   the provisioning path, and a gate only the Python side held would hold exactly on the machines
+   that do not need it. Pinned by a test that performs exactly the hot patch the seal admits it
+   misses — asserting the seal stays quiet while the checksums name the file — and by three more
+   that drive the real binary. It still does not prove the SOURCE was authentic: `install()` digests
+   what it was handed.
+
+10. **`uv sync --frozen` does not check the lock against the project — measured, and it changes the
+    design.** With `pyproject.toml` edited to require a version the lock does not carry, `uv sync
+    --frozen` installed the stale resolution and exited 0. The flag that refuses is `--locked` /
+    `uv lock --check`, and the two are mutually exclusive on one command line (`uv sync --frozen
+    --locked` is a usage error). So provisioning runs `uv lock --check` as a separate preflight
+    (13 ms, offline) and keeps the sync itself `--frozen` — which is what a sealed tree needs, since
+    a plain `uv sync` would re-resolve and try to write a new lock into a read-only directory.
+
+11. **The dependency matrix is FROZEN to exactly today's behaviour, and the product READS it.**
+    `pyproject.toml`'s extras are the source of truth: base is `dependencies = []` (ADR-009's stdlib
+    floor as a contract, not a default), `[search]` is the two mutually-exclusive lancedb markers plus
+    fastembed, `[models]` is Pillow + trafilatura + mlx-vlm-on-Apple-Silicon. `setuplib`'s hand-written
+    `SEARCH_DEPS` and its `["Pillow", "trafilatura"] + if-platform` block are GONE — both now come
+    from the delivered extras, and `requirements*.txt` are mirrors the suite pins.
+
+    This is wired end-to-end rather than modelled: the suite MUTATES a delivered engine's
+    `pyproject.toml` and drives the real `plainkeep setup search` verb through a subprocess, asserting
+    the mutation appears in the command the verb would run. A comparison against the frozen table
+    would have passed just as well if `setuplib` still carried its own copy.
+
+    It also fixed a live bug it was not looking for: `_search_pip_args()` preferred
+    `$PLAINKEEP_HOME/requirements-search.txt` — an ENGINE-owned file looked for in a VAULT — so after
+    ADR-017 that path never existed on a data-only vault and every install silently took an inline
+    mirror that nothing checked.
+
+12. **`plainkeep setup models` does two things and the extra covers one, and the verb now says so.**
+    The pip half is tens of megabytes of wheels; the other half is `plainkeep models pull --all`,
+    gigabytes of Ollama weights. Widening `[models]` until its name is true is how **packaging
+    silently becomes a downloader** (it would pull sentence-transformers/docling/faster-whisper, i.e.
+    torch, from a setup verb), so the extra stays accurate to today and the confirm prompt and the
+    `--json` payload both name both halves — the machine channel included, because an agent running
+    `--yes --json` never sees the prompt and is the caller most likely to be surprised by a multi-GB
+    download.
+
+13. **The seven BYO imports are declared NOWHERE and route through ADR-018's overlay.**
+    `pymupdf4llm`, `docling`, `sentence_transformers`, `parakeet_mlx`, `mlx_whisper`,
+    `faster_whisper`, `ocrmac` — each behind a `find_spec` probe with a deterministic fallback. The
+    suite asserts each is absent from every extra. Things that are not Python distributions at all
+    (Ollama weights, `restic`, `tesseract`, launchd, the `plainkeep-ui` asset) stay explicit,
+    confirm-gated setup actions: **uv provisions Python distributions only**, and the offline sync
+    cell asserts nothing beyond the lock's own names lands in the environment.
+
+**Alternatives.**
+(a) **Vendor uv per platform.** Rejected per D1 — ~30 MB × 6 for something on its own release cadence.
+(b) **Prefer a system uv when present.** Rejected per D3: a pinned lock resolved by an unpinned
+resolver is not pinned.
+(c) **Install uv to a shared `~/.local/share/plainkeep/tools/uv`.** Rejected per D2: it stays warm
+across upgrades, and it means a rollback that rolls the code back and not the toolchain.
+(d) **Ship a wheel and `uv install` it.** Rejected per D7: a wheel's metadata does not carry the
+project's transitive resolution, which is the whole thing the lock exists to impose.
+(e) **Gate 4b on byte-identical environments.** Rejected per D8, and rejected as a GATE rather than as
+an aspiration: it would have been waived on first run.
+(f) **Unseal the engine tree to provision, then re-seal.** Rejected per D2: a window in which the whole
+tree is writable, to avoid one named exception that carries no code.
+(g) **Move the discovery spawn and `pickPython` onto the engine interpreter too**, making a full
+dispatch work with no system python. Deferred per D6 — it is a change to the bash floor and its
+parity harness, not to the core alone.
+
+**Consequences.**
+- **It buys** a machine with nothing on it: no uv, no system Python, no network at install time
+  (with a documented two-step for the last). And it buys an answer to "is this the code that was
+  installed", which ADR-017 explicitly registered as missing.
+- **It costs a network fetch on first provisioning**, and it costs an operator on an air-gapped
+  machine a manual step. Both are stated at the point of failure rather than discovered.
+- **`tools/` is a writable directory inside an "immutable" tree.** That sentence is worth reading
+  twice, which is why D2 spells out what is and is not covered. A reviewer who wants the claim
+  narrowed should narrow ADR-017 D4's wording, not this exception.
+- **`uv sync` may download a managed CPython** (measured: 3.14.6, into `tools/python/`). That is a
+  Python distribution, which is what uv provisions; it is not a system package and not a model
+  weight, and the suite asserts neither of those is ever fetched.
+- **The vault `.venv` pip path is UNCHANGED.** `plainkeep setup search` still pip-installs the
+  `[search]` extra into `$PLAINKEEP_HOME/.venv`, which is what the dispatcher prefers. uv provisions
+  the ENGINE's environment; the two coexist deliberately, because 4c's instruction was to freeze
+  today's behaviour and moving the search layer onto uv would not be that. Unifying them is a
+  follow-up.
+- **Carried open, deliberately**: the discovery-spawn half of D6; no engine has been provisioned on a
+  machine other than this one, so five of the six pinned targets are unexercised in the field; the
+  suite proves the mechanism offline and the real PyPI sync was measured once, by hand, rather than
+  gated on every run.
+
+---
+
+## ADR-021 — `init` creates data, `update` switches one pointer, and neither can leave you with nothing (2026-08-02)
 
 **Status.** **Accepted** (2026-08-02). Phase 2 Task 5. It closes advisor finding 8 — v1's
 `plainkeep update = binary + engine sync` had **no atomicity contract** — and it decides the two

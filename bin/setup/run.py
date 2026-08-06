@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, setuplib  # noqa: E402
+from lib import output, setuplib, vaultreg  # noqa: E402
 
 GLYPHS = {
     "ready": "✓",
@@ -56,6 +56,18 @@ def _valid_or_fail(layer_id: str) -> None:
 
 
 def _confirm_message(layer_id: str) -> str:
+    """What the operator is agreeing to, at the moment they are asked (exit 3).
+
+    `models` gets its own text because it is the one layer that does TWO things of very different
+    size, and the generic line ("installs downloads and local dependencies") hid the expensive half:
+    `plainkeep models pull --all` is gigabytes of Ollama weights, while the `[models]` pip extra is
+    tens of megabytes of wheels. Naming both is the alternative to widening the extra until its name
+    is true — which is how packaging silently becomes a downloader (Phase 2 Task 4c).
+
+    The lines come from `setuplib.MODELS_HALVES`, so the prompt and the `--json` payload below are the
+    same statement rather than two descriptions that can drift."""
+    if layer_id == "models":
+        return ("models does TWO things:\n  " + "\n  ".join(setuplib.MODELS_HALVES))
     return f"{layer_id} installs downloads and local dependencies"
 
 
@@ -109,6 +121,11 @@ def _advance_one(layer_id: str, *, yes: bool, dry: bool = False) -> int:
     except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
         _action_failed(layer_id, exc)
     payload = {**res, "layer": layer_id, "status": before["status"]}
+    # The same two lines the confirm prompt carries, on the MACHINE channel too: an agent driving
+    # `plainkeep setup models --yes --json` never sees the prompt, and it is the caller most likely to
+    # be surprised by a multi-GB download it did not budget for.
+    if layer_id == "models":
+        payload["halves"] = list(setuplib.MODELS_HALVES)
     if dry:
         payload["dry_run"] = True
     return output.emit(payload, "setup",
@@ -327,6 +344,20 @@ USAGE = "usage: plainkeep setup [<layer> [--yes] | --all [--yes] | --wizard] [--
 
 
 def main(argv: list[str]) -> int:
+    """The verb, with `VaultError` rendered as the protocol's error envelope rather than a traceback.
+
+    The wrapper is here because the dependency matrix this verb installs is now GATED: reading the
+    delivered `pyproject.toml` refuses (exit 5) when the engine tree no longer matches its recorded
+    checksums, and that refusal reaches `main` through `setuplib.search_deps()`. Without this it
+    surfaced as a stack trace and exit 1 — the right decision, reported as a crash."""
+    try:
+        return _main(argv)
+    except vaultreg.VaultError as exc:
+        output.fail(exc.code, exc.message, exc.hint, verb="setup")
+        return exc.code        # unreachable: output.fail exits
+
+
+def _main(argv: list[str]) -> int:
     json_on, argv = output.parse_argv(argv)
     yes = "--yes" in argv or "-y" in argv
     all_ = "--all" in argv

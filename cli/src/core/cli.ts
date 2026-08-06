@@ -1,6 +1,7 @@
 // The core binary's argv handler. The identity probes (`--version`, `--core-selftest`) and the
 // hidden `--core-*` introspection flags short-circuit here; EVERY other argv is a verb dispatch
 // (./dispatch.ts) — gate, resolve, one spawn — reproducing the bash floor exactly.
+import { spawnSync } from "node:child_process";
 import { CORE_VERSION } from "./version.js";
 import { dispatch, INTERCEPTS, interceptionFor } from "./dispatch.js";
 import {
@@ -13,7 +14,23 @@ import {
   sourceOf,
 } from "./resolver.js";
 import { mainCli } from "./guardrail.js";
-import { activateEngine, takeVaultSelector, VaultRefusal } from "./vaultroot.js";
+import {
+  artifact,
+  checkArgv,
+  enginePython,
+  ensureUv,
+  loadPin,
+  offlineRefusal,
+  platformTarget,
+  projectEnv,
+  ProvisionRefusal,
+  requireDeliveredIntact,
+  syncArgv,
+  syncEnv,
+  TamperRefusal,
+  uvPath,
+} from "./provision.js";
+import { activateEngine, engineRoot, takeVaultSelector, VaultRefusal } from "./vaultroot.js";
 
 export interface CoreResult {
   stdout?: string;
@@ -98,7 +115,85 @@ export const CORE_IDENTITY = `plainkeep-core ${CORE_VERSION}`;
 // BARE intercepts only as the whole argv (`--version extra` is a verb, and both dispatchers refuse
 // it identically); ALWAYS intercepts on argv[0] whatever follows.
 export const INTERCEPTED_FLAGS_BARE = ["--version", "-v", "--core-selftest"] as const;
-export const INTERCEPTED_FLAGS_ALWAYS = ["--core-resolve", "--core-api", "--core-gate"] as const;
+export const INTERCEPTED_FLAGS_ALWAYS = [
+  "--core-resolve",
+  "--core-api",
+  "--core-gate",
+  "--core-provision",
+] as const;
+
+// PROVISIONING FROM THE BINARY (Phase 2 Task 4a). Not a test probe like its three neighbours — this
+// is the only way to provision a machine with no system `python3`, which is the state a fresh install
+// is in. `bin/lib/provision.py` does the same job for a machine that has one, and
+// `test/run_provision.py` compares the two.
+//
+// It answers for the ENGINE, never for a vault, which is why it sits with the flags that refuse
+// `--vault`: what gets provisioned is a property of the engine tree the binary belongs to.
+async function coreProvision(spec: string, rest: string[]): Promise<CoreResult> {
+  const root = engineRoot();
+  const offline = rest.includes("--offline");
+  try {
+    if (spec === "pin") {
+      const pin = loadPin(root);
+      const a = artifact(pin);
+      return {
+        stdout: JSON.stringify(
+          { version: pin.version, target: a.target, url: a.url, sha256: a.sha256,
+            member: a.member, dest: uvPath(root, pin) },
+          null,
+          2,
+        ),
+        code: 0,
+      };
+    }
+    if (spec === "target") return { stdout: platformTarget(), code: 0 };
+    if (spec === "uv") return { stdout: uvPath(root, loadPin(root)), code: 0 };
+    if (spec === "env") return { stdout: projectEnv(root), code: 0 };
+    if (spec === "offline") return { stdout: offlineRefusal(root, loadPin(root)), code: 0 };
+    if (spec === "python") {
+      const p = enginePython(root);
+      return p ? { stdout: p, code: 0 } : { code: 4 };
+    }
+    if (spec === "ensure-uv") {
+      // GATED TOO, inside `ensureUv`. This verb is reachable without `sync` and it is the one that
+      // installs and seals an executable, so an ungated version of it made the whole gate optional.
+      return { stdout: await ensureUv(root, { allowNetwork: !offline }), code: 0 };
+    }
+    if (spec === "sync") {
+      // THE CHECKSUM GATE FIRST, before uv is even downloaded — the same order `provision.sync()`
+      // uses, and for the same reason: a tampered tree (the lock, the project, or the PIN that
+      // chooses the binary) must fail its checksum rather than be provisioned from.
+      requireDeliveredIntact(root);
+      const uv = await ensureUv(root, { allowNetwork: !offline, checkDigests: false });
+      const extras: string[] = [];
+      for (let i = 0; i < rest.length - 1; i++) if (rest[i] === "--extra") extras.push(rest[i + 1]!);
+      const env = syncEnv(root, offline);
+      const chk = spawnSync(uv, checkArgv(root, uv).slice(1), { env, encoding: "utf8" });
+      if (chk.status !== 0) {
+        return {
+          stderr:
+            "plainkeep: the delivered uv.lock no longer describes the delivered pyproject.toml\n" +
+            "  nothing was installed — `uv sync --frozen` would have used the stale lock and " +
+            "exited 0",
+          code: 5,
+        };
+      }
+      const argv = syncArgv(root, uv, extras);
+      const r = spawnSync(argv[0]!, argv.slice(1), { env, encoding: "utf8" });
+      if (r.status !== 0) {
+        const tail = (r.stderr || r.stdout || "").trim().split("\n").slice(-8).join("\n  ");
+        return { stderr: `plainkeep: uv sync failed:\n  ${tail}`, code: 1 };
+      }
+      return { stdout: projectEnv(root), code: 0 };
+    }
+  } catch (e) {
+    // A tampered tree is a POLICY refusal (exit 5, EXIT_DENY), not the generic provisioning failure.
+    if (e instanceof TamperRefusal) return { stderr: e.message, code: 5 };
+    if (e instanceof ProvisionRefusal) return { stderr: e.message, code: 1 };
+    throw e;
+  }
+  return { stderr: `plainkeep-core: unknown --core-provision spec: ${spec}`, code: 2 };
+}
 
 export function runCore(rawArgv: string[]): CoreResult | Promise<CoreResult> {
   // ACTIVATE THE ENGINE FIRST — before the selector, before the identity probes, before the hidden
@@ -139,6 +234,7 @@ export function runCore(rawArgv: string[]): CoreResult | Promise<CoreResult> {
       return p ? { stdout: p, code: 0 } : { code: 4 };
     }
     if (head === "--core-api") return coreApi(argv[1] ?? "");
+    if (head === "--core-provision") return coreProvision(argv[1] ?? "", argv.slice(2));
     // Hidden gate probe: runs the ported main_cli semantics (known-verb check + did-you-mean, risk
     // gate, audit log, stderr) and exits with the gate code, spawning NOTHING — dispatch() below runs
     // the same gate and then goes on to spawn the verb.

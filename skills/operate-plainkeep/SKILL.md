@@ -45,7 +45,7 @@ consequences you must act on:
   name the version, whether the tree is sealed, and which pair a rollback would reach — and
   hand the operator the command. The rollback is
   `python3 <engine>/bin/lib/enginetree.py --rollback`; the previous pair is retained
-  precisely so a human has that option (docs/DECISIONS.md ADR-020).
+  precisely so a human has that option (docs/DECISIONS.md ADR-021).
 
 ## 2. The one rule about capabilities
 `plainkeep.json` (or `plainkeep help`) is the authoritative, complete list of what you can do.

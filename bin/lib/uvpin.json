@@ -1,0 +1,33 @@
+{
+  "schema": "plainkeep.uvpin/1",
+  "_": [
+    "THE PIN. `uv` is DOWNLOADED, never vendored (a binary per platform is ~30 MB and would triple",
+    "the release artifact for something that moves on its own cadence), and it is pinned by exact",
+    "version AND sha256 so 'downloaded' does not mean 'whatever is upstream today'. Both halves live",
+    "HERE, inside the engine tree, so they are replaced atomically with the engine and roll back with",
+    "it (bin/lib/provision.py explains why that matters).",
+    "",
+    "The digests are the ones astral-sh PUBLISHES beside each asset (uv-<target>.tar.gz.sha256),",
+    "fetched 2026-08-02 — not digests computed from a download of our own, which would only prove we",
+    "hashed what we received.",
+    "",
+    "TO BUMP: change `version`, refetch every digest from",
+    "https://github.com/astral-sh/uv/releases/download/<version>/uv-<target>.tar.gz.sha256, and run",
+    "`python3 bin/lib/provision.py --print pin` to confirm it parses. test/run_provision.py checks the",
+    "table's SHAPE (every target has a 64-hex digest, the version is a release tag) offline; it does",
+    "not re-fetch, because a test that reaches the network to validate a pin is a test that goes red",
+    "when GitHub does."
+  ],
+  "version": "0.12.1",
+  "checked": "2026-08-02",
+  "url_template": "https://github.com/astral-sh/uv/releases/download/{version}/uv-{target}.tar.gz",
+  "member_template": "uv-{target}/uv",
+  "artifacts": {
+    "aarch64-apple-darwin": "77d2906988e8074fd43f2f329ec452ebbf9b0c257ba1c66451c71de70a6baf42",
+    "x86_64-apple-darwin": "69d9f9a00337f25a50dcb13882052da08b8469bac11091c98c5694c3c6721467",
+    "x86_64-unknown-linux-gnu": "90b2f223fb69d19db49e117da601f64978593417988530aa733d456141b4bcbb",
+    "aarch64-unknown-linux-gnu": "769d373e146692c639b5fbaae33b331c297a32e03d30448772051902df52bbf4",
+    "x86_64-unknown-linux-musl": "47823f814693bab8623308341369190de30b5c621eec5b1ee20352eae8c7982c",
+    "aarch64-unknown-linux-musl": "ce218dad9eb48a39dd86160bec6291fac7275f20a9cabcc4bc10dd2c757208f8"
+  }
+}

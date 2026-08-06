@@ -231,13 +231,28 @@ EXEMPT: dict[str, dict[str, str]] = {
         'staging.mkdir()':
             "the `.incoming-<version>` staging directory — an engine is verified there and only "
             "then renamed into its version name, so a half-copied tree is never reachable",
-        # Phase 2 Task 5. The first two write BESIDE the version trees (the pair manifests and the
-        # activation state, deliberately outside the sealed tree they describe); the last three
-        # write into a `tempfile.mkdtemp()` the self-test throws away. Neither destination is
-        # caller-shaped: one is derived from `versions_dir()` alone, the other from mkdtemp.
+        # THE DIGEST MANIFEST (Phase 2 Task 4b) and THE PAIR MANIFEST + ACTIVATION STATE (Task 5).
+        # `<install-root>/engine/.digests/<version>.json` and `<install-root>/engine/.pairs/`, both
+        # BESIDE the versioned trees rather than inside one — a manifest that lives in the tree it
+        # covers cannot describe that tree's own removal, and the sealed tree is read-only anyway.
+        # Same class and same structural answer as every line above: the destination is derived from
+        # the ENGINE root, never from an argument.
+        #
+        # ONE KEY, TWO SITES. `p.parent.mkdir(...)` appears at enginetree.py:442 (.digests) and
+        # :1143 (.pairs); the match is `startswith`, so this single entry licenses both. That is
+        # honest here — they are the same write to the same parent directory class — but it is also
+        # a LOOSE key in exactly the sense the paragraph above flags, and a third `p.parent.mkdir`
+        # meaning something else would be licensed silently.
         'p.parent.mkdir(parents=True, exist_ok=True)':
-            "`<install-root>/engine/.pairs/` — the pair manifests and activation state, which must "
-            "live outside the tree they cover",
+            "`.digests/` and `.pairs/` beside the installed versions — the digest manifests, the "
+            "pair manifests and the activation state, which must live outside the trees they cover",
+        'tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")':
+            "the digest manifest itself, written to a pid-unique temp name and renamed over",
+        '(dst / PROVISION_DIR).mkdir(parents=True, exist_ok=True)':
+            "the engine's `tools/` provisioning directory, created empty inside the staged tree",
+        # Phase 2 Task 5's PAIR SELF-TEST. These three write into a `tempfile.mkdtemp()` the
+        # self-test throws away in its `finally`: a staged pair is proven by dispatching a real verb
+        # against a throwaway marked vault, never against the operator's notes.
         '(vault / vaultreg.MARKER_DIR).mkdir(parents=True)':
             "the throwaway marked vault the pair self-test dispatches against, under mkdtemp — the "
             "self-test must never be pointed at the operator's real notes",
@@ -248,6 +263,28 @@ EXEMPT: dict[str, dict[str, str]] = {
             "writes the real registry",
         'self.path.parent.mkdir(parents=True, exist_ok=True)':
             "the versions directory, so the update lock has somewhere to live",
+    },
+    # PROVISIONING (Phase 2 Task 4a). Every write below lands under
+    # `<engine-root>/tools/`, which is the one writable directory in an installed engine tree and is
+    # engine code's neighbour, not a vault's: `vaultroot.validate()` refuses any data root that
+    # overlaps the engine root, so none of these can resolve inside a vault — let alone under
+    # `~/files/**/in/`. Same class as the installer directly above, and for the same reason it is not
+    # routed through `vaultio`: classifying an engine path against the active DATA root answers DENY
+    # for every install.
+    #
+    # Not agent-reachable either: `provision` has no verb, is not in the frozen SDK (`lib/api.py`),
+    # and is invoked by `plainkeep setup`, `script/setup`, the compiled core and the harness.
+    "bin/lib/provision.py": {
+        'with urllib.request.urlopen(req, timeout=timeout) as r, open(dest, "wb") as out:':
+            "the pinned uv download, into `tools/.incoming-uv-<version>.<pid>/`",
+        'with open(dest, "wb") as out:':
+            "the ONE named member extracted from that archive — the archive never names a "
+            "destination (see `_extract_member`)",
+        'staging.mkdir(parents=True)':
+            "that staging directory; it is removed on every failure path, so a refused bootstrap "
+            "leaves nothing behind",
+        'dest.parent.parent.mkdir(parents=True, exist_ok=True)':
+            "`tools/uv/`, the parent the verified binary's version directory is renamed into",
     },
     "bin/vault/run.py": {
         'vaultreg.marker_path(target).write_text(vaultreg.marker_bytes(marker), encoding="utf-8")':
@@ -363,17 +400,29 @@ PINNED_DELETES: dict[str, set[str]] = {
                               # is created beside it and renamed over the old one
                               "tmp.unlink()",
                               "os.replace(tmp, link)",
-                              # Phase 2 Task 5. `os.replace(tmp, p)` is the atomic write of a pair
-                              # manifest / the activation state under `<install-root>/engine/.pairs/`
-                              # — same destination class as everything above, derived from
-                              # `versions_dir()` and never from an argument. The rmtree is the
-                              # self-test's own `tempfile.mkdtemp()` sandbox. The two `unlink`s
-                              # remove a pair manifest for a version that has just been removed or
-                              # refused, so the manifest never outlives the tree it describes.
+                              # `os.replace(tmp, p)` covers TWO sites, both an atomic manifest write
+                              # under a directory derived from the engine root alone: the digest
+                              # manifest (Task 4b, `digests_path(root)`) and the pair manifest /
+                              # activation state (Task 5, `<install-root>/engine/.pairs/`). The
+                              # rmtree is the pair self-test's own `tempfile.mkdtemp()` sandbox. The
+                              # three `unlink`s remove a manifest for a version that has just been
+                              # removed or refused, so a manifest never outlives the tree it
+                              # describes.
                               "os.replace(tmp, p)",
+                              "digests_path(d).unlink()",
                               "shutil.rmtree(td, ignore_errors=True)",
                               "pair_manifest_path(version).unlink(missing_ok=True)",
                               "pair_manifest_path(v).unlink(missing_ok=True)"},
+    # PROVISIONING (Phase 2 Task 4a) — all under `<engine-root>/tools/`, derived from the engine root
+    # and never from an argument, so the question this ratchet asks ("can this resolve under
+    # `~/files/**/in/`?") is answered NO structurally. The two `unlink`s are the point of the pin
+    # rather than an exception to it: an artifact that fails its checksum is DELETED so that nothing
+    # later can reach for it.
+    "bin/lib/provision.py": {"dest.unlink()",
+                             "archive.unlink()",
+                             "shutil.rmtree(dest.parent, ignore_errors=True)",
+                             "shutil.rmtree(staging, ignore_errors=True)",
+                             "os.rename(staging, dest.parent)"},
     # Phase 2 Task 5. The ONE removal `vault init` can reach, and it is bounded twice over: it runs
     # only when this same call created the directory moments earlier, and `rmdir` refuses a
     # non-empty one — so a path that acquired any content between the two lines survives. It cannot

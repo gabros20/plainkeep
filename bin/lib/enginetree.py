@@ -462,8 +462,11 @@ def digest_problems(root: Path, *, only: tuple[str, ...] | None = None) -> list[
     `root` is not an installed tree at all, which is the same convention `seal_problems` uses — a
     contributor's checkout has no manifest and is not claiming to).
 
-    `only` narrows it to named paths, which is what `provision.sync()` passes: checking the two files
-    it is about to hand to uv costs two digests, where the whole tree costs ~150."""
+    `only` narrows it to named paths. It is NOT what the provisioning gate uses any more: naming the
+    subset by hand is what left `bin/lib/uvpin.json` — the file that decides which binary is
+    downloaded and executed — outside a gate that was reported as covering provisioning. See
+    `provision.require_delivered_intact`. The parameter stays because a caller that genuinely wants
+    one path (a probe, a report) should not pay ~114 digests for it."""
     import hashlib
     if not _looks_installed(root):
         return []
@@ -1010,7 +1013,9 @@ def main(argv: list[str]) -> int:
             # `--digests` is OPT-IN rather than the default because it re-reads every owned file
             # (~150 of them, ~5 MB) where the mode walk stats them: the right cost for an operator
             # asking "is this the code that was installed", the wrong one for `doctor`'s routine
-            # pass. `provision.sync()` asks for the two paths it cares about instead of all of them.
+            # pass. Every provisioning entry point asks for the WHOLE tree (see
+            # `provision.require_delivered_intact`) — it is about to download and run a binary the
+            # tree names, and a hand-written subset of that tree is what left the uv pin ungated.
             args = [a for a in rest if a != "--digests"]
             root = Path(args[0]) if args else ENGINE_ROOT
             problems = verify(root, check_digests="--digests" in rest)

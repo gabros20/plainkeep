@@ -20,6 +20,13 @@ executable; a mismatch deletes the download and refuses. "Downloaded" without a 
 resolver changes underneath an engine version that is otherwise immutable — which is the property
 ADR-017 exists to establish, given away at the last step.
 
+    **AND THE PIN ITSELF IS HELD TO THE ENGINE'S CHECKSUMS** (`require_delivered_intact`, below).
+    A pin that names both the URL and the digest is only worth as much as the pin's own integrity:
+    edit both together and the verification step verifies the attacker's bytes against the attacker's
+    number. So every entry point that can download or execute — `ensure_uv`, `sync`, and the read of
+    the delivered dependency matrix — first asks whether the WHOLE tree still matches what `install()`
+    recorded. That gate used to name two files by hand and the pin was not one of them.
+
 **3. It is installed to `<engine-root>/tools/uv/<version>/uv` — INSIDE the versioned engine
 directory.** So it is replaced atomically with the engine (a new engine version gets its own tools
 directory, provisioned on first use) and it rolls back with the engine (`--activate <older>` points
@@ -309,14 +316,55 @@ def _extract_member(archive: Path, member: str, dest: Path) -> None:
             shutil.copyfileobj(src, out)
 
 
+# --- the gate ---------------------------------------------------------------------------------------
+def require_delivered_intact(root: Path | None = None) -> None:
+    """Refuse to act on an engine tree whose contents are not what `install()` recorded.
+
+    **THE WHOLE TREE, not a named subset, and the narrowing is what this replaces.** This gate used to
+    be spelled `digest_problems(root, only=(PYPROJECT_REL, LOCK_REL))` at the one call site that had
+    it — "the two files we are about to hand to uv", two digests instead of ~114. The file that was
+    left out is `bin/lib/uvpin.json`, which is the file that decides WHAT GETS DOWNLOADED AND RUN: it
+    carries both the URL and the sha256 the download is held to, so tampering with it is
+    self-consistent and the "verify before making it executable" step verifies the attacker's bytes
+    against the attacker's digest. Measured on a throwaway install: a payload served from a local
+    `file://` URL was installed, sealed 0555, and executed twice by `--sync`, exit 0, on both the
+    Python and the compiled-core path — while `digest_problems(root)` reported the tampered pin the
+    entire time.
+
+    So the allowlist is gone rather than extended. An allowlist has to be re-derived by hand every
+    time this module learns to read another delivered file, and getting that wrong is silent and
+    remote-code-execution shaped; the full check is derived from the manifest and cannot go stale.
+    What it costs is ~114 sha256 of small files — 50 ms, measured — on an operation whose next steps
+    are a 35 MB download and a package install. That is not a budget worth optimising against the one
+    property this module exists to have.
+
+    Empty on a checkout (`_looks_installed` is false there), so a contributor's tree is unaffected."""
+    problems = enginetree.digest_problems(engine_root(root))
+    if problems:
+        raise VaultError(
+            "refusing to provision from a delivered project that does not match its "
+            "recorded checksums:\n  " + "\n  ".join(problems),
+            code=output.EXIT_DENY,
+            hint="the engine tree was modified after it was installed — reinstall it "
+                 "(python3 bin/lib/enginetree.py --install <checkout> --force)")
+
+
 def ensure_uv(root: Path | None = None, *, allow_network: bool = True,
-              pin: dict | None = None) -> Path:
+              pin: dict | None = None, check_digests: bool = True) -> Path:
     """The pinned uv, downloading and verifying it if this engine has not got it yet.
+
+    THE GATE RUNS HERE, not only in `sync()`, because this is reachable on its own —
+    `provision.py --ensure-uv` and `plainkeep-core --core-provision ensure-uv` both land here without
+    passing through `sync()`, and a gate that only `sync()` ran left the bootstrap ungated on the two
+    commands whose entire job is to install and seal an executable. `check_digests=False` is for the
+    one caller that has already asked (`sync()`), so the tree is hashed once per provisioning run.
 
     IDEMPOTENT, and idempotent by CONTENT rather than by presence: an existing binary is re-hashed
     against the pin, so a truncated download from a killed run is replaced instead of being trusted
     for the life of the engine. That costs one sha256 of ~35 MB (~25 ms) on every provisioning call
     and nothing at all on a dispatch, which never calls this."""
+    if check_digests:
+        require_delivered_intact(root)
     pin = pin or load_pin(root)
     dest = uv_path(root, pin)
     _, url, digest, member = artifact(pin)
@@ -533,22 +581,17 @@ def sync(root: Path | None = None, *, extras_wanted: tuple[str, ...] = (),
          check_digests: bool = True) -> list[str]:
     """Provision the engine's Python environment from the DELIVERED project and lock.
 
-    Order matters and is the gate 4b actually asks for: the delivered `pyproject.toml` and `uv.lock`
-    are checked against the digests recorded at install time BEFORE uv is allowed to read them, so a
-    tampered lock fails its checksum rather than installing a resolution nobody chose."""
+    Order matters and is the gate 4b actually asks for: the delivered tree is checked against the
+    digests recorded at install time BEFORE uv is downloaded, made executable or allowed to read
+    anything, so a tampered lock — or a tampered PIN, which is what chooses the binary — fails its
+    checksum rather than installing a resolution nobody chose. `ensure_uv` gates too; the flag is
+    passed down so the tree is hashed once rather than twice."""
     root_p = engine_root(root)
     if check_digests:
-        problems = enginetree.digest_problems(root_p, only=(PYPROJECT_REL, LOCK_REL))
-        if problems:
-            raise VaultError(
-                "refusing to provision from a delivered project that does not match its "
-                "recorded checksums:\n  " + "\n  ".join(problems),
-                code=output.EXIT_DENY,
-                hint="the engine tree was modified after it was installed — reinstall it "
-                     "(python3 bin/lib/enginetree.py --install <checkout> --force)")
+        require_delivered_intact(root_p)
     if allow_network is None:
         allow_network = not offline
-    uv = ensure_uv(root_p, allow_network=allow_network)
+    uv = ensure_uv(root_p, allow_network=allow_network, check_digests=False)
     env = sync_env(root_p, offline=offline)
     chk = subprocess.run(check_argv(root_p, uv=uv), env=env, capture_output=True, text=True)
     if chk.returncode != 0:

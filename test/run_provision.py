@@ -173,9 +173,16 @@ def make_uv_tarball(dest: Path, target: str, body: str = "#!/bin/sh\necho fake-u
     return hashlib.sha256(dest.read_bytes()).hexdigest()
 
 
-def repoint_pin(engine: Path, *, url: str, sha256: str | None = None) -> None:
+def repoint_pin(engine: Path, *, url: str, sha256: str | None = None, bless: bool = True) -> None:
     """Rewrite the engine's uv pin to point at a LOCAL artifact. `sha256=None` leaves the published
-    digest in place, which is how the mismatch cell is built."""
+    digest in place, which is how the mismatch cell is built.
+
+    `bless=True` RE-RECORDS the tree's digest manifest afterwards, which is the state "this is the pin
+    the engine shipped with" — what the download-mechanism cells below need in order to be about the
+    download rather than about the tamper gate. `bless=False` is the ATTACK, and it is now a refusal
+    (`case_pin_is_gated`): this helper is the exploit primitive the r1 review found shipping as an
+    unasserted fixture — a pin edit chooses both the URL and the sha256 the download is held to, so an
+    unblessed one used to install and execute an attacker's binary."""
     p = engine / provision.PIN_REL
     pin = json.loads(p.read_text(encoding="utf-8"))
     pin["url_template"] = url
@@ -183,6 +190,8 @@ def repoint_pin(engine: Path, *, url: str, sha256: str | None = None) -> None:
         for t in pin["artifacts"]:
             pin["artifacts"][t] = sha256
     unseal_write(p, json.dumps(pin, indent=2) + "\n")
+    if bless:
+        enginetree.record_digests(engine)
 
 
 # --- 4c: the frozen matrix ------------------------------------------------------------------------
@@ -441,6 +450,136 @@ def case_checksum_gate(tmp: Path) -> None:
     check("4a: an EXISTING uv that no longer matches the pin is not trusted — it is re-hashed, "
           "removed, and (offline) refused rather than run",
           r.returncode != 0 and not dest.exists(), f"rc={r.returncode} exists={dest.exists()}")
+
+
+# --- 4a: the PIN is inside the gate ---------------------------------------------------------------
+def case_pin_is_gated(tmp: Path) -> None:
+    """THE PIN IS A GATED FILE, on every entry point that can download or execute.
+
+    The r1 review reproduced this end to end: `bin/lib/uvpin.json` is in the digest manifest, but the
+    gate named `(pyproject.toml, uv.lock)` by hand and never asked about it. Because the pin supplies
+    BOTH the download URL and the sha256 the download is verified against, tampering with it is
+    self-consistent — "verify before making it executable" verified the attacker's bytes against the
+    attacker's number. A payload was installed, sealed 0555 and EXECUTED TWICE by `--sync`, exit 0, on
+    both implementations; `--ensure-uv` installed it with no gate at all.
+
+    So this cell tampers the pin the way a hot-patcher would (chmod → edit → chmod back, the move the
+    seal check admits it cannot see) and asserts the refusal: exit 5, nothing under `tools/`, and the
+    payload NEVER RUN. The marker file is the strongest available assertion — a fake uv that records
+    every invocation cannot record one that did not happen.
+
+    A FRESH ENGINE AND A FRESH MARKER PER VERB, deliberately. Looping both verbs over one tree makes
+    the second verb's cells pass on the FIRST verb's refusal: `sync` gates, leaves `tools/` empty, and
+    `ensure-uv` then has nothing to find. Each verb has its own gate to prove — `--ensure-uv` is
+    reachable without `sync` and is the command whose whole job is to install and seal an executable —
+    so each gets a tree nobody has refused on its behalf."""
+    target = provision.platform_target()
+    art_dir = tmp / "pwn-artifacts"
+    art_dir.mkdir(exist_ok=True)
+
+    def gated(label: str, argv_for) -> None:
+        if argv_for(install_engine(tmp / f"pingate-{label}-probe"), "sync") is None:
+            skipped.append(f"the PIN-gate cells on the {label} path (the installed engine carries "
+                           "no core binary)")
+            return
+        for verb in ("sync", "ensure-uv"):
+            engine = install_engine(tmp / f"pingate-{label}-{verb}")
+            marker = tmp / f"payload-executed-{label}-{verb}.txt"
+            sha = make_uv_tarball(
+                art_dir / f"{label}-{verb}-uv-{target}.tar.gz", target,
+                body=f'#!/bin/sh\necho "PWNED args=$*" >> {marker}\nexit 0\n')
+            # The attacker's pin: our URL, our digest, and the recorded checksums NOT updated.
+            repoint_pin(engine, url=f"file://{art_dir}/{label}-{verb}-uv-{{target}}.tar.gz",
+                        sha256=sha, bless=False)
+            check(f"4a PIN GATE ({label} {verb}): the tamper is invisible to the SEAL, which is why "
+                  "a checksum gate has to be the thing that sees it",
+                  enginetree.seal_problems(engine) == [], str(enginetree.seal_problems(engine)))
+            check(f"4a PIN GATE ({label} {verb}): the digest manifest DOES record the pin — the "
+                  "evidence exists, and before the fix nothing consulted it",
+                  any("uvpin.json" in p for p in enginetree.digest_problems(engine)),
+                  str(enginetree.digest_problems(engine)))
+            dest = provision.uv_path(engine, provision.load_pin(engine))
+            r = run(*argv_for(engine, verb))
+            check(f"4a PIN GATE ({label} {verb}): a tampered pin REFUSES with exit 5",
+                  r.returncode == EXIT_DENY, f"rc={r.returncode} {(r.stderr or r.stdout)[:200]}")
+            check(f"4a PIN GATE ({label} {verb}): and it names the file, so the refusal is actionable",
+                  "uvpin.json does not match its recorded checksum" in r.stderr, r.stderr[:250])
+            check(f"4a PIN GATE ({label} {verb}): NOTHING was installed under tools/",
+                  not dest.exists()
+                  and not list((engine / enginetree.PROVISION_DIR).glob(".incoming-uv-*")),
+                  str(sorted(p.name for p in (engine / enginetree.PROVISION_DIR).glob("*"))))
+            check(f"4a PIN GATE ({label} {verb}): the attacker's binary was NEVER EXECUTED",
+                  not marker.exists(),
+                  marker.read_text(encoding="utf-8")[:200] if marker.exists() else "")
+
+    def py_argv(engine: Path, verb: str) -> list[str]:
+        return [PY, str(engine / "bin" / "lib" / "provision.py"),
+                "--sync" if verb == "sync" else "--ensure-uv"]
+
+    def core_argv(engine: Path, verb: str) -> list[str] | None:
+        core = engine / ".local" / "bin" / "plainkeep-core"
+        return [str(core), "--core-provision", verb] if core.is_file() else None
+
+    gated("python", py_argv)
+    # The core path is the one that matters MOST here: on a machine with no system python3 it is the
+    # only way to provision, so a gate only the Python side enforced would hold exactly where it is
+    # not needed. Same currency guard as `case_core_parity` — a stale binary skips loudly.
+    if not CORE.is_file() or not core_speaks_provision(CORE):
+        skipped.append("the PIN-gate cells on the CORE path (" + (
+            "no compiled plainkeep-core — build it: cd cli && bun run build"
+            if not CORE.is_file() else STALE_CORE) + ")")
+        return
+    gated("core", core_argv)
+
+
+def case_injected_file_is_refused(tmp: Path) -> None:
+    """A file ADDED to the engine tree is a tamper, and both implementations have to say so.
+
+    Checking only the RECORDED paths answers "was anything changed"; an attacker who ADDS
+    `bin/lib/sitecustomize.py` changes nothing recorded. Python's `digest_problems` has always
+    reported these when it checks the whole tree (`is present but was never recorded`) and the TS
+    port did not — invisible while the gate named two files by hand, since neither can be extra, and
+    live the moment the gate widened to the tree. The core is the only provisioning path on a machine
+    with no system python3, so a check that holds only on the Python side holds where it is not
+    needed.
+
+    One injection PER OWNED TREE, which is what makes this a statement about the WALK rather than
+    about one lucky path: a port that forgot `skills/` or `templates/` passes a single-file version of
+    this cell and fails here."""
+    engine = install_engine(tmp / "injected")
+    injected = []
+    for tree in ("bin/lib", "templates/verb", "frontends/raycast", "skills/operate-plainkeep"):
+        d = engine / tree
+        if not d.is_dir():
+            continue
+        old = stat.S_IMODE(d.stat().st_mode)
+        d.chmod(0o755)
+        (d / "pk_injected.py").write_text("# attacker\n", encoding="utf-8")
+        d.chmod(old)
+        injected.append(f"{tree}/pk_injected.py")
+    check("4b INJECTION: the added files are invisible to the SEAL (they arrive 0644 in a 0555 tree, "
+          "and the seal check asks about modes, not about membership)",
+          enginetree.seal_problems(engine) == [], str(enginetree.seal_problems(engine))[:200])
+    problems = enginetree.digest_problems(engine)
+    check("4b INJECTION: the Python side reports EVERY injected file as never recorded",
+          all(any(rel in p and "never recorded" in p for p in problems) for rel in injected),
+          f"injected={injected} problems={problems}")
+    r = prov(engine, "--sync")
+    check("4b INJECTION: `provision.py --sync` REFUSES an engine carrying files nobody installed",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {(r.stderr or r.stdout)[:200]}")
+    core = engine / ".local" / "bin" / "plainkeep-core"
+    if not (CORE.is_file() and core_speaks_provision(CORE) and core.is_file()):
+        skipped.append("the INJECTION cells on the CORE path (" + (
+            "no compiled plainkeep-core — build it: cd cli && bun run build"
+            if not CORE.is_file() else STALE_CORE) + ")")
+        return
+    c = run(str(core), "--core-provision", "sync")
+    check("4b INJECTION: and the CORE reaches the same verdict — the walk covers the same trees, so "
+          "the two implementations agree on what `intact` means",
+          c.returncode == EXIT_DENY, f"rc={c.returncode} {(c.stderr or c.stdout)[:200]}")
+    check("4b INJECTION: the core names every injected file, in every owned tree it had to walk to "
+          "find them",
+          all(rel in c.stderr for rel in injected), f"injected={injected} stderr={c.stderr[:400]}")
 
 
 # --- 4a: where this lands relative to the seal --------------------------------------------------------
@@ -787,6 +926,8 @@ def main() -> int:
         case_offline_refusal(tmp)
         case_system_uv_is_ignored(tmp)
         case_checksum_gate(tmp)
+        case_pin_is_gated(tmp)
+        case_injected_file_is_refused(tmp)
         case_seal_interaction(tmp)
         case_delivered_lock(tmp)
         case_frozen_sync_offline(tmp)

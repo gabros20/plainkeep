@@ -17,7 +17,6 @@ import { mainCli } from "./guardrail.js";
 import {
   artifact,
   checkArgv,
-  deliveredDigestProblems,
   enginePython,
   ensureUv,
   loadPin,
@@ -25,8 +24,10 @@ import {
   platformTarget,
   projectEnv,
   ProvisionRefusal,
+  requireDeliveredIntact,
   syncArgv,
   syncEnv,
+  TamperRefusal,
   uvPath,
 } from "./provision.js";
 import { activateEngine, engineRoot, takeVaultSelector, VaultRefusal } from "./vaultroot.js";
@@ -154,23 +155,16 @@ async function coreProvision(spec: string, rest: string[]): Promise<CoreResult> 
       return p ? { stdout: p, code: 0 } : { code: 4 };
     }
     if (spec === "ensure-uv") {
+      // GATED TOO, inside `ensureUv`. This verb is reachable without `sync` and it is the one that
+      // installs and seals an executable, so an ungated version of it made the whole gate optional.
       return { stdout: await ensureUv(root, { allowNetwork: !offline }), code: 0 };
     }
     if (spec === "sync") {
       // THE CHECKSUM GATE FIRST, before uv is even downloaded — the same order `provision.sync()`
-      // uses, and for the same reason: a tampered lock must fail its checksum rather than be
-      // provisioned from.
-      const tampered = deliveredDigestProblems(root);
-      if (tampered.length) {
-        return {
-          stderr:
-            "plainkeep: refusing to provision from a delivered project that does not match its " +
-            "recorded checksums:\n  " + tampered.join("\n  ") +
-            "\n  the engine tree was modified after it was installed — reinstall it",
-          code: 5,
-        };
-      }
-      const uv = await ensureUv(root, { allowNetwork: !offline });
+      // uses, and for the same reason: a tampered tree (the lock, the project, or the PIN that
+      // chooses the binary) must fail its checksum rather than be provisioned from.
+      requireDeliveredIntact(root);
+      const uv = await ensureUv(root, { allowNetwork: !offline, checkDigests: false });
       const extras: string[] = [];
       for (let i = 0; i < rest.length - 1; i++) if (rest[i] === "--extra") extras.push(rest[i + 1]!);
       const env = syncEnv(root, offline);
@@ -193,6 +187,8 @@ async function coreProvision(spec: string, rest: string[]): Promise<CoreResult> 
       return { stdout: projectEnv(root), code: 0 };
     }
   } catch (e) {
+    // A tampered tree is a POLICY refusal (exit 5, EXIT_DENY), not the generic provisioning failure.
+    if (e instanceof TamperRefusal) return { stderr: e.message, code: 5 };
     if (e instanceof ProvisionRefusal) return { stderr: e.message, code: 1 };
     throw e;
   }

@@ -31,6 +31,15 @@ export const VENV_DIRNAME = "venv";
 export const PYTHON_DIRNAME = "python";
 export const PIN_REL = path.join("bin", "lib", "uvpin.json");
 
+// enginetree.OWNED_TREES / OWNED_FILES — what an installed engine claims as its own code, and so
+// what "the tree is intact" is a statement ABOUT. Ported for the same reason as PROVISION_DIR, and
+// with the same standard of proof: the parity suite asserts the two spellings agree, because a tree
+// this side forgets to walk is a tree an attacker can add a file to without the core noticing.
+// Posix-separated: these are manifest keys, not host paths.
+export const OWNED_TREES = ["bin", "templates/verb", "frontends/raycast",
+                            "skills/operate-plainkeep"] as const;
+export const OWNED_FILES = ["VERSION", "plainkeep", "pyproject.toml", "uv.lock"] as const;
+
 export type UvPin = {
   version: string;
   url_template: string;
@@ -39,6 +48,11 @@ export type UvPin = {
 };
 
 export class ProvisionRefusal extends Error {}
+
+// A refusal about the TREE rather than about the download — its own class because it carries its own
+// exit code (5, EXIT_DENY: a policy refusal), and because `cli.ts` must not report "the engine was
+// tampered with" as the generic exit 1 every other provisioning refusal uses.
+export class TamperRefusal extends ProvisionRefusal {}
 
 export function toolsDir(engineRoot: string): string {
   return path.join(engineRoot, PROVISION_DIR);
@@ -196,9 +210,13 @@ function extractMember(archive: string, member: string, dest: string): void {
 
 export async function ensureUv(
   engineRoot: string,
-  opts: { allowNetwork?: boolean } = {},
+  opts: { allowNetwork?: boolean; checkDigests?: boolean } = {},
 ): Promise<string> {
   const allowNetwork = opts.allowNetwork !== false;
+  // THE GATE, before the pin is even read — the pin is the file being defended, and this function is
+  // reachable on its own (`--core-provision ensure-uv`). `checkDigests: false` is for the one caller
+  // that has already asked, so the tree is hashed once per provisioning run.
+  if (opts.checkDigests !== false) requireDeliveredIntact(engineRoot);
   const pin = loadPin(engineRoot);
   const a = artifact(pin);
   const dest = uvPath(engineRoot, pin);
@@ -278,11 +296,16 @@ export function checkArgv(engineRoot: string, uv: string): string[] {
   return [uv, "lock", "--check", "--no-config", "--project", engineRoot];
 }
 
-// THE CHECKSUM GATE, ported (`enginetree.digest_problems(root, only=…)`), and this is not a
-// convenience: on a machine with no system python3 THIS is the provisioning path, so a version of it
-// that skipped the gate would mean "a tampered lock fails its checksum rather than installing" held
-// only on machines that did not need this file. The narrow form — the two files about to be handed to
-// uv — for the same reason the Python side passes `only`: two digests instead of ~114.
+// THE CHECKSUM GATE, ported (`enginetree.digest_problems`), and this is not a convenience: on a
+// machine with no system python3 THIS is the provisioning path, so a version of it that skipped the
+// gate would mean "a tampered lock fails its checksum rather than installing" held only on machines
+// that did not need this file.
+//
+// EVERY RECORDED FILE, not a named pair. This used to hard-code `["pyproject.toml", "uv.lock"]`, and
+// the file it left out was `bin/lib/uvpin.json` — the one that chooses which binary is downloaded and
+// what digest it is checked against. See `provision.require_delivered_intact` for the measurement;
+// the short version is that the narrow form let an attacker-supplied uv be installed, sealed and run
+// on this path too. ~114 sha256 of small files, ahead of a 35 MB download.
 //
 // Scoped to an INSTALLED tree (`<…>/engine/<version>/`), matching `enginetree._looks_installed`: a
 // contributor's checkout has no manifest and is not claiming to.
@@ -296,22 +319,76 @@ export function deliveredDigestProblems(engineRoot: string): string[] {
   } catch {
     return [`no recorded checksums for this engine (${manifest} is missing or unreadable)`];
   }
+  if (!files || typeof files !== "object" || Object.keys(files).length === 0) {
+    return [`no recorded checksums for this engine (${manifest} records no files)`];
+  }
   const problems: string[] = [];
-  for (const rel of ["pyproject.toml", "uv.lock"]) {
-    const want = files?.[rel];
-    if (!want) {
-      problems.push(`${rel} has no recorded checksum`);
-      continue;
-    }
+  for (const rel of Object.keys(files).sort()) {
     try {
-      if (sha256File(path.join(engineRoot, rel)) !== want) {
+      if (sha256File(path.join(engineRoot, rel)) !== files[rel]) {
         problems.push(`${rel} does not match its recorded checksum`);
       }
     } catch {
       problems.push(`${rel} is recorded but missing`);
     }
   }
-  return problems;
+  // AND THE OTHER DIRECTION: a file that is PRESENT but was never recorded. Python's
+  // `digest_problems` has always reported these when it checks the whole tree, and this port did
+  // not — invisible while the gate named two files by hand (neither can be "extra"), and a live
+  // parity hole the moment the gate widened to the tree. Checking only recorded paths answers
+  // "was anything CHANGED"; an attacker who ADDS `bin/lib/sitecustomize.py` changes nothing. The
+  // core is the only provisioning path on a machine with no system python3, so a check that holds
+  // there and not here holds exactly where it is not needed.
+  for (const rel of ownedPaths(engineRoot)) {
+    if (!(rel in files)) problems.push(`${rel} is present but was never recorded`);
+  }
+  return problems.sort();
+}
+
+// `enginetree._owned_paths`, ported: every owned FILE as sorted relative posix paths. Symlinks are
+// listed by neither side (`frontends/raycast` may legitimately carry one) and `__pycache__` is
+// excluded, both matching the Python walk exactly — a path one implementation calls owned and the
+// other does not is a disagreement about what "intact" means.
+function ownedPaths(engineRoot: string): string[] {
+  const rels: string[] = [];
+  for (const rel of OWNED_FILES) {
+    try {
+      if (fs.statSync(path.join(engineRoot, rel)).isFile()) rels.push(rel);
+    } catch {
+      /* absent is the manifest's business, checked above */
+    }
+  }
+  const walk = (dir: string, prefix: string): void => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (e.name === "__pycache__") continue;
+      const rel = `${prefix}/${e.name}`;
+      if (e.isSymbolicLink()) continue;
+      if (e.isDirectory()) walk(path.join(dir, e.name), rel);
+      else if (e.isFile()) rels.push(rel);
+    }
+  };
+  for (const tree of OWNED_TREES) walk(path.join(engineRoot, ...tree.split("/")), tree);
+  return [...new Set(rels)].sort();
+}
+
+// The gate as a REFUSAL rather than a list, so every entry point spells it the same way and none of
+// them can forget to look at the answer. `--core-provision ensure-uv` is reachable without `sync`,
+// and it is the command that installs and seals an executable.
+export function requireDeliveredIntact(engineRoot: string): void {
+  const problems = deliveredDigestProblems(engineRoot);
+  if (problems.length) {
+    throw new TamperRefusal(
+      "plainkeep: refusing to provision from a delivered project that does not match its " +
+        "recorded checksums:\n  " + problems.join("\n  ") +
+        "\n  the engine tree was modified after it was installed — reinstall it",
+    );
+  }
 }
 
 export function syncEnv(engineRoot: string, offline: boolean): Record<string, string> {

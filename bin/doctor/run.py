@@ -218,8 +218,14 @@ def main(argv):
            f"(python3 {enginetree.stable_launcher().parent / 'bin' / 'lib' / 'enginetree.py'} "
            f"--rollback)")
     else:
-        warn("engine: no previous pair retained — there is nothing to roll back to. The first "
-             "update from this version will create one.")
+        # `ok`, NOT `warn`, and the merge with Task 4 is what settled it. A machine that has run
+        # `script/setup` once and never updated has exactly one pair, and having nothing to roll
+        # back to is the CORRECT state for it — the same argument ADR-020 makes for an unprovisioned
+        # engine (a normal state, not a broken one), and warning on every fresh install is how a
+        # WARN bucket stops meaning "look at this". The retained pair becomes a promise the moment
+        # an update is run; until then there is nothing to promise.
+        ok("engine: no previous pair retained yet — there is nothing to roll back to. The first "
+           "`--update` from this version creates one.")
     if not pairs["state_agrees_with_current"]:
         warn(f"engine: an update was interrupted between recording its intent and switching the "
              f"pointer — the state file names {pairs['state_says_activated']!r} and `current` runs "

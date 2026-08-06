@@ -167,20 +167,53 @@ def pairs(root: Path) -> dict:
         return {}
 
 
+_ET_MOD = None
+
+
+def _enginetree():
+    """`bin/lib/enginetree.py` as a module, loaded BY PATH and cached.
+
+    Not `from lib import enginetree`: this suite uses `test/lib` (`lib.hermetic`, `lib.vaultfx`)
+    throughout, and the sys.path shuffle `run_provision.py` performs to make `lib` mean `bin/lib`
+    would take those with it. Loading under a private module name leaves both `lib` packages alone.
+
+    Read-only use: the OWNERSHIP MANIFEST, so a fixture cannot restate it and go stale. Everything
+    this suite ASSERTS still goes through the CLI in a child process (`et()`), because a claim about
+    the product proved by calling the product's functions in-process is the shape ADR-019 D1 rejects."""
+    global _ET_MOD
+    if _ET_MOD is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("_pk_enginetree_ro", ENGINETREE)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["_pk_enginetree_ro"] = mod
+        spec.loader.exec_module(mod)
+        _ET_MOD = mod
+    return _ET_MOD
+
+
 def slim_source(tmp: Path, label: str, *, mutate=None) -> Path:
     """A copy of the repo carrying exactly the engine-owned set (plus the core when asked).
 
     Used where a case needs to DAMAGE a source: mutating the real checkout is not an option, and a
-    copy is also how the version under test gets different bytes from the one already installed."""
+    copy is also how the version under test gets different bytes from the one already installed.
+
+    THE SET IS READ FROM THE PRODUCT, never restated here. It was restated here, once, and it cost
+    the whole suite: Task 4 added `pyproject.toml` and `uv.lock` to `OWNED_FILES` because the lock
+    must travel with the code it locks, this function's hand-written tuple did not follow, and every
+    install in the suite died with "source tree is missing pyproject.toml" — 96 of 118 checks red,
+    for a fixture that had simply gone stale. Importing `enginetree`'s own manifest means the next
+    owned path arrives here by construction. A source missing an owned path is a legitimate fixture
+    (see the `--install` refusal cells) but it has to be produced by asking for it."""
     src = tmp / f"src-{label}"
     if src.exists():
         shutil.rmtree(src, ignore_errors=True)
     ign = shutil.ignore_patterns("__pycache__", "*.pyc")
-    for rel in ("bin", "templates/verb", "frontends/raycast", "skills/operate-plainkeep"):
+    for rel in _enginetree().OWNED_TREES:
         d = src / rel
         d.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(REPO / rel, d, ignore=ign, symlinks=True)
-    for rel in ("VERSION", "plainkeep"):
+    for rel in _enginetree().OWNED_FILES:
+        (src / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / rel, src / rel)
     if mutate:
         mutate(src)
@@ -1002,11 +1035,87 @@ def _unguarded_mutations(f: Path, guard_names=_GUARD_NAMES) -> list[str]:
 
 
 # --------------------------------------------------------------------------------------------
+# F. TWO CHECKSUM LAYERS IN ONE MODULE — pinned so the second cannot eat the first again.
+# --------------------------------------------------------------------------------------------
+def case_two_digest_layers_stay_distinct(tmp: Path) -> None:
+    """`enginetree.py` carries TWO digest layers, and merging Tasks 4 and 5 collided them.
+
+    Task 4b records `.digests/<version>.json` over `OWNED_TREES`+`OWNED_FILES` and gates
+    provisioning on it — `provision.require_delivered_intact` calls `digest_problems(root)` before
+    a `uv.lock` and a `uvpin.json` are allowed to choose a binary to download and execute, which is
+    the RCE Task 4 closed. Task 5 records `.pairs/<version>.json` over the same set PLUS the
+    compiled core, because a pair is core+engine and a core that is not checksummed is half a pair.
+
+    They were both called `digest_problems`. Python keeps the LAST `def`, so Task 5's two-positional
+    signature silently replaced Task 4's, and `require_delivered_intact` began raising TypeError
+    from inside the gate. Nothing at either call site looked wrong; the collision was three hundred
+    lines apart and invisible in both diffs.
+
+    So: a NAME check (no duplicate top-level `def` in the module, read off the AST) and a BEHAVIOUR
+    check (each layer still answers about its own manifest, and only Task 5's sees the core). The
+    behaviour half matters because renaming one `def` back would pass the name check while a
+    copy-paste of the wrong body would not."""
+    src = tmp / "src"
+    ENGINETREE_SRC = ENGINETREE.read_text(encoding="utf-8")
+    tree = ast.parse(ENGINETREE_SRC)
+    names: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            names[node.name] = names.get(node.name, 0) + 1
+    dupes = sorted(n for n, c in names.items() if c > 1)
+    check("digest layers: no top-level function in enginetree.py is defined twice (a second `def` "
+          "SILENTLY wins, and that is how Task 4's provisioning gate was disabled by Task 5's merge)",
+          not dupes, f"redefined: {dupes}")
+
+    # BEHAVIOUR. Install a pair carrying a core, then ask both layers about it through the CLI —
+    # never in-process, so what is measured is what an operator's command measures.
+    root = tmp / "twolayer"
+    src = with_core(slim_source(tmp, "twolayer"))
+    core_present = (src / ".local" / "bin" / "plainkeep-core").is_file()
+    et(root, "--install", str(src), "--version", "1.0.0")
+    r = et(root, "--verify", "--digests")
+    check("digest layers: Task 4b's `--verify --digests` runs and finds an intact tree clean "
+          "(it raised TypeError while the name was shadowed)",
+          r.returncode == EXIT_OK and "OK" in r.stdout, f"rc={r.returncode} {(r.stdout+r.stderr)[:200]}")
+    d = et(root, "--digests", str(root / "engine" / "1.0.0"))
+    try:
+        pair = json.loads(d.stdout)["files"]
+    except Exception as e:                                      # noqa: BLE001
+        pair = {}
+        check("digest layers: `--digests` emits a pair manifest", False, f"{e} {d.stdout[:150]}")
+    check("digest layers: Task 5's pair manifest covers `bin/lib/enginetree.py` — the layers overlap "
+          "on the engine, which is why one name could plausibly serve both",
+          "bin/lib/enginetree.py" in pair, f"{len(pair)} files")
+    if core_present:
+        check("digest layers: ...and ONLY the pair manifest covers the compiled core, so they are "
+              "not interchangeable and collapsing them would lose the core's checksum",
+              CORE_REL_TEST in pair, f"core key absent from {len(pair)} files")
+        recorded = _read_json_file(root / "engine" / ".digests" / "1.0.0.json")
+        check("digest layers: Task 4b's `.digests` manifest does NOT cover the core (its subject is "
+              "the OWNED set, and the core is not an owned path)",
+              recorded is not None and CORE_REL_TEST not in (recorded.get("files") or {}),
+              str(sorted((recorded or {}).get("files", {}))[:2]))
+    else:
+        notes.append("no compiled core in this checkout (cli/: `bun run build`) — the digest-layer "
+                     "cells that separate the two manifests BY the core were skipped")
+
+
+CORE_REL_TEST = os.path.join(".local", "bin", "plainkeep-core")
+
+
+def _read_json_file(p: Path) -> dict | None:
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+# --------------------------------------------------------------------------------------------
 CASES = (case_init, case_init_refusals, case_update_retains_the_previous_pair,
          case_rollback_is_a_tested_command_sequence, case_prune_never_takes_what_you_need,
          case_checksum_gate, case_selftest_gate, case_updates_are_serialized,
          case_the_kill_hook_is_honest, case_kill_matrix, case_the_open_residue,
-         case_doctor_never_mutates)
+         case_doctor_never_mutates, case_two_digest_layers_stay_distinct)
 
 
 def main() -> int:

@@ -1191,12 +1191,21 @@ def pair_digests(root: Path) -> dict[str, str]:
     return out
 
 
-def digest_problems(root: Path, expected: dict) -> list[str]:
+def pair_digest_problems(root: Path, expected: dict) -> list[str]:
     """Every way the tree at `root` disagrees with `expected`, as one-line problems.
 
     Missing, changed AND extra are all problems: a manifest that only checked the files it lists
     would pass a tree with an extra `bin/<verb>/run.py` copied in from somewhere else, and a verb
-    directory is exactly what an attacker or a bad merge would add."""
+    directory is exactly what an attacker or a bad merge would add.
+
+    NAMED `pair_` FOR A REASON, and the reason is a real bug rather than taste. This function was
+    called `digest_problems` until Task 4b landed a `digest_problems(root, *, only=...)` above it —
+    the function `provision.require_delivered_intact` calls to decide whether a `uv.lock` and a
+    `uvpin.json` may be executed. Two `def`s of one name in one module: the second silently WON, and
+    Task 4's gate started raising TypeError instead of gating. Nothing about the collision was
+    visible at either call site. `run_engineupdate.py::case_two_digest_layers_stay_distinct` is what
+    stops it recurring; the two layers differ in scope (this one covers the compiled core, Task 4b's
+    does not) and are not interchangeable."""
     got = pair_digests(root)
     problems = []
     for rel in sorted(set(expected) | set(got)):
@@ -1467,7 +1476,7 @@ def update(src: Path, *, version: str | None = None, expect: Path | None = None,
         source_digests = pair_digests(src)
         if expected_from_record is not None and source_digests != expected_from_record:
             raise VaultError(f"the source pair at {src} does not match {expect}:\n  "
-                             + "\n  ".join(digest_problems(src, expected_from_record)[:8]),
+                             + "\n  ".join(pair_digest_problems(src, expected_from_record)[:8]),
                              code=output.EXIT_DENY,
                              hint="the recorded manifest and the source disagree — do not install "
                                   "either until you know which one is wrong")
@@ -1484,7 +1493,7 @@ def update(src: Path, *, version: str | None = None, expect: Path | None = None,
         # --- checksum, part 2: the STAGED TREE against the source it was copied from -------------
         # Over the tree at its FINAL path, sealed — so what is checked is what will be activated,
         # not a staging copy that a rename could still have truncated.
-        problems = digest_problems(dst, source_digests)
+        problems = pair_digest_problems(dst, source_digests)
         _kill_hook("checksum")
         if problems:
             remove_version(version)

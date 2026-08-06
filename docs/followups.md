@@ -527,6 +527,58 @@ in the merged tree and could not have been seen by either task alone.
   was copied from the source. Anyone who can write inside `engine/` can generally write the `.pairs/`
   directory beside it. Closing that needs a signature and a key, which this phase has not decided.
 
+### Deferred by the r1 review of this task
+
+Registered from `.orchestrate/review-task-p2-5-r1.md` (PASS_WITH_FOLLOWUPS, 0 blocking, 2 IMPORTANT
+both fixed in the r1 fix wave). Each line below was **measured by the reviewer** by driving the
+product, not read off the code; the evidence is kept with the item so nobody has to re-derive it.
+
+- **`activate()` (`enginetree.py:1056`) and `install()` (`:945`) do not take `_UpdateLock`, so
+  `_active_conflict`'s answer can go stale mid-update.** A concurrent manual `--activate <target>`
+  can point `current` at the very tree an in-flight update is about to replace — the one arrangement
+  in which the "everything destructive acts on a tree nothing is running" invariant does not hold.
+  `--update` is serialized against `--update` (proven: rc 0/3, no half-installed tree, no stale lock
+  after a SIGKILL); it is the *other two entry points* that stand outside the lock.
+- **The new path-wall exemptions are non-distinctive text matched by `startswith`.** The three
+  exempted spellings (`f.write_text(text, encoding="utf-8")`, `d.mkdir(parents=True,
+  exist_ok=True)`, `p.parent.mkdir(...)`) are common enough that a future unrelated write in the same
+  file is licensed silently. `test/run_pathwall.py:218` flags this against itself; the fix is to
+  anchor the exemption to a line number or an enclosing function rather than to a prefix.
+- **`run_provision.py:1055` matches doctor's provisioning rows by three literal marks**, with a
+  non-vacuity floor of `>= 2` found. A *fourth* provisioning row added later would be uncovered and
+  the floor would still be met, so coverage silently stops tracking the surface it describes.
+- **The "exactly ONE of two concurrent updates wins" cell is insensitive** (already registered above;
+  the reviewer supplied the discriminating form). Two racers targeting the **same** version give rc
+  `0` / `3` with the loser naming the lock, the winner's tree `--verify` OK and `capture` rc 0 in both
+  modes, and `--print pairs` coherent (`state_agrees_with_current: true`). That is the one-line fix:
+  make both racers ask for the same version.
+- **`--install` records `.digests` but no `.pairs`** (already registered above as the non-uniform
+  checksum property; the reviewer measured the operator-visible consequence). `--print pairs` reports
+  `no manifest` for a `script/setup`-installed tree, and that tree's 64 MB compiled core therefore
+  carries no checksum at all.
+- **`_generate_manifest` failure leaves `init` at exit 0 with `manifest: false`.** The vault then
+  needs one dispatch to self-heal. Rendered to the operator, so this is a stated choice rather than a
+  slip — but a fresh vault whose surface file is missing is a vault no agent can enumerate until
+  something happens to run in it.
+- **An engine installed before Task 4 widened `OWNED_FILES` is refused by `--activate`/`--verify`.**
+  Measured against the developer's real `4.0.0-dev`: "missing engine file: pyproject.toml, uv.lock,
+  bin/lib/pluginenv.py, tools/". Dispatch still works, because `require_intact` probes a subset —
+  so the machine looks healthy right up until the first `--update`. **Task 6 should expect
+  `script/setup` to be required before the first `--update` on any such machine**, and that is the
+  form this is most likely to be discovered in.
+- **Pre-existing, not this task: a global `PLAINKEEP_CORE=require` leaks into fixtures that build a
+  core-less engine.** `PLAINKEEP_CORE=require python3 run_all.py` is exit 1 on `main` too:
+  `run_get.py` (15/5, "PLAINKEEP_CORE=require but no live core binary at …" inside its own throwaway
+  engine — and on `main` it is worse, raising `FileNotFoundError`) and one `run_terminal.py` cell
+  (62/1, identical on `main`). **Exporting the variable across the whole batch is not a supported
+  spelling**; "both dispatcher modes" has to be a per-suite property, which is how
+  `run_engineupdate.py` does it.
+- **`case_two_digest_layers_stay_distinct`'s behaviour half is placement-sensitive.** A duplicate
+  `def` appended AFTER the `if __name__ == "__main__"` block is invisible to the CLI — `main()` runs
+  before the second `def` binds — so only the AST cell catches that shape. Measured both ways: a
+  duplicate inserted mid-file reddens both halves, one appended at the end reddens only the AST cell.
+  The AST cell is the load-bearing one, and it is the one whose scope is `enginetree.py` alone.
+
 ## Provisioning: the uv bootstrap and the delivered lock (Phase 2 Task 4, ADR-020)
 
 Registered by the r1 fix wave from the deferred MINOR/INFO list of

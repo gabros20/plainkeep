@@ -34,6 +34,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -1005,6 +1006,58 @@ def case_core_parity(tmp: Path) -> None:
           c.stdout.strip()[:120])
 
 
+# --- 1c: doctor's provisioning rows say something an operator can act on --------------------------
+def case_doctor_names_the_provisioning_command(tmp: Path) -> None:
+    """DOCTOR MUST NAME A COMMAND THAT ACTUALLY PROVISIONS.
+
+    The row used to read "`plainkeep setup` fetches it". It does not: no `plainkeep` verb reaches
+    `provision.ensure_uv` or `provision.sync()` — the only entry points are the module CLI and
+    `plainkeep-core --core-provision`. An operator following the row ran `plainkeep setup`, got a
+    vault `.venv` pip install, and watched the row not change.
+
+    All three of the 1c rows are pinned here, because the r1 review's second point about them is that
+    deleting the whole block left every suite green: nothing would have caught the text going stale
+    either. Driving the verb and grepping its output is the cheapest thing that would have."""
+    engine = install_engine(tmp / "doctorrows")
+    r = run(PY, str(engine / "bin" / "doctor" / "run.py"))
+    out = r.stdout + r.stderr
+    rows = [ln for ln in out.splitlines() if "engine:" in ln]
+    check("1c doctor: the unprovisioned-uv row NAMES the command that provisions",
+          any("--core-provision sync" in ln for ln in rows), " || ".join(rows)[:300])
+    check("1c doctor: and it no longer claims `plainkeep setup` fetches the pinned uv — it does not, "
+          "and an operator who ran it got a vault .venv pip install instead",
+          not any("`plainkeep setup` fetches it" in ln for ln in rows), " || ".join(rows)[:300])
+    # The command the row names has to BE a command. A row naming a spec the core rejects would be
+    # the same defect with a different string in it.
+    if CORE.is_file() and core_speaks_provision(CORE):
+        c = run(str(CORE), "--core-api", "intercepts")
+        check("1c doctor: `--core-provision` is a spec the core really accepts, so the row's advice "
+              "resolves to a real command",
+              "--core-provision" in json.loads(c.stdout)["flags"]["always"], c.stdout[:200])
+    else:
+        skipped.append("the doctor-row cell that confirms `--core-provision` is a live core spec ("
+                       + ("no compiled plainkeep-core — build it: cd cli && bun run build"
+                          if not CORE.is_file() else STALE_CORE) + ")")
+    check("1c doctor: the unprovisioned-interpreter row is present and states the stdlib floor "
+          "(an unprovisioned engine is a NORMAL state, not a broken one)",
+          any("no provisioned interpreter yet" in ln for ln in rows), " || ".join(rows)[:300])
+    # NOT doctor's exit code: a fixture vault legitimately fails other rows (no index), and asserting
+    # rc==0 here would make this cell about the fixture rather than about the 1c block. The claim is
+    # that an unprovisioned engine is a NORMAL state — so every one of these rows rides in the `ok`
+    # bucket, none is a WARN and none a FAIL.
+    check("1c doctor: every provisioning row is an `ok` row — an unprovisioned engine is a normal "
+          "state (the stdlib floor is the contract, ADR-009), not a broken one",
+          all("ok" in re.sub(r"\033\[[0-9;]*m", "", ln).split("engine:")[0] for ln in rows),
+          " || ".join(re.sub(r"\033\[[0-9;]*m", "", ln) for ln in rows)[:300])
+    # The system-uv row is conditional on the machine having one, so it is asserted only where it
+    # applies rather than skipped wholesale — the claim it carries is the one D3 promises operators.
+    if provision.system_uv():
+        check("1c doctor: a system uv present on this machine is reported as IGNORED",
+              any("is IGNORED" in ln for ln in rows), " || ".join(rows)[:300])
+    else:
+        skipped.append("the doctor system-uv row (no system uv on this machine to be ignored)")
+
+
 def main() -> int:
     global FIXTURE_HOME
     with tempfile.TemporaryDirectory(prefix="pk-provision-") as td:
@@ -1023,6 +1076,7 @@ def main() -> int:
         case_frozen_sync_offline(tmp)
         case_core_parity(tmp)
         case_product_consults_the_matrix(tmp)
+        case_doctor_names_the_provisioning_command(tmp)
         # Installed trees are sealed 0555, which TemporaryDirectory cannot remove.
         for p in sorted(tmp.rglob("*"), key=lambda q: len(q.parts), reverse=True):
             try:

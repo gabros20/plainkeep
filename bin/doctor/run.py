@@ -181,7 +181,11 @@ def main(argv):
     # 1c. PROVISIONING (Phase 2 Task 4 / ADR-020). Three rows, and each of them exists because an
     # operator has a different next move:
     #
-    #   * the pinned uv — absent means `plainkeep setup` will try to download it, which needs network;
+    #   * the pinned uv — absent means nothing has downloaded it yet, and the download needs network.
+    #     The row names `plainkeep-core --core-provision sync`, not `plainkeep setup`: no `plainkeep`
+    #     verb reaches `provision.ensure_uv` or `provision.sync()` at all (Phase 2 Task 4 r1 review),
+    #     so the old wording sent operators to a verb that pip-installs into the VAULT's .venv and
+    #     leaves this row exactly as it was;
     #   * the engine interpreter — absent means the engine has never been synced;
     #   * a SYSTEM uv — present means the operator has one and might reasonably expect it to be used.
     #     It is NOT. This row is the whole of the "one line saying so" the pin's design allows: a
@@ -196,7 +200,13 @@ def main(argv):
         if uv.is_file():
             ok(f"engine: pinned uv {provision.load_pin(paths.ENGINE)['version']} present")
         else:
-            ok(f"engine: pinned uv not provisioned yet ({uv}) — `plainkeep setup` fetches it")
+            # NAMES THE COMMAND THAT ACTUALLY DOES IT. This row used to say "`plainkeep setup`
+            # fetches it", and it does not: no verb reaches `provision.ensure_uv` or
+            # `provision.sync()` — the only entry points are the module CLI and the core's
+            # `--core-provision`. An operator following the old text ran `plainkeep setup`, got a
+            # vault `.venv` pip install, and watched this row not change.
+            ok(f"engine: pinned uv not provisioned yet ({uv}) — `plainkeep-core --core-provision "
+               "sync` fetches it (no `plainkeep` verb provisions the engine yet)")
         epy = provision.engine_python(paths.ENGINE)
         if epy:
             # The COUNT, not the list: it is the cheap signal that distinguishes "synced with no

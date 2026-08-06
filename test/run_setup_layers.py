@@ -652,7 +652,9 @@ def main() -> int:
             # dispatch this fixture performs runs the guardrail, the guardrail APPENDS to
             # `<root>/.logs/plainkeep.log`, and through a symlink that append landed in the real
             # checkout's audit log on every green run (measured: one line per run).
-            if entry.name in (".venv", ".git", ".logs", ".orchestrate", "__pycache__"):
+            # `.plainkeep` joins the skip list because the fixture MARKS ITSELF below — see there.
+            if entry.name in (".venv", ".git", ".logs", ".orchestrate", "__pycache__",
+                              ".plainkeep"):
                 continue
             # plainkeep.json is COPIED, not symlinked: `plainkeep help` regenerates a stale manifest,
             # and through a symlink that write lands in the real checkout. The path-wall now refuses
@@ -662,6 +664,19 @@ def main() -> int:
                 shutil.copy2(entry, broken_home / entry.name)
                 continue
             os.symlink(entry, broken_home / entry.name)
+        # THE FIXTURE MARKS ITS OWN HOME, and this is what made the cell environment-dependent.
+        # The mirror above symlinked whatever `.plainkeep` the checkout happened to have. A
+        # developer's checkout is registered (`script/setup` step 4b marks it), so the marker came
+        # for free and the cell was green. A bare worktree or a `git archive` export has no
+        # `.plainkeep`, the dispatcher refused with "not a plainkeep vault (no .plainkeep/vault.json)"
+        # — exit 0, so the failure read as a dispatcher bug — and the cell went red for a reason that
+        # has nothing to do with the venv probe it exists to check. Measured: red in this worktree,
+        # green in the developer's registered checkout, on identical code. A fixture that needs a
+        # marked root has to make one.
+        from lib import vaultreg  # noqa: E402  (`lib` is bin/lib below the shuffle at the top)
+        (broken_home / vaultreg.MARKER_DIR).mkdir(parents=True, exist_ok=True)
+        vaultreg.marker_path(broken_home).write_text(
+            vaultreg.marker_bytes(vaultreg.new_marker_doc()), encoding="utf-8")
         vbin = broken_home / ".venv" / "bin"
         vbin.mkdir(parents=True)
         (vbin / "python3").write_text("#!/nonexistent/interp\nnot a real python\n")

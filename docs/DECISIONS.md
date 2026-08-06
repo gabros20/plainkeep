@@ -1752,9 +1752,60 @@ boundary is really reached by a real update, and that no value of the variable l
 SIGKILL rather than SIGABRT because it is the harshest interruption available and the one signal
 macOS does not route through the crash reporter.
 
+### D9 — what the merge with Task 4 decided, which no plan section could have
+
+Tasks 4 and 5 were written in parallel against the same two files. Landing them together forced three
+decisions that neither brief made, and one of them was a security regression that existed only in the
+merge.
+
+1. **`enginetree.py` now carries TWO checksum layers, and they stay separate.** Task 4b records
+   `.digests/<version>.json` over `OWNED_TREES`+`OWNED_FILES` and gates provisioning on it; Task 5
+   records `.pairs/<version>.json` over the same set **plus the compiled core**, because a pair is
+   core+engine and an unchecksummed core is half a pair. Measured on this checkout: the pair manifest
+   carries the `.local/bin/plainkeep-core` key, the digest manifest does not. Collapsing them would
+   lose the core's checksum or widen a gate that was written narrow on purpose.
+2. **They were both called `digest_problems`, and the second `def` silently won.** Python keeps the
+   last definition, so Task 5's `digest_problems(root, expected)` replaced Task 4b's
+   `digest_problems(root, *, only=...)` — the function `provision.require_delivered_intact` calls
+   before a `uv.lock` and a `uvpin.json` are allowed to choose a binary to download and execute.
+   From the merge commit onward that gate raised `TypeError` instead of gating, and so did
+   `--verify --digests`. **This is ADR-019's failure with a new mechanism**: not a rule nothing
+   consults, but a rule whose implementation was replaced out from under its call site, with clean
+   diffs on both sides and nothing wrong at either end. Task 5's is now `pair_digest_problems`, and
+   `case_two_digest_layers_stay_distinct` pins it two ways — an AST check that no top-level `def` in
+   the module is duplicated, and a behavioural check through the CLI that each layer still answers
+   about its own manifest. The name check alone would pass a copy-pasted body.
+3. **D6 clause 4 got an enforcement, because the merge is what made it worth having.** "Doctor never
+   reaches the network" cost nothing to promise while no module doctor imported could download
+   anything. After the merge doctor imports `provision`, whose subject is fetching a pinned uv over
+   HTTPS. The suite now reads doctor's parse tree for a call into `provision`'s downloading half
+   (`ensure_uv`, `sync`, `_fetch`, …) and for any network-capable import of its own. **Its limit is
+   stated rather than glossed**: a parse tree cannot prove a socket is never opened. It is paired
+   with the snapshot cells, which prove no byte of the engine install root changes across a doctor
+   run in both dispatcher modes — and a download that changed nothing on disk would be a download
+   with no effect. Mutation-tested: adding `provision.ensure_uv(paths.ENGINE)` to doctor turns the
+   cell red.
+
+**Also settled in the merge, and smaller:** doctor's "no previous pair retained" is an `ok` row, not
+a `warn`. A machine that has run `script/setup` once and never updated is in the correct state, and
+it is the same argument ADR-020 makes for an unprovisioned engine — warning on every fresh install is
+how a WARN bucket stops meaning "look at this".
+
 ### Measured
 
-- `test/run_engineupdate.py`: **177 checks, 0 failed** (≈140 s), from the repo root and from `test/`.
+- `test/run_engineupdate.py`: **194 checks, 0 failed** (≈107 s), from the repo root and from `test/`.
+  (177 before the Task 4 merge; the added 17 are the two digest layers, the three clause-4 cells, and
+  the core-carrying cells that only run when `cli/` has been built.)
+- **The whole suite, green from both working directories and with and without a compiled core**:
+  `python3 test/run_all.py` from the repo root and from `test/`; `cd cli && bun test` — 112 pass,
+  2 skip, 0 fail (the 2 are the crash-noise gate, deliberately never enabled).
+- **An independent shell harness**, written to avoid re-running this suite's own beliefs: 47 checks
+  over the eight boundaries plus rollback and the serialization race, and 16 more driving the
+  residue window directly in both its shapes. Every "runnable" claim is `vault status --json` **and**
+  `capture` through `engine/current/plainkeep`, in `PLAINKEEP_CORE=off` and `=require`.
+- **Real-environment delta: NONE.** `~/.local/share/plainkeep` and `~/.config/plainkeep` — 161 entries
+  each, byte-identical before and after; the developer's vault content — 17 files, checksums
+  identical.
 - Failure injection: **8 boundaries × (kill → drive a real verb → re-run → re-run again)**. After
   every kill a pair was active and answered both `vault status --json` and `capture`; the active
   version was always one of the two pairs, never a third thing.

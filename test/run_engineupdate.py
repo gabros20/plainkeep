@@ -982,6 +982,59 @@ def case_doctor_never_mutates(tmp: Path) -> None:
     check("doctor: ...and that ratchet FINDS them when the guard is not counted (it is not vacuous)",
           len(found) >= 3, str(found[:4]))
 
+    # CLAUSE 4 — "doctor never reaches the network" — which was ASSERTED in the ADR and enforced by
+    # nothing, and which the merge with Task 4 is what made worth enforcing. Before it, no module
+    # doctor imports could download anything. After it, doctor imports `provision`, whose whole
+    # subject is fetching a pinned uv over HTTPS and running `uv sync` against PyPI. The distance
+    # between "doctor reports the provisioning state" and "doctor provisions" is one call.
+    #
+    # Structural, and the limit is stated rather than glossed: this reads doctor's parse tree for a
+    # call into `provision`'s downloading/mutating half. It cannot prove a socket is never opened —
+    # that would need a network the suite can fail — so it is paired with the snapshot cells above,
+    # which prove no BYTE of the engine root changes, and a download that changed nothing on disk
+    # would be a download with no effect. Together they are what this suite can honestly claim.
+    reached = _provision_calls(REPO / "bin" / "doctor" / "run.py")
+    check("doctor: calls only provision's READING half — never ensure_uv/sync/_fetch, the three "
+          "that download or write (ADR-021 D6 clause 4, and Task 4 is what put them in reach)",
+          not (reached & _PROVISION_MUTATORS), f"reached: {sorted(reached & _PROVISION_MUTATORS)}")
+    check("doctor: ...and it really does call the reading half, so the check above is not passing "
+          "because the import went away",
+          bool(reached & {"uv_path", "engine_python", "system_uv", "installed_dists", "load_pin"}),
+          f"reached: {sorted(reached)}")
+    check("doctor: imports no network module of its own",
+          not _imports_network(REPO / "bin" / "doctor" / "run.py"),
+          str(_imports_network(REPO / "bin" / "doctor" / "run.py")))
+
+
+# `provision`'s downloading / mutating half. Named individually rather than derived, because the
+# point is that adding one to doctor has to be a deliberate act somebody notices here.
+_PROVISION_MUTATORS = {"ensure_uv", "sync", "_fetch", "_extract_member", "_unseal"}
+# Modules that can open a socket. `provision` imports urllib legitimately; doctor must not.
+_NETWORK_MODULES = {"urllib", "urllib.request", "http", "http.client", "socket", "ssl",
+                    "ftplib", "requests", "httpx"}
+
+
+def _provision_calls(f: Path) -> set[str]:
+    """Every `provision.<name>(...)` reached anywhere in `f`, read off the parse tree."""
+    out: set[str] = set()
+    for n in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+        if (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                and isinstance(n.func.value, ast.Name) and n.func.value.id == "provision"):
+            out.add(n.func.attr)
+    return out
+
+
+def _imports_network(f: Path) -> list[str]:
+    """Network-capable modules imported by `f`, at module scope or inside a function."""
+    out: list[str] = []
+    for n in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
+        if isinstance(n, ast.Import):
+            out += [a.name for a in n.names if a.name.split(".")[0] in _NETWORK_MODULES]
+        elif isinstance(n, ast.ImportFrom) and n.module:
+            if n.module.split(".")[0] in _NETWORK_MODULES:
+                out.append(n.module)
+    return out
+
 
 # The calls that CHANGE something. Deliberately a small, named set rather than "anything that looks
 # like a write": a list that tried to be exhaustive would be a list nobody could reason about, and

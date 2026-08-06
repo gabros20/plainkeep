@@ -361,14 +361,23 @@ fixing it needs.
   `run_engineupdate.py::case_rollback_is_a_tested_command_sequence`, and `prune()` (default
   `--keep 2`) runs after every activation and refuses to remove the active version or the rollback
   target. It has still never been used in the FIELD; what changed is that it is exercised.
-- **No engine tree is CHECKSUMMED except one installed by `--update`.** Task 5 records a per-file
-  sha256 manifest at `<install-root>/engine/.pairs/<version>.json` (outside the sealed tree) for
-  every pair `update()` activates, and re-verifies the staged tree against its source before
-  activation. `--install` writes none, so a tree installed by `script/setup` has no manifest and
-  `--print pairs` reports `no manifest` for it. Measured: on this machine, a fresh `--install`
-  followed by `--print pairs` shows the version with `checksums: false`. *Deferred because
-  `--install` is also the repair path, and a manifest written by the same run that wrote the tree
-  proves less than one written elsewhere.*
+- **A tree carries TWO checksum manifests, written by different tasks for different scopes.**
+  ~~No engine tree is CHECKSUMMED except one installed by `--update`.~~ **Falsified by the Task 4
+  merge, and the correction is the entry**: Task 4b's `install()` records
+  `<install-root>/engine/.digests/<version>.json` over `OWNED_TREES`+`OWNED_FILES` for EVERY install,
+  including `script/setup`'s — so the original claim was already untrue by the time Tasks 4 and 5 sat
+  in one tree. Task 5 additionally records `.pairs/<version>.json` for every pair `update()`
+  activates, over the same set **plus** the compiled core, and re-verifies the staged tree against
+  its source before activation. Measured on this checkout: `--digests` on a freshly installed tree
+  lists `.local/bin/plainkeep-core`; the `.digests` manifest for the same tree does not. So a tree
+  installed by `script/setup` IS checksummed — but its core is not, and `--print pairs` still reports
+  `no manifest` for it because that column reads `.pairs/`, not `.digests/`. *Deferred: the two
+  manifests overlap on ~114 files and are hashed twice per update (cheap — the cost is the 64 MB
+  core, hashed once). What is not cheap is that "is this tree what was installed" now has two
+  answers, and a reader can consult the one that does not cover what they care about. Unifying them
+  means widening Task 4's provisioning gate to cover the core, which is a security-boundary change
+  and not a merge cleanup. `case_two_digest_layers_stay_distinct` pins them apart until someone does
+  it deliberately.*
 - **The `remove_version()` → `os.rename` window is still open on `--install --force`.** ADR-021 D7
   carries the measurement in both directions: killed there, `--install --force` over the ACTIVE
   version leaves **no runnable engine** and a dangling `current` (recovered by a plain `--install`),
@@ -461,17 +470,62 @@ deliberately left. Each was reproduced by the reviewer.
   modes it has already paid for and therefore does cover the verb entry points, so the gap is
   specifically the check run by callers that have NOT already walked the tree. *Deferred: walking is
   the honest fix and costs a full tree stat on a path that runs per invocation.*
-- **A fresh checkout with no `.plainkeep/vault.json` marker takes four suites red, and the failure
+- ~~**A fresh checkout with no `.plainkeep/vault.json` marker takes four suites red, and the failure
   does not say so.** Measured in a clean Phase 2 Task 7 worktree (`PLAINKEEP_CORE=require`, core
   binary built): `run_tui_pty` **0 passed / 13 failed**, `run_mcp` **4 / 12**, `run_mcp_protocol`
-  **3 / 23**, `run_setup_layers` **100 / 1**. All four copy the repo into a temp vault and dispatch
-  through it; since ADR-014 Task 1b an unmarked root is refused with exit 2, and the suites report
-  that as a protocol failure. Marking the checkout (`vault register`, with `PLAINKEEP_CONFIG_HOME`
-  pointed at scratch so the real registry is untouched) takes all four to **24/24, 16/16, 161/161,
-  101/101**. `script/setup` does this for a normal contributor; a worktree created with `git
-  worktree add` gets no marker, because `.plainkeep/` is gitignored. *Nothing detects it: the fix is
-  either a check in `run_all.py` that says "this checkout is not a marked vault, here is the one
-  command", or a suite-level fixture that marks its own copy.*
+  **3 / 23**, `run_setup_layers` **100 / 1**.~~ **Closed by Phase 2 Task 5**, with the second of the
+  two fixes this entry proposed: each of the four fixtures now MARKS ITS OWN copy
+  (`vaultfx.mark_vault`) and excludes `.plainkeep` from the tree it copies, rather than inheriting
+  whatever marker the developer's checkout carried. The independently reproduced numbers matched this
+  entry exactly, and after the fix the four read **24/24, 16/16, 161/161, 101/101** in an unmarked
+  worktree — and unchanged in a marked one, verified by marking this worktree and re-running.
+  The suite-level fixture was chosen over a `run_all.py` precondition check for the reason the
+  entry's own measurement implies: a precondition tells a contributor to go mark their checkout,
+  which makes the suite pass BECAUSE of the environment rather than independently of it, and a CI
+  runner or a `git archive` export has no reason to be a vault at all. *What is NOT closed: nothing
+  detects the general class. A future fixture that copies the repo and forgets to mark it will be
+  green on a developer's machine and red everywhere else, exactly as these four were, and the only
+  thing that found them was running the suite somewhere the marker did not exist.*
+
+## `init` and `update` (Phase 2 Task 5, ADR-021)
+
+Registered while finishing the task after its first agent was interrupted. Everything below was
+measured on this machine after merging `main` (Task 4) into the branch — several of these exist ONLY
+in the merged tree and could not have been seen by either task alone.
+
+- **A duplicate top-level `def` silently disabled a security gate, and only a suite caught it.**
+  Tasks 4b and 5 both defined `enginetree.digest_problems`, ~300 lines apart, with different
+  signatures. Python keeps the last, so `provision.require_delivered_intact` — the gate deciding
+  whether a `uv.lock` and a `uvpin.json` may pick a binary to download and execute — raised
+  `TypeError` instead of gating. Fixed (`pair_digest_problems`) and pinned by
+  `case_two_digest_layers_stay_distinct`. *What is NOT closed: the AST check covers `enginetree.py`
+  only. Every other module in this repo can still absorb a duplicate `def` from a merge with clean
+  diffs on both sides and no runtime complaint. A repo-wide version of that check is cheap and
+  nobody has written it.*
+- **D6 clause 4 ("doctor never reaches the network") is enforced STRUCTURALLY, not observationally.**
+  The suite reads doctor's parse tree for a call into `provision`'s downloading half and for a
+  network-capable import. It cannot prove no socket is opened. It is paired with the snapshot cells,
+  which prove no byte of the engine install root changes across a doctor run in both dispatcher
+  modes. *An observational proof needs a suite that can fail a network — a loopback-only namespace,
+  or a `urllib` shim injected into the child — and neither is offline-stdlib-cheap on macOS.*
+- **`update` inherits `install()`'s replace window, and the update path CAN reach it.** Only when the
+  target version already has a tree that fails `verify()` — the state an earlier kill leaves. Driven
+  directly: the injection fires, the target tree is gone, and the RUNNING pair is untouched and
+  answers both `vault status --json` and `capture` in both modes. Harmless because the target is
+  never the running version, which is `_active_conflict`'s whole job. The window itself is still
+  open on `--install --force` (see the entry above and ADR-021 D7).
+- **The self-test dispatches `vault status` and nothing else.** One read-only verb through the real
+  dispatcher in both modes. It catches a truncated core (measured: `--verify` rc=0, `--update` rc=5)
+  and a tree that cannot start. It does not catch a pair that starts and then gets a WRITE verb
+  wrong. *Deferred: a self-test that writes needs a throwaway vault it is willing to dirty, which it
+  already builds — so the cost is runtime and the risk is a self-test that fails for a reason
+  unrelated to the pair.*
+- **`--keep` cannot go below 2 and nothing warns when a prune declines to run.** `prune()` protects
+  the active version and the rollback target unconditionally, so a `--keep 1` is silently raised.
+  Correct, and invisible: an operator managing disk gets no signal that their bound was ignored.
+- **The pair manifest is not a security boundary**, and the ADR says so. It proves the tree is what
+  was copied from the source. Anyone who can write inside `engine/` can generally write the `.pairs/`
+  directory beside it. Closing that needs a signature and a key, which this phase has not decided.
 
 ## Provisioning: the uv bootstrap and the delivered lock (Phase 2 Task 4, ADR-020)
 

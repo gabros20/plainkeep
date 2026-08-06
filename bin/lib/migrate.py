@@ -18,11 +18,21 @@ against this vault, in a subprocess that inherited no `PLAINKEEP_HOME`.
 THE DESIGN CONSTRAINT (Phase 2 panel, Codex). Protected-content modification is impossible WITHIN
 THIS MODULE'S ACTION SPACE, and that is a stronger statement than "it does not happen":
 
-  1. **The vault is never opened for writing.** There is exactly one function in this module that
-     removes anything from a vault (`_remove_engine_path`), it takes a repo-relative path, and it
-     refuses any path that is not in `_VERIFIED` — the set produced by `verify_candidate()` from a
-     git tree diff. No other call in this file writes inside a vault. `test/run_migrate.py`'s AST
-     ratchet asserts that, per function, against the parse tree rather than the source text.
+  1. **The vault is never opened for writing.** No call in this file opens a path inside a vault for
+     writing — not `open`, not `write_text`, not `mkdir`, not `shutil`. Exactly TWO functions remove
+     anything from a vault and both are gated on `_VERIFIED`, the set `verify_candidate()` produces
+     from a git tree diff: `_remove_engine_path` deletes a FILE and refuses any path not in that set,
+     and `_remove_empty_dir` removes a DIRECTORY and refuses one that is not an ancestor of a
+     verified deletion (after which `os.rmdir` itself refuses any directory that is not empty).
+     `test/run_migrate.py`'s AST ratchet asserts this per function against the parse tree rather than
+     the source text: it taints every local name derived from a function's `vault` argument and
+     flags a write primitive applied to a tainted expression anywhere outside those two.
+
+     The ratchet's honest limit is that `git` runs in a subprocess and no Python-level analysis can
+     see what it writes. So there is a SECOND ratchet over the git argv this module constructs: no
+     function may invoke a git subcommand that touches the WORKING TREE (`checkout`, `read-tree -u`,
+     `reset`, `restore`, `clean`, `apply`, …). `rollback` is the one exception, it is declared there,
+     and it is the only place a working-tree checkout is what the operator asked for.
   2. **The change is constructed as a git tree.** The removal is built in a TEMPORARY git index
      (`GIT_INDEX_FILE` under scratch), never the vault's own, and `git write-tree` yields a candidate
      tree object. Nothing in the working tree has moved at this point.
@@ -308,6 +318,38 @@ def _remove_engine_path(vault: Path, rel: str) -> None:
         os.remove(p)
 
 
+def _remove_empty_dir(vault: Path, rel: str) -> bool:
+    """THE ONLY OTHER FUNCTION THAT REMOVES ANYTHING FROM A VAULT, and it removes only directories.
+
+    Gated on `_VERIFIED` like `_remove_engine_path`, but on a different question: a directory is not
+    itself a verified deletion, so what is checked is that it is an ANCESTOR of one. A migration has
+    no business removing a directory that held nothing it deleted.
+
+    `os.rmdir` then refuses a non-empty directory, and that is the second half of the property: even
+    an ancestor keeps its directory if anything of the operator's is still inside it. Both halves
+    matter — the ancestor check is what makes the removal in-scope, and `rmdir`'s own refusal is what
+    makes it non-destructive.
+
+    This function exists because the module docstring used to claim there was exactly ONE removing
+    function while `_prune_empty_dirs` called `os.rmdir` on a vault path with no gate at all. The
+    AST ratchet in `test/run_migrate.py` reads that claim off this module and would have to be
+    written around the exception; a rule with an exception carved for the code that breaks it is the
+    shape ADR-019 catalogues. So the code changed, not the rule."""
+    if _VERIFIED is None:
+        raise VaultError(f"refusing to remove the directory {rel!r}: nothing has been verified",
+                         code=output.EXIT_DENY)
+    pre = rel.rstrip("/") + "/"
+    if not any(v.startswith(pre) for v in _VERIFIED):
+        raise VaultError(
+            f"refusing to remove the directory {rel!r}: it is not an ancestor of any verified "
+            f"deletion", code=output.EXIT_DENY)
+    try:
+        os.rmdir(vault / rel)
+        return True
+    except OSError:
+        return False
+
+
 def _prune_empty_dirs(vault: Path, removed: list[str]) -> list[str]:
     """Remove directories left empty by the deletions, bottom-up, stopping at the vault root.
 
@@ -330,11 +372,8 @@ def _prune_empty_dirs(vault: Path, removed: list[str]) -> list[str]:
             cands.add(str(p))
             p = p.parent
     for d in sorted(cands, key=lambda d: -d.count("/")):
-        try:
-            os.rmdir(vault / d)
+        if _remove_empty_dir(vault, d):
             gone.append(d)
-        except OSError:
-            pass
     return sorted(gone)
 
 
@@ -1057,11 +1096,6 @@ def _apply(vault: Path, pre: dict, scratch: Path) -> dict:
     pruned = _prune_empty_dirs(vault, verified)
     _kill_hook("worktree-pruned")
     return {"commit": commit, "removed": removed, "pruned_dirs": pruned}
-
-
-def _VERIFIED_reset(s: set[str]) -> None:
-    global _VERIFIED
-    _VERIFIED = s
 
 
 def _prune_worktree(vault: Path, verified: list[str]) -> list[str]:

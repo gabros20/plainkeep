@@ -653,6 +653,63 @@ def case_seal_interaction(tmp: Path) -> None:
           str(enginetree.verify(engine)))
 
 
+def case_reseal_keeps_the_environment(tmp: Path) -> None:
+    """RE-SEALING A PROVISIONED TREE MUST NOT SEAL THE ENVIRONMENT INSIDE IT.
+
+    `_chmod_tree`'s walk is `root.rglob("*")` — the whole tree — and `_seal_installed` re-opened
+    `tools/` ITSELF only, so a tree that had already been provisioned came out of a re-seal with
+    `tools/venv` and the uv-managed interpreter under it read-only. `verify()` asks whether the one
+    directory is writable, which it was, so the half-sealed state was invisible and the next
+    `uv sync` failed on permissions inside a venv uv owns.
+
+    Driven through the PRODUCT, on the documented shape that reaches it: `--install --writable` (a dev
+    install) → provision → plain `--install`, which takes the repair branch because `verify()` returns
+    `[_UNSEALED]`. The assertion is about MODES, not about `verify()`'s verdict — `verify()` said OK
+    throughout, which is the half of the defect that made it survive."""
+    home = tmp / "reseal"
+    r = run(PY, str(ENGINETREE_PY), "--install", str(REPO), "--force", "--writable",
+            env={"PLAINKEEP_ENGINE_HOME": str(home)})
+    if r.returncode != 0:
+        raise RuntimeError(f"fixture install failed: {r.stderr[:400]}")
+    engine = home / "engine" / VERSION
+    # What `uv sync` leaves behind: an environment uv owns, and an interpreter inside it.
+    venvbin = engine / enginetree.PROVISION_DIR / provision.VENV_DIRNAME / "bin"
+    venvbin.mkdir(parents=True)
+    (venvbin / "python3").write_text("#!/bin/sh\nexec true\n", encoding="utf-8")
+    (venvbin / "python3").chmod(0o755)
+    site = engine / enginetree.PROVISION_DIR / provision.VENV_DIRNAME / "lib" / "python3.99" / "sp"
+    site.mkdir(parents=True)
+    (site / "installed.py").write_text("X = 1\n", encoding="utf-8")
+
+    r = run(PY, str(ENGINETREE_PY), "--install", str(REPO), env={"PLAINKEEP_ENGINE_HOME": str(home)})
+    check("4a seal: a plain --install over an unsealed tree takes the REPAIR branch and seals it",
+          r.returncode == 0 and not stat.S_IMODE(engine.stat().st_mode) & stat.S_IWUSR,
+          f"rc={r.returncode} {oct(stat.S_IMODE(engine.stat().st_mode))} {r.stderr[:150]}")
+    for rel in ("bin/lib/provision.py", "pyproject.toml"):
+        m = stat.S_IMODE((engine / rel).stat().st_mode)
+        check(f"4a seal: the ENGINE CODE is sealed by that repair ({rel})", not m & stat.S_IWUSR,
+              oct(m))
+    for rel in (f"{enginetree.PROVISION_DIR}/{provision.VENV_DIRNAME}",
+                f"{enginetree.PROVISION_DIR}/{provision.VENV_DIRNAME}/bin",
+                f"{enginetree.PROVISION_DIR}/{provision.VENV_DIRNAME}/bin/python3",
+                f"{enginetree.PROVISION_DIR}/{provision.VENV_DIRNAME}/lib/python3.99/sp/installed.py"):
+        m = stat.S_IMODE((engine / rel).stat().st_mode)
+        check(f"4a seal: the PROVISIONED environment survives the re-seal writable ({rel}) — uv owns "
+              "it, and a sealed venv is a `uv sync` that fails on permissions",
+              m & stat.S_IWUSR, oct(m))
+    check("4a seal: and the tree still verifies clean (it did BEFORE the fix too — the mode check "
+          "cannot see inside tools/, which is why this cell asserts modes and not the verdict)",
+          enginetree.verify(engine) == [], str(enginetree.verify(engine)))
+    # The other direction is unchanged and load-bearing: unsealing must still reach into tools/, or
+    # `remove_version` cannot delete a provisioned tree.
+    (venvbin / "python3").chmod(0o555)
+    venvbin.chmod(0o555)
+    enginetree._chmod_tree(engine, writable=True)
+    check("4a seal: UNSEALING still walks tools/ — it is only ever a prelude to rmtree, which has to "
+          "reach everything",
+          stat.S_IMODE(venvbin.stat().st_mode) & stat.S_IWUSR, oct(stat.S_IMODE(venvbin.stat().st_mode)))
+
+
 # --- 4b: the delivered lock and its checksums ---------------------------------------------------------
 def case_delivered_lock(tmp: Path) -> None:
     engine = install_engine(tmp / "lock")
@@ -961,6 +1018,7 @@ def main() -> int:
         case_pin_is_gated(tmp)
         case_injected_file_is_refused(tmp)
         case_seal_interaction(tmp)
+        case_reseal_keeps_the_environment(tmp)
         case_delivered_lock(tmp)
         case_frozen_sync_offline(tmp)
         case_core_parity(tmp)

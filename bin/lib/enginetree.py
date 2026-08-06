@@ -697,8 +697,23 @@ def _chmod_tree(root: Path, *, writable: bool) -> None:
     hot-patched — the one property this whole module exists to establish, off, with nothing said. A
     failed UNSEAL is different: it is only ever a prelude to `rmtree`, which will fail loudly on its
     own if the tree really is unremovable, and refusing there would turn a cleanup path into a dead
-    end."""
+    end.
+
+    **SEALING SKIPS `PROVISION_DIR`; UNSEALING DOES NOT.** The walk is `root.rglob("*")` — the whole
+    tree — and on an ALREADY-PROVISIONED tree that swept up `tools/venv` and the uv-managed
+    interpreter under it and left them read-only. `_seal_installed` re-opened `tools/` ITSELF only, so
+    the damage was invisible: `verify()` asks whether that one directory is writable, which it is, and
+    called a half-sealed tree OK — while the next `uv sync` fails on permissions inside a venv uv
+    owns. Reproduced through the product CLI (`--install --writable` → provision → plain `--install`,
+    which takes the repair branch). The subtree is pruned HERE rather than repaired afterwards,
+    because a seal that has to be undone in the right places is a seal that will one day be undone in
+    the wrong ones — and because the immutability claim is about ENGINE CODE, of which `tools/` holds
+    none (see PROVISION_DIR). Unsealing still walks it: that direction is only ever a prelude to
+    `rmtree`, which has to reach everything."""
     entries = list(root.rglob("*"))
+    if not writable:
+        provisioned = root / PROVISION_DIR
+        entries = [p for p in entries if p != provisioned and provisioned not in p.parents]
     dirs = [p for p in entries if p.is_dir() and not p.is_symlink()]
     files = [p for p in entries if p.is_file() and not p.is_symlink()]
     if writable:
@@ -817,7 +832,13 @@ def _seal_installed(root: Path) -> None:
     that `verify()` calls broken and that no `plainkeep setup` can provision — which is exactly what
     the repair branch of `install()` used to produce, because it sealed and stopped there. `chmod`
     needs ownership rather than a writable parent, so this reaches into a 0555 root without unsealing
-    it (see PROVISION_DIR)."""
+    it (see PROVISION_DIR).
+
+    The re-open is now a REPAIR rather than the load-bearing half: `_chmod_tree` no longer walks into
+    `PROVISION_DIR` when sealing, so a provisioned environment survives a re-seal intact instead of
+    being sealed and then half-reopened. This line still runs, because a tree that arrived here with
+    `tools/` already at 0555 (an older build, an interrupted seal) is exactly the state the repair
+    branch exists to fix."""
     _chmod_tree(root, writable=False)
     (root / PROVISION_DIR).chmod(0o755)
 

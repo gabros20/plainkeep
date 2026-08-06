@@ -231,15 +231,38 @@ EXEMPT: dict[str, dict[str, str]] = {
         'staging.mkdir()':
             "the `.incoming-<version>` staging directory — an engine is verified there and only "
             "then renamed into its version name, so a half-copied tree is never reachable",
-        # THE DIGEST MANIFEST (Phase 2 Task 4b). `<install-root>/engine/.digests/<version>.json`,
-        # beside the versioned trees. Same class and same structural answer as every line above it:
-        # the destination is derived from the ENGINE root, never from an argument.
+        # THE DIGEST MANIFEST (Phase 2 Task 4b) and THE PAIR MANIFEST + ACTIVATION STATE (Task 5).
+        # `<install-root>/engine/.digests/<version>.json` and `<install-root>/engine/.pairs/`, both
+        # BESIDE the versioned trees rather than inside one — a manifest that lives in the tree it
+        # covers cannot describe that tree's own removal, and the sealed tree is read-only anyway.
+        # Same class and same structural answer as every line above: the destination is derived from
+        # the ENGINE root, never from an argument.
+        #
+        # ONE KEY, TWO SITES. `p.parent.mkdir(...)` appears at enginetree.py:442 (.digests) and
+        # :1143 (.pairs); the match is `startswith`, so this single entry licenses both. That is
+        # honest here — they are the same write to the same parent directory class — but it is also
+        # a LOOSE key in exactly the sense the paragraph above flags, and a third `p.parent.mkdir`
+        # meaning something else would be licensed silently.
         'p.parent.mkdir(parents=True, exist_ok=True)':
-            "the .digests/ directory beside the installed versions",
+            "`.digests/` and `.pairs/` beside the installed versions — the digest manifests, the "
+            "pair manifests and the activation state, which must live outside the trees they cover",
         'tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\\n", encoding="utf-8")':
             "the digest manifest itself, written to a pid-unique temp name and renamed over",
         '(dst / PROVISION_DIR).mkdir(parents=True, exist_ok=True)':
             "the engine's `tools/` provisioning directory, created empty inside the staged tree",
+        # Phase 2 Task 5's PAIR SELF-TEST. These three write into a `tempfile.mkdtemp()` the
+        # self-test throws away in its `finally`: a staged pair is proven by dispatching a real verb
+        # against a throwaway marked vault, never against the operator's notes.
+        '(vault / vaultreg.MARKER_DIR).mkdir(parents=True)':
+            "the throwaway marked vault the pair self-test dispatches against, under mkdtemp — the "
+            "self-test must never be pointed at the operator's real notes",
+        'vaultreg.marker_path(vault).write_text(':
+            "its marker, same mkdtemp directory, removed in the `finally`",
+        'cfg.mkdir()':
+            "the throwaway PLAINKEEP_CONFIG_HOME for the same self-test, so it neither reads nor "
+            "writes the real registry",
+        'self.path.parent.mkdir(parents=True, exist_ok=True)':
+            "the versions directory, so the update lock has somewhere to live",
     },
     # PROVISIONING (Phase 2 Task 4a). Every write below lands under
     # `<engine-root>/tools/`, which is the one writable directory in an installed engine tree and is
@@ -268,7 +291,28 @@ EXEMPT: dict[str, dict[str, str]] = {
             "the vault MARKER — the one write that establishes where the wall goes. The target is "
             "by definition not yet the active data root, so classifying it against the active root "
             "would refuse every registration but the current vault's. One file, --yes only",
-        'd.mkdir(parents=True, exist_ok=True)': "the marker's .plainkeep/ directory, same reason",
+        # LOOSE, in the sense the enginetree block above flags: `d.mkdir(...)` is not distinctive
+        # text. It covers two sites today — `register`'s marker directory and `init`'s skeleton
+        # directories — and both are the same class.
+        'd.mkdir(parents=True, exist_ok=True)':
+            "the marker's .plainkeep/ directory (register) and one REQUIRED_DIRS skeleton directory "
+            "inside the vault being created (init), same reason",
+        # `vault init` (Phase 2 Task 5). Same class as the marker write above and for the identical
+        # reason: the wall classifies against the ACTIVE data root, and the vault being CREATED is
+        # by definition not it — every one of these lines would be denied for the only directory
+        # they are ever aimed at. The destination is not caller-shaped either: it is one canonical
+        # path validated by `_init_refusals` (disjoint from the engine, outside a walled/sync tree,
+        # not already a vault, not a checkout) before a single byte is written, and the relative
+        # paths under it come from `REQUIRED_DIRS` + four literals in this file — never from argv.
+        # --yes only.
+        'raw.mkdir(parents=True)':
+            "the new vault's own directory, created before the location checks so `path_within` has "
+            "inodes to compare (see the comment at the call site)",
+        'f.write_text(text, encoding="utf-8")':
+            ".gitignore / jobs/registry.json / AGENTS.md / CLAUDE.md — the four generated "
+            "configuration files, written only when absent",
+        'vaultreg.marker_path(target).parent.mkdir(parents=True, exist_ok=True)':
+            "the new vault's .plainkeep/ directory",
     },
     "bin/repo/run.py": {
         'dest.parent.mkdir(parents=True, exist_ok=True)': "~/work fleet clone + adopt destination",
@@ -356,11 +400,19 @@ PINNED_DELETES: dict[str, set[str]] = {
                               # is created beside it and renamed over the old one
                               "tmp.unlink()",
                               "os.replace(tmp, link)",
-                              # the digest manifest (Task 4b): written to a pid-unique temp name and
-                              # renamed over, removed with the version it describes. Both paths come
-                              # from `digests_path(root)`, i.e. from the engine root alone.
+                              # `os.replace(tmp, p)` covers TWO sites, both an atomic manifest write
+                              # under a directory derived from the engine root alone: the digest
+                              # manifest (Task 4b, `digests_path(root)`) and the pair manifest /
+                              # activation state (Task 5, `<install-root>/engine/.pairs/`). The
+                              # rmtree is the pair self-test's own `tempfile.mkdtemp()` sandbox. The
+                              # three `unlink`s remove a manifest for a version that has just been
+                              # removed or refused, so a manifest never outlives the tree it
+                              # describes.
                               "os.replace(tmp, p)",
-                              "digests_path(d).unlink()"},
+                              "digests_path(d).unlink()",
+                              "shutil.rmtree(td, ignore_errors=True)",
+                              "pair_manifest_path(version).unlink(missing_ok=True)",
+                              "pair_manifest_path(v).unlink(missing_ok=True)"},
     # PROVISIONING (Phase 2 Task 4a) — all under `<engine-root>/tools/`, derived from the engine root
     # and never from an argument, so the question this ratchet asks ("can this resolve under
     # `~/files/**/in/`?") is answered NO structurally. The two `unlink`s are the point of the pin
@@ -371,6 +423,12 @@ PINNED_DELETES: dict[str, set[str]] = {
                              "shutil.rmtree(dest.parent, ignore_errors=True)",
                              "shutil.rmtree(staging, ignore_errors=True)",
                              "os.rename(staging, dest.parent)"},
+    # Phase 2 Task 5. The ONE removal `vault init` can reach, and it is bounded twice over: it runs
+    # only when this same call created the directory moments earlier, and `rmdir` refuses a
+    # non-empty one — so a path that acquired any content between the two lines survives. It cannot
+    # resolve under `~/files/**/in/` for the same reason the rest of init cannot: the target is
+    # validated disjoint and unmarked before anything is written.
+    "bin/vault/run.py": {"target.rmdir()"},
     # `new verb` scaffolds through a `.pk-scaffolding-<verb>.<pid>` staging leaf and renames it into
     # place, so that a scaffold which fails halfway (it did — the engine seal made every copied file
     # read-only, and `_fill` could not substitute) leaves nothing behind instead of an unwritable verb

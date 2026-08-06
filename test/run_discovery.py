@@ -161,7 +161,18 @@ def _install_core(engine: Path) -> str:
 
     Since Task 2 the binary self-locates its engine from `process.execPath`, so a check that asks
     "does THIS engine refuse" has to run THIS engine's core. Hardlinked where the filesystem allows
-    it — the binary is ~64 MB."""
+    it — the binary is ~64 MB.
+
+    RETURNS "" WHEN THERE IS NO CORE TO INSTALL, rather than raising. Every caller already guards
+    its `require`-mode cells on `core_live()`, which is False in that case, so the empty string is
+    never read — but this function ran BEFORE the guard and raised `FileNotFoundError` out of
+    `main()`, taking the whole suite with it. `.local/bin/plainkeep-core` is gitignored and built by
+    `cd cli && bun run build`, so the suite was green in a developer's built checkout and a hard
+    crash in a bare worktree or a `git archive` export — on identical code, measured both ways. A
+    crash also reports the wrong thing (ADR-019 D3): the batch says "suite failed" where the honest
+    answer is "the core-mode cells did not run"."""
+    if not CORE_BIN.is_file():
+        return ""
     dst = engine / ".local" / "bin" / "plainkeep-core"
     dst.parent.mkdir(parents=True, exist_ok=True)
     if not dst.exists():

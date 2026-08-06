@@ -62,6 +62,7 @@ Stdlib only and import-light, for `vaultroot.py`'s reason: it is imported on the
 invocation.
 """
 from __future__ import annotations
+import json          # the pair manifests + the activation state; `vaultreg` already pays for it
 import os
 import shutil
 import stat
@@ -618,6 +619,36 @@ def _is_within(inner: str, outer: str) -> bool:
     return vaultreg.path_within(inner, outer)
 
 
+# The paths whose presence makes a directory ENGINE rather than data. A subset of the ownership
+# manifest, chosen for what actually discriminates: `templates/` and `frontends/` exist in a data
+# vault for their own reasons, so naming those DIRECTORIES would call every vault an engine, while
+# `templates/verb/run.py` is the scaffold and only an engine has one.
+ENGINE_MARKERS = ("plainkeep", "VERSION", "bin/lib/vaultroot.py", "bin/lib/enginetree.py",
+                  "bin/lib/guardrail.py", "templates/verb/run.py",
+                  "skills/operate-plainkeep/SKILL.md")
+
+
+def engine_paths_in(data_root) -> list[str]:
+    """Engine-owned paths found INSIDE a data root — empty for the data-only vault `vault init`
+    produces (Phase 2 Task 5).
+
+    This is a weaker question than `disjointness_verdict` and a different one. Disjointness asks
+    whether the data root and the RUNNING engine tree are the same or nested directories, and refuses
+    with exit 5 when they are; that is what stops a vault being dispatched out of itself. This asks
+    whether a vault carries a COPY of engine files, which is not the same thing and is not always
+    wrong — the template checkout is legitimately both a source of the engine and a registered vault,
+    which is exactly the Phase 1 shape migration exists to unwind.
+
+    So the two callers treat it differently, on purpose. `vault init` REFUSES a target that already
+    has any of these (that directory is a checkout, and `vault register` is the verb for adopting
+    one), and asserts the list is empty for the vault it just created — the claim "init produces a
+    data-only vault" enforced by the code that makes the claim rather than only stated beside it.
+    `plainkeep doctor` REPORTS them, because a pre-Task-5 vault has them and telling that operator
+    their vault is broken would be false."""
+    root = Path(data_root)
+    return [rel for rel in ENGINE_MARKERS if (root / rel).exists()]
+
+
 def disjointness_verdict(data_root: str, engine_root: Path | None = None) -> str | None:
     """Why this data root and the engine tree overlap, or None when they are disjoint.
 
@@ -634,17 +665,85 @@ def disjointness_verdict(data_root: str, engine_root: Path | None = None) -> str
     `/x/vaultdir` survived it as two spellings and this function answered "disjoint" for one
     directory. Both comparisons below therefore go through `vaultreg`'s identity-aware pair rather
     than through `==` / `startswith`."""
-    eng = str(engine_root or ENGINE_ROOT)
-    eng = vaultreg.canonical(eng)
+    inside = inside_engine_verdict(data_root, engine_root)
+    if inside is not None:
+        return inside
+    eng = vaultreg.canonical(str(engine_root or ENGINE_ROOT))
+    data = vaultreg.canonical(data_root)
+    if _is_within(eng, data):
+        return f"the engine tree ({eng}) is inside it"
+    return None
+
+
+def inside_engine_verdict(data_root: str, engine_root: Path | None = None) -> str | None:
+    """The two shapes of `disjointness_verdict` that a PARENT directory inherits DOWNWARD: this path
+    is the engine tree, or it lives inside one.
+
+    Split out for `vault init`, which has to ask the question about a directory that does not exist
+    yet. `vaultreg.path_within` compares inodes and a missing path has none, so init asks the nearest
+    existing ANCESTOR — and only these two shapes survive that substitution. The third ("the engine
+    is inside it") does NOT: every ancestor of a target eventually reaches a directory that contains
+    the engine tree somewhere below it (`/tmp`, `$HOME`, `/`), and asking it of an ancestor answers
+    "overlap" for every path on the machine. Measured — it refused every `init` into a temp
+    directory that also held the fixture engine. The full verdict is re-asked on the real path once
+    it exists."""
+    eng = vaultreg.canonical(str(engine_root or ENGINE_ROOT))
     data = vaultreg.canonical(data_root)
     if vaultreg.same_path(data, eng):
         return (f"it IS the engine tree ({eng}) — a vault is data and an engine is code, and one "
                 f"directory cannot be both")
     if _is_within(data, eng):
         return f"it is inside the engine tree ({eng})"
-    if _is_within(eng, data):
-        return f"the engine tree ({eng}) is inside it"
     return None
+
+
+# --- the failure-injection hook (Phase 2 Task 5) ---------------------------------------------------
+# `PLAINKEEP_ENGINE_KILL_AT=<stage>` makes this process `SIGKILL` ITSELF the moment it reaches that
+# boundary. It exists because the contract this module now carries — "after a kill at any boundary,
+# either the old pair or the new pair is fully runnable, never neither" — cannot be checked by
+# reading the code, and cannot be checked reliably from outside either: killing a subprocess "at the
+# right moment" from a test is a race, and a race that usually lands somewhere harmless is a green
+# test of nothing (ADR-015's standing rule, ADR-019 D2).
+#
+# It can only ABORT, never skip, weaken or reorder a step: the whole body is `os.kill(getpid(),
+# SIGKILL)`, an unknown stage name is refused rather than ignored, and there is no value of the
+# variable that makes an update do LESS checking and still succeed. `test/run_engineupdate.py`
+# pins both halves — that every declared stage is actually reachable (a hook nothing reaches is the
+# ADR-019 failure applied to the gate itself), and that the variable cannot produce a rc=0 run.
+#
+# SIGKILL rather than SIGABRT/SIGSEGV on purpose: it is the harshest interruption a filesystem
+# sequence can face (no atexit, no `finally`, no flush) and it is the one signal macOS does NOT
+# route through the crash reporter, so a full injection matrix costs the developer no crash dialogs.
+ENV_KILL_AT = "PLAINKEEP_ENGINE_KILL_AT"
+KILL_STAGES = (
+    "provision-staged",             # the copy is complete and verified; nothing is in place yet
+    "provision-replace-window",     # between remove_version() and rename — the measured residue
+    "provision-renamed",            # the tree is under its version name and NOT yet sealed
+    "checksum",                     # digests computed, before the pair manifest is recorded
+    "selftest",                     # the new pair answered a real verb, before the pointer moves
+    "activate",                     # the last instruction before os.replace of `current`
+    "pointer",                      # `current` now names the new pair; state/cleanup not yet done
+    "cleanup",                      # mid-prune of a retired version
+)
+
+
+def _kill_hook(stage: str) -> None:
+    if os.environ.get(ENV_KILL_AT) != stage:
+        return
+    if stage not in KILL_STAGES:                     # unreachable via the guard above; kept explicit
+        raise VaultError(f"unknown {ENV_KILL_AT} stage: {stage!r}")
+    import signal
+    sys.stderr.write(f"plainkeep: {ENV_KILL_AT}={stage} — killing this process here\n")
+    sys.stderr.flush()
+    os.kill(os.getpid(), signal.SIGKILL)
+
+
+def _check_kill_stage() -> None:
+    """A misspelled stage name is a test that injects NOTHING and passes. Refuse it at the door."""
+    want = os.environ.get(ENV_KILL_AT)
+    if want and want not in KILL_STAGES:
+        raise VaultError(f"{ENV_KILL_AT}={want!r} names no boundary",
+                         hint="stages: " + ", ".join(KILL_STAGES))
 
 
 # --- installing ------------------------------------------------------------------------------------
@@ -927,9 +1026,17 @@ def install(src: Path, *, version: str | None = None, force: bool = False,
         # leaves a manifest for a version that does not exist — which the `except` below removes
         # along with the tree, and which `digest_problems` would report as a missing tree anyway.
         digests = compute_digests(staging)
+        _kill_hook("provision-staged")
         if dst.exists():
             remove_version(version)
+            # THE MEASURED RESIDUE, and the one place a kill genuinely leaves no engine under
+            # `version`. `update()` never reaches it with the ACTIVE version as its target (see
+            # `_refuse_touching_active`), so the exposure is bounded to `--install --force` over the
+            # running tree — which is `script/setup`'s path, not the update path. The injection cell
+            # that proves the difference is `run_engineupdate.py::case_kill_matrix`.
+            _kill_hook("provision-replace-window")
         os.rename(staging, dst)
+        _kill_hook("provision-renamed")
         staged = False
         record_digests(dst, digests)
         if not writable:
@@ -970,12 +1077,644 @@ def activate(version: str) -> Path:
     return link
 
 
+# --- update: atomic activation with the previous pair retained (Phase 2 Task 5) --------------------
+#
+# `install()` above is the primitive: it stages, verifies, renames, seals and can activate. `update()`
+# is the OPERATION an operator runs, and the difference between them is a contract rather than a
+# convenience:
+#
+#   1. **The pair.** What gets activated is a core+engine PAIR — the versioned tree and, when the
+#      source carries one, the compiled `plainkeep-core` that ships beside it. `install()` copies the
+#      core as an optional extra that `verify()` never asks about. Here it is checksummed with the
+#      rest and self-tested in the dispatcher mode it powers, because a tree whose core is truncated
+#      dispatches fine on the floor and dies under `PLAINKEEP_CORE=require`.
+#
+#   2. **The running pair is never the target.** `update()` refuses a version that IS the active one
+#      (as a no-op when that version is already healthy — see `update()`'s docstring for why that is
+#      the correct answer rather than an error). Everything destructive it can reach therefore acts
+#      on a directory the running engine does not live in, and THAT is what makes "the previous pair
+#      is retained" true by construction instead of usually: retention is not a cleanup policy that
+#      could be got wrong, it is the absence of any code path that could remove it.
+#
+#   3. **One pointer switch, last.** Checksums and the self-test both run against the tree at its
+#      FINAL path, sealed, before `current` moves. A kill anywhere before `os.replace` leaves the old
+#      pair active and complete; a kill after it leaves the new pair active and complete. There is no
+#      third outcome, which is the property `KILL_STAGES` exists to let a test demand rather than
+#      believe.
+#
+# What is deliberately NOT claimed: that the tree is AUTHENTIC. `pair_digests()` proves the installed
+# pair is byte-for-byte the source it was copied from (and, with `--expect`, that the source matched
+# a record made elsewhere). It does not prove the source was legitimate — see `seal_problems`, which
+# states the same limit for the seal.
+CORE_REL = os.path.join(".local", "bin", "plainkeep-core")
+PAIRS_DIRNAME = ".pairs"
+PAIR_SCHEMA = "plainkeep.pair/1"
+STATE_SCHEMA = "plainkeep.pairstate/1"
+UPDATE_LOCK_NAME = ".update.lock"
+DEFAULT_KEEP = 2                   # the active pair and the one to roll back to — the whole contract
+
+
+def pairs_dir() -> Path:
+    """Where the pair manifests and the activation state live: BESIDE the version trees, never
+    inside one. A digest recorded inside the tree it covers is rewritable by whatever rewrote the
+    tree, and the sealed tree cannot be written by the updater afterwards anyway."""
+    return versions_dir() / PAIRS_DIRNAME
+
+
+def pair_manifest_path(version: str) -> Path:
+    return pairs_dir() / f"{check_version_name(version, 'pair manifest version')}.json"
+
+
+def state_path() -> Path:
+    return pairs_dir() / "state.json"
+
+
+def _read_json(p: Path) -> dict | None:
+    try:
+        d = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return d if isinstance(d, dict) else None
+
+
+def _write_json_atomic(p: Path, doc: dict) -> Path:
+    """Write, fsync, `os.replace`. An interrupted write leaves the OLD file, never a truncated one —
+    the same shape `vaultreg.write_registry` uses, for the same reason."""
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_name(f".{p.name}.incoming.{os.getpid()}")
+    fd = os.open(str(tmp), os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    try:
+        os.write(fd, (json.dumps(doc, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, p)
+    return p
+
+
+# --- the pair's checksums ---------------------------------------------------------------------
+def pair_files(root: Path) -> list[str]:
+    """Every REGULAR file the pair consists of, as sorted relative paths.
+
+    Symlinks are skipped rather than followed: `_copy_owned` copies with `symlinks=True`, so a link
+    in the source is a link in the installed tree, and hashing what it points at would record the
+    target's bytes under the link's name — a manifest that disagrees with itself the moment the
+    target changes."""
+    rels: list[str] = []
+    for rel in OWNED_FILES:
+        if (root / rel).is_file() and not (root / rel).is_symlink():
+            rels.append(rel)
+    for rel in OWNED_TREES:
+        base = root / rel
+        if not base.is_dir():
+            continue
+        for p in base.rglob("*"):
+            if p.is_symlink() or not p.is_file() or "__pycache__" in p.parts:
+                continue
+            rels.append(str(p.relative_to(root)))
+    core = root / CORE_REL
+    if core.is_file() and not core.is_symlink():
+        rels.append(CORE_REL)
+    return sorted(set(rels))
+
+
+def pair_digests(root: Path) -> dict[str, str]:
+    """sha256 per file. Chunked, because the core binary is tens of megabytes."""
+    import hashlib
+    out: dict[str, str] = {}
+    for rel in pair_files(root):
+        h = hashlib.sha256()
+        with (root / rel).open("rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        out[rel] = h.hexdigest()
+    return out
+
+
+def pair_digest_problems(root: Path, expected: dict) -> list[str]:
+    """Every way the tree at `root` disagrees with `expected`, as one-line problems.
+
+    Missing, changed AND extra are all problems: a manifest that only checked the files it lists
+    would pass a tree with an extra `bin/<verb>/run.py` copied in from somewhere else, and a verb
+    directory is exactly what an attacker or a bad merge would add.
+
+    NAMED `pair_` FOR A REASON, and the reason is a real bug rather than taste. This function was
+    called `digest_problems` until Task 4b landed a `digest_problems(root, *, only=...)` above it —
+    the function `provision.require_delivered_intact` calls to decide whether a `uv.lock` and a
+    `uvpin.json` may be executed. Two `def`s of one name in one module: the second silently WON, and
+    Task 4's gate started raising TypeError instead of gating. Nothing about the collision was
+    visible at either call site. `run_engineupdate.py::case_two_digest_layers_stay_distinct` is what
+    stops it recurring; the two layers differ in scope (this one covers the compiled core, Task 4b's
+    does not) and are not interchangeable."""
+    got = pair_digests(root)
+    problems = []
+    for rel in sorted(set(expected) | set(got)):
+        want, have = expected.get(rel), got.get(rel)
+        if want is None:
+            problems.append(f"unexpected file in the pair: {rel}")
+        elif have is None:
+            problems.append(f"missing from the pair: {rel}")
+        elif want != have:
+            problems.append(f"checksum mismatch: {rel}")
+    return problems
+
+
+def read_expected(p: Path) -> dict:
+    """A `--expect` manifest: this module's own `{"files": {...}}` shape, or a bare `{rel: sha}` map."""
+    doc = _read_json(p)
+    if doc is None:
+        raise VaultError(f"cannot read a pair manifest from {p}")
+    files = doc.get("files", doc)
+    if not isinstance(files, dict) or not files or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+        raise VaultError(f"{p} carries no usable file->sha256 map")
+    return files
+
+
+# --- the pair's self-test ---------------------------------------------------------------------
+SELFTEST_MODES = ("off", "require")
+
+
+def selftest_pair(root: Path, *, modes: tuple[str, ...] | None = None) -> list[str]:
+    """Drive a REAL verb through the REAL dispatcher of the pair at `root`. Empty means it works.
+
+    ADR-019 D1: a rule is not enforced until a test drives the product's own entry point. The same
+    standard applies to the product asking whether a build of itself works — "the files are all
+    present" is what `verify()` already answered, and every one of this phase's six unwired rules
+    passed a check of exactly that shape. So this spawns `<root>/plainkeep vault status --json`,
+    which walks the whole chain the operator's next command will walk: discovery, the guardrail
+    gate, the resolver, a verb process, the `--json` envelope.
+    `vault status` is the choice because it is read-only and because it REPORTS the engine it ran
+    out of, so the answer can be checked against the tree that was meant to be tested rather than
+    assumed.
+
+    HERMETIC BY CONSTRUCTION, and this is not optional politeness: an update runs on a machine with
+    real notes on it. The child gets a throwaway marked vault as `PLAINKEEP_HOME` and an empty
+    `PLAINKEEP_CONFIG_HOME`, so neither the operator's vault nor their registry is read or written —
+    a self-test that touched either would make "we tested the new engine" mean "we ran the new
+    engine against your notes".
+
+    BOTH DISPATCHER MODES when the pair carries a core: the floor always, and
+    `PLAINKEEP_CORE=require` when `.local/bin/plainkeep-core` is there. A pair whose core is
+    truncated or built for another platform passes the floor and dies under `require`, which is the
+    failure a per-tree completeness check structurally cannot see."""
+    # Imported HERE, not at module scope: this module is imported on the first act of every
+    # invocation (see the header), and `subprocess` is the heaviest import in the stdlib that a
+    # dispatch would otherwise pay for to reach code only the updater runs.
+    import subprocess
+    import tempfile
+    problems: list[str] = []
+    want = list(modes) if modes is not None else ["off"] + (
+        ["require"] if (root / CORE_REL).is_file() else [])
+    launcher_path = launcher(root)
+    if not launcher_path.is_file():
+        return [f"the pair has no launcher at {launcher_path}"]
+    td = tempfile.mkdtemp(prefix="pk-selftest-")
+    try:
+        vault = Path(td) / "vault"
+        (vault / vaultreg.MARKER_DIR).mkdir(parents=True)
+        vaultreg.marker_path(vault).write_text(
+            vaultreg.marker_bytes(vaultreg.new_marker_doc()), encoding="utf-8")
+        cfg = Path(td) / "config"
+        cfg.mkdir()
+        for mode in want:
+            env = {k: v for k, v in os.environ.items()
+                   # The kill hook must not travel into the child: a self-test that killed itself
+                   # would report the pair broken for every injection run, i.e. the injection would
+                   # be testing the injection.
+                   if k not in (ENV_KILL_AT, "PLAINKEEP_VAULT_ID", "PLAINKEEP_VAULT_MECHANISM",
+                                "PLAINKEEP_CORE_BIN", "PLAINKEEP_PLUGIN_PACK", "PYTHONPATH")}
+            env.update({"PLAINKEEP_HOME": str(vault), "PLAINKEEP_CONFIG_HOME": str(cfg),
+                        "PLAINKEEP_CORE": mode, "PLAINKEEP_JSON": "0"})
+            try:
+                r = subprocess.run([str(launcher_path), "vault", "status", "--json"],
+                                   capture_output=True, text=True, timeout=120, env=env)
+            except (OSError, subprocess.SubprocessError) as e:
+                problems.append(f"self-test (PLAINKEEP_CORE={mode}) could not run the pair: {e}")
+                continue
+            if r.returncode != 0:
+                problems.append(f"self-test (PLAINKEEP_CORE={mode}) exited {r.returncode}: "
+                                + (r.stderr.strip().splitlines() or ["<no stderr>"])[-1])
+                continue
+            try:
+                doc = json.loads(r.stdout)
+                data = doc["data"]
+            except (ValueError, KeyError, TypeError):
+                problems.append(f"self-test (PLAINKEEP_CORE={mode}) produced no --json envelope")
+                continue
+            # `same_path`, not `==`: the child reports the path IT resolved, and two spellings of one
+            # directory (case fold, a symlinked ancestor) are one tree — the comparison this repo has
+            # already got wrong twice. vaultreg owns it.
+            if not vaultreg.same_path(str(data.get("engine_root", "")), str(root)):
+                problems.append(f"self-test (PLAINKEEP_CORE={mode}) ran out of "
+                                f"{data.get('engine_root')!r}, not the pair under test")
+            if not data.get("engine_intact"):
+                problems.append(f"self-test (PLAINKEEP_CORE={mode}) reports the engine not intact")
+    finally:
+        shutil.rmtree(td, ignore_errors=True)
+    return problems
+
+
+# --- serialization ------------------------------------------------------------------------------
+class _UpdateLock:
+    """`flock` on `<versions>/.update.lock`, non-blocking. Held for the whole update.
+
+    **`flock` and not an `O_EXCL` sentinel**, which is what `vaultreg._Lock` uses, and the difference
+    is the one that matters here. A sentinel file outlives the process that made it: a `SIGKILL` mid
+    update — the exact event this task's gate injects at eight boundaries — would leave a lock nobody
+    holds, and every later update would refuse until a human deleted it. That turns "kill and re-run
+    converges" into "kill and re-run wedges". `flock` is released by the kernel when the process
+    dies, however it dies, so convergence needs no cleanup path and no stale-lock heuristic (which is
+    the other way to get this wrong: a heuristic that force-breaks a lock is how two writers both
+    think they won — `vaultreg._Lock` says so, and it is right for a registry write measured in
+    milliseconds).
+
+    Non-blocking: the loser refuses immediately and touches nothing, rather than queueing behind an
+    update whose outcome may make its own source obsolete."""
+
+    def __init__(self, path: Path):
+        self.path, self.fd = path, None
+
+    def __enter__(self):
+        import fcntl
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.fd = os.open(str(self.path), os.O_CREAT | os.O_RDWR, 0o644)
+        try:
+            fcntl.flock(self.fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            os.close(self.fd)
+            self.fd = None
+            raise VaultError(
+                f"another plainkeep update is running (lock held on {self.path})",
+                code=output.EXIT_CONFIRM,
+                hint="updates are serialized — wait for it to finish and re-run")
+        os.ftruncate(self.fd, 0)
+        os.write(self.fd, f"{os.getpid()}\n".encode())
+        return self
+
+    def __exit__(self, *exc):
+        if self.fd is not None:
+            os.close(self.fd)           # closing releases the flock
+        return False
+
+
+# --- the guard that makes retention structural ---------------------------------------------------
+def _active_conflict(dst: Path) -> str | None:
+    """Why `dst` must not be written or removed, or None. `dst` is the version directory an update
+    is about to replace; the answer is about the RUNNING pair.
+
+    Every comparison goes through `vaultreg`'s identity-aware pair. Nothing here compares strings:
+    `current` is a symlink and the active tree is reached THROUGH it, the install root can sit under
+    a symlinked or case-folded ancestor, and this repo has paid for a hand-rolled path comparison
+    twice already (`vaultreg.path_within`'s docstring carries both post-mortems)."""
+    active = active_engine()
+    if active is None:
+        return None
+    a, d = vaultreg.canonical(str(active)), vaultreg.canonical(str(dst))
+    if vaultreg.same_path(a, d):
+        return f"it is the RUNNING engine ({active})"
+    if vaultreg.path_within(a, d):
+        return f"the running engine ({active}) is inside it"
+    if vaultreg.path_within(d, a):
+        return f"it is inside the running engine ({active})"
+    return None
+
+
+# --- update / rollback / prune --------------------------------------------------------------------
+def read_state() -> dict:
+    doc = _read_json(state_path()) or {}
+    return {"activated": doc.get("activated"), "rollback_to": doc.get("rollback_to"),
+            "at": doc.get("at")}
+
+
+def rollback_target() -> str | None:
+    """The version `--rollback` would activate: the pair that was active before the last completed
+    activation, IF it is still installed and still complete. None when there is nothing to go back to.
+
+    Read from the state file rather than inferred from directory mtimes, because "the other one" is
+    not a well-defined answer once three versions are installed, and a rollback that picks the wrong
+    one is worse than a rollback that refuses."""
+    v = read_state().get("rollback_to")
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        check_version_name(v, "recorded rollback target")
+    except VaultError:
+        return None
+    d = versions_dir() / v
+    if not d.is_dir() or verify(d, check_seal=False):
+        return None
+    return v
+
+
+def _active_version() -> str | None:
+    a = active_engine()
+    return a.name if a is not None else None
+
+
+def update(src: Path, *, version: str | None = None, expect: Path | None = None,
+           keep: int = DEFAULT_KEEP) -> dict:
+    """Stage a checksum-verified core+engine pair, self-test it, and switch ONE pointer at it.
+
+    Returns a result dict (`{"result": ..., "version": ..., "previous": ..., ...}`) rather than
+    printing, so the CLI can render it and a caller can assert on it.
+
+    **A re-run is a no-op**, and that is the same code path rather than a special case: the target
+    version is already active and already healthy, so there is nothing to stage, nothing to test and
+    no pointer to move. This is what makes "kill and re-run converges" true for every boundary at
+    once — after any interruption, running the same command again either finishes the work or finds
+    it done, and a THIRD run finds it done too.
+
+    **The previous pair is retained by construction.** The only destructive operations an update can
+    reach are `remove_version(target)` (guarded by `_active_conflict`, which refuses the running
+    tree) and `prune()` (which excludes both the active version and the rollback target). There is no
+    branch that removes the pair you are running, so retention does not depend on getting a cleanup
+    policy right.
+
+    `keep` bounds how many versions survive the prune AFTER activation; below 2 it is raised to 2,
+    because retaining the previous pair is the contract and a flag must not be able to opt out of it.
+    """
+    _check_kill_stage()
+    src = Path(os.path.abspath(os.path.expanduser(str(src))))
+    version = check_version_name(version, "--version") if version is not None else read_version(src)
+    keep = max(int(keep), DEFAULT_KEEP)
+    root = versions_dir()
+    dst = root / version
+    expected_from_record = read_expected(expect) if expect is not None else None
+
+    with _UpdateLock(root / UPDATE_LOCK_NAME):
+        was_active = _active_version()
+        conflict = _active_conflict(dst)
+        if conflict is not None:
+            problems = verify(dst)
+            if not problems:
+                # THE NO-OP. Not an error: an operator (or a retry loop, or a second run after a
+                # kill) asking for the version that is already running and healthy has asked for a
+                # state the system is already in. Reporting failure there is what turns a converging
+                # sequence into one that needs a human to read it.
+                return {"result": "already-active", "version": version, "previous": was_active,
+                        "activated": False, "engine": str(dst),
+                        # Reported on the NO-OP too: "which pair am I one command away from" is the
+                        # question an operator brings to a re-run after an interruption, and a
+                        # convergent run that answers nothing sends them looking for it elsewhere.
+                        "rollback_to": rollback_target(),
+                        "core": (dst / CORE_REL).is_file()}
+            raise VaultError(
+                f"refusing to update INTO the running engine {version}, and {conflict} — "
+                f"it is also not healthy:\n  " + "\n  ".join(problems),
+                code=output.EXIT_DENY,
+                hint="roll back to the retained pair first, then update:\n"
+                     f"    python3 {Path(__file__).resolve()} --rollback\n"
+                     "or repair this one in place (a plain re-install re-seals a complete tree):\n"
+                     f"    python3 {Path(__file__).resolve()} --install <source-checkout>")
+
+        # --- checksum, part 1: the SOURCE against a record made elsewhere ------------------------
+        # Asked BEFORE anything is copied, deliberately: a source that disagrees with its manifest
+        # must not be staged at all, so the refusal costs no copy and leaves nothing to remove. The
+        # second half of the checksum gate — the STAGED TREE against the source — necessarily comes
+        # after the copy, and catches a different failure (a copy that did not survive).
+        source_digests = pair_digests(src)
+        if expected_from_record is not None and source_digests != expected_from_record:
+            raise VaultError(f"the source pair at {src} does not match {expect}:\n  "
+                             + "\n  ".join(pair_digest_problems(src, expected_from_record)[:8]),
+                             code=output.EXIT_DENY,
+                             hint="the recorded manifest and the source disagree — do not install "
+                                  "either until you know which one is wrong")
+
+        # --- provision -------------------------------------------------------------------------
+        # `install()` is reused rather than re-implemented: it stages under `.incoming-<v>.<pid>`,
+        # runs the whole ownership manifest against the staging tree, renames only a COMPLETE tree
+        # into place and seals it. `--force` is safe here in the way it is not on the install path,
+        # because `_active_conflict` has already refused the running tree above.
+        reused = dst.is_dir() and not verify(dst)
+        if not reused:
+            install(src, version=version, force=True, activate_it=False)
+
+        # --- checksum, part 2: the STAGED TREE against the source it was copied from -------------
+        # Over the tree at its FINAL path, sealed — so what is checked is what will be activated,
+        # not a staging copy that a rename could still have truncated.
+        problems = pair_digest_problems(dst, source_digests)
+        _kill_hook("checksum")
+        if problems:
+            remove_version(version)
+            raise VaultError(f"the staged pair at {dst} does not match its source:\n  "
+                             + "\n  ".join(problems[:8]), code=output.EXIT_DENY,
+                             hint="the copy is corrupt — nothing was activated and the running "
+                                  "engine is untouched")
+        has_core = CORE_REL in source_digests
+        _write_json_atomic(pair_manifest_path(version), {
+            "schema": PAIR_SCHEMA, "version": version, "core": has_core,
+            "installed_at": _now(), "source": str(src), "files": source_digests})
+
+        # --- self-test -------------------------------------------------------------------------
+        st = selftest_pair(dst)
+        _kill_hook("selftest")
+        if st:
+            # The new pair does not work. Removing it is safe for exactly the reason the whole
+            # design rests on: it is not the running one.
+            remove_version(version)
+            pair_manifest_path(version).unlink(missing_ok=True)
+            raise VaultError(f"the new pair {version} failed its self-test:\n  " + "\n  ".join(st),
+                             code=output.EXIT_DENY,
+                             hint="nothing was activated — the running engine is untouched")
+
+        # --- activation: ONE pointer -----------------------------------------------------------
+        # The rollback target is recorded BEFORE the switch, naming the pair that is active RIGHT
+        # NOW. A kill between this write and `os.replace` leaves a state file that says "roll back
+        # to X" while X is still active — which is a no-op, i.e. correct. Writing it afterwards
+        # would leave the opposite: a switch that happened with no record of what to go back to.
+        if was_active and was_active != version:
+            _write_json_atomic(state_path(), {"schema": STATE_SCHEMA, "activated": version,
+                                              "rollback_to": was_active, "at": _now()})
+        _kill_hook("activate")
+        activate(version)
+        _kill_hook("pointer")
+
+        # --- cleanup ---------------------------------------------------------------------------
+        pruned = prune(keep=keep)
+        return {"result": "activated", "version": version, "previous": was_active,
+                "activated": True, "engine": str(dst), "core": has_core,
+                "reused_staged_tree": reused, "pruned": pruned,
+                "rollback_to": rollback_target()}
+
+
+def rollback() -> dict:
+    """Re-activate the retained previous pair. THE ROLLBACK IS A POINTER SWITCH — the same one
+    `update` performs, in the other direction — which is why the previous pair being retained is the
+    whole feature and not a nicety."""
+    _check_kill_stage()
+    with _UpdateLock(versions_dir() / UPDATE_LOCK_NAME):
+        target = rollback_target()
+        if target is None:
+            recorded = read_state().get("rollback_to")
+            raise VaultError(
+                "there is no retained pair to roll back to"
+                + (f" (the state file names {recorded!r}, which is not installed or not complete)"
+                   if recorded else ""),
+                code=output.EXIT_NOT_FOUND,
+                hint="installed versions: " + (", ".join(installed_versions()) or "none"))
+        was = _active_version()
+        if was == target:
+            return {"result": "already-active", "version": target, "previous": was,
+                    "activated": False}
+        _write_json_atomic(state_path(), {"schema": STATE_SCHEMA, "activated": target,
+                                          "rollback_to": was, "at": _now()})
+        activate(target)
+        return {"result": "rolled-back", "version": target, "previous": was, "activated": True,
+                "rollback_to": rollback_target()}
+
+
+def prune(keep: int = DEFAULT_KEEP) -> list[str]:
+    """Remove old versions, NEVER the active one and NEVER the rollback target. Returns what went.
+
+    Oldest first by the `installed_at` in the pair manifest, falling back to directory mtime for a
+    version installed before this task existed. Best effort: a version that will not delete is not a
+    reason to fail an update that has already succeeded."""
+    keep = max(int(keep), DEFAULT_KEEP)
+    protected = {v for v in (_active_version(), rollback_target()) if v}
+    candidates = [v for v in installed_versions() if v not in protected]
+    if len(candidates) + len(protected) <= keep:
+        return []
+
+    def when(v: str) -> float:
+        # Every read here is best-effort by design. `prune()` runs AFTER a successful activation, so
+        # anything it raises turns an update that WORKED into one that reports failure — and the two
+        # readable sources of a raise are a version directory whose name `check_version_name`
+        # refuses (something else put it in `engine/`) and a manifest that will not parse.
+        try:
+            doc = _read_json(pair_manifest_path(v)) or {}
+        except VaultError:
+            doc = {}
+        at = doc.get("installed_at")
+        if isinstance(at, str):
+            try:
+                from datetime import datetime
+                return datetime.fromisoformat(at).timestamp()
+            except ValueError:
+                pass
+        try:
+            return (versions_dir() / v).stat().st_mtime
+        except OSError:
+            return 0.0
+
+    candidates.sort(key=when)
+    drop = candidates[:max(0, len(candidates) + len(protected) - keep)]
+    gone = []
+    for v in drop:
+        _kill_hook("cleanup")
+        if _active_conflict(versions_dir() / v) is not None:   # belt and braces; see _active_conflict
+            continue
+        try:
+            remove_version(v)
+            pair_manifest_path(v).unlink(missing_ok=True)
+            gone.append(v)
+        except (OSError, VaultError):
+            continue
+    return gone
+
+
+def pairs_report() -> dict:
+    """What is installed, what is active, what a rollback would do — the diagnostic an operator
+    reaches for after an interrupted update.
+
+    `current` is the AUTHORITY on what is active; the state file only records intent. They can
+    disagree exactly once — a kill between the state write and the pointer switch — and this reports
+    the disagreement rather than picking one, because an operator who cannot see it will not believe
+    the rollback target."""
+    state = read_state()
+    active = _active_version()
+    rows = []
+    for v in installed_versions():
+        d = versions_dir() / v
+        # Guarded for `prune`'s reason and one more: `plainkeep doctor` calls this on every run, and
+        # a diagnostic that dies on the thing it is diagnosing reports the crash instead of the
+        # damage (ADR-019 D3).
+        try:
+            manifest = _read_json(pair_manifest_path(v)) or {}
+        except VaultError:
+            manifest = {}
+        rows.append({"version": v, "active": v == active,
+                     "rollback_target": v == rollback_target(),
+                     "complete": not verify(d, check_seal=False),
+                     "sealed": not seal_problems(d),
+                     "core": bool(manifest.get("core", (d / CORE_REL).is_file())),
+                     "checksums": bool(manifest.get("files")),
+                     "installed_at": manifest.get("installed_at")})
+    return {"active": active, "rollback_to": rollback_target(),
+            "state_says_activated": state.get("activated"),
+            "state_agrees_with_current": state.get("activated") in (None, active),
+            "versions": rows}
+
+
+def _now() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
 # --- CLI -------------------------------------------------------------------------------------------
-_USAGE = ("usage: enginetree.py --print [root|install-root|current|versions]\n"
+_USAGE = ("usage: enginetree.py --print [root|install-root|current|versions|pairs]\n"
           "       enginetree.py --install <source-checkout> [--version V] [--force] "
           "[--no-activate] [--writable]\n"
           "       enginetree.py --activate <version>\n"
-          "       enginetree.py --verify [<engine-root>] [--digests]")
+          "       enginetree.py --verify [<engine-root>] [--digests]\n"
+          "       enginetree.py --update <source-checkout> [--version V] [--expect <manifest.json>] "
+          "[--keep N] [--json]\n"
+          "       enginetree.py --rollback [--json]\n"
+          "       enginetree.py --digests <engine-root|source-checkout>   (the pair manifest, on "
+          "stdout)")
+
+
+def _flag(opts: list[str], name: str) -> str | None:
+    if name not in opts:
+        return None
+    i = opts.index(name)
+    if i + 1 >= len(opts):
+        raise VaultError(f"{name} needs a value")
+    return opts[i + 1]
+
+
+def _emit(doc: dict, opts: list[str], human) -> int:
+    if "--json" in opts:
+        print(json.dumps(doc, indent=2, sort_keys=True))
+    else:
+        human(doc)
+    return output.EXIT_OK
+
+
+def _render_update(d: dict) -> None:
+    v, prev = d.get("version"), d.get("previous")
+    if d.get("result") == "already-active":
+        print(f"engine {v} is already active — nothing to do")
+    elif d.get("result") == "rolled-back":
+        print(f"rolled back to engine {v}" + (f" (was {prev})" if prev else ""))
+    else:
+        print(f"activated engine {v}" + (f" (was {prev})" if prev else "")
+              + ("  [core+engine pair]" if d.get("core") else "  [engine only, no core binary]"))
+    if d.get("pruned"):
+        print(f"  pruned: {', '.join(d['pruned'])}")
+    # ALWAYS printed, including on the no-op: "which pair am I one command away from" is the whole
+    # reason the previous one is retained, and an operator who has to run a second command to learn
+    # it will not learn it at 2am.
+    rb = d.get("rollback_to") or rollback_target()
+    print(f"  roll back with: python3 {Path(__file__).resolve()} --rollback"
+          + (f"   -> {rb}" if rb else "   (nothing retained yet)"))
+
+
+def _render_pairs(rep: dict) -> None:
+    print(f"active        {rep.get('active') or 'none'}")
+    print(f"roll back to  {rep.get('rollback_to') or 'nothing retained'}")
+    if not rep.get("state_agrees_with_current"):
+        print(f"  NOTE: the state file records an activation of {rep.get('state_says_activated')!r} "
+              f"that `current` does not show — an update was interrupted between the two. "
+              f"`current` is what runs.")
+    for r in rep.get("versions", []):
+        flags = "".join([" *" if r["active"] else "  ", "<-" if r["rollback_target"] else "  "])
+        print(f" {flags} {r['version']:<16} "
+              f"{'complete' if r['complete'] else 'INCOMPLETE':<11} "
+              f"{'sealed' if r['sealed'] else 'UNSEALED':<9} "
+              f"{'core+engine' if r['core'] else 'engine-only':<12} "
+              f"{'checksummed' if r['checksums'] else 'no manifest'}")
+    print("  * = active · <- = rollback target")
 
 
 def main(argv: list[str]) -> int:
@@ -1003,6 +1742,12 @@ def main(argv: list[str]) -> int:
             elif what == "versions":
                 for v in installed_versions():
                     print(v)
+            elif what == "pairs":
+                rep = pairs_report()
+                if "--json" in rest:
+                    print(json.dumps(rep, indent=2, sort_keys=True))
+                else:
+                    _render_pairs(rep)
             else:
                 print(_USAGE, file=sys.stderr)
                 return output.EXIT_USAGE
@@ -1044,6 +1789,28 @@ def main(argv: list[str]) -> int:
                 print(p, file=sys.stderr)
             print(f"{root}: {'OK' if not problems else f'{len(problems)} problem(s)'}")
             return output.EXIT_OK if not problems else output.EXIT_DENY
+        if cmd == "--update":
+            if not rest:
+                print("plainkeep: --update needs a source checkout", file=sys.stderr)
+                return output.EXIT_USAGE
+            opts = rest[1:]
+            keep = _flag(opts, "--keep")
+            exp = _flag(opts, "--expect")
+            res = update(Path(rest[0]), version=_flag(opts, "--version"),
+                         expect=Path(exp) if exp else None,
+                         keep=int(keep) if keep else DEFAULT_KEEP)
+            return _emit(res, opts, _render_update)
+        if cmd == "--rollback":
+            return _emit(rollback(), rest, _render_update)
+        if cmd == "--digests":
+            if not rest:
+                print("plainkeep: --digests needs a tree", file=sys.stderr)
+                return output.EXIT_USAGE
+            root = Path(os.path.abspath(os.path.expanduser(rest[0])))
+            files = pair_digests(root)
+            print(json.dumps({"schema": PAIR_SCHEMA, "version": None, "files": files},
+                             indent=2, sort_keys=True))
+            return output.EXIT_OK
     except VaultError as e:
         sys.stderr.write("plainkeep: " + e.message + (f"\n  {e.hint}" if e.hint else "") + "\n")
         return e.code

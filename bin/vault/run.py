@@ -1,29 +1,45 @@
 #!/usr/bin/env python3
 """
-plainkeep vault register|rebind|deregister|default|list|status — the vault marker + registry surface
-(ADR-014, Phase 2 Tasks 1a + 1b).
+plainkeep vault init|register|rebind|deregister|default|list|status — the vault marker + registry
+surface (ADR-014, Phase 2 Tasks 1a + 1b + 5).
 
 A vault is identified by an immutable `id` in `<vault>/.plainkeep/vault.json` and named by an entry
-in `$XDG_CONFIG_HOME/plainkeep/registry.json`. This verb is the ONLY thing that writes either, and it
-is also the bootstrap: an existing vault predates `init` and migration, so `plainkeep vault register`
-is how it acquires a marker at all.
+in `$XDG_CONFIG_HOME/plainkeep/registry.json`. This verb is the ONLY thing that writes either.
 
-register/rebind/deregister/default mutate state outside the current vault, so each refuses without an
-explicit `--yes` (exit 3, with the exact re-run line). list/status are read-only.
+`init` (Task 5) CREATES a vault: content dirs, configuration, `plugins/`, a generated
+`plainkeep.json`, the marker, a registry entry — and **no engine code**, because since Task 2 the
+engine is a versioned read-only tree outside every vault. `register` ADOPTS a directory that is
+already there, and stays the bootstrap for a vault that predates `init` (including the template
+checkout, which is both a source of the engine and a vault).
+
+**Where `init` lives, and why it is not a top-level `plainkeep init`.** Both dispatchers discover and
+validate a data root BEFORE any verb runs, so a hypothetical `plainkeep init` would refuse on a
+machine with no vault yet — the exact machine it exists for. That is the same wall
+`vaultroot.bootstrap_hint` already answers for `register`, and the answer is the same one: on a
+machine that has a vault, `plainkeep vault init <path>` dispatches normally; on a machine that has
+none, this file is invoked directly, which is what `script/setup` does. Making it a pre-verb
+intercept instead would have meant one in the bash floor and a second in the compiled core — two
+implementations of a safety-relevant path, which is the drift this repo has already paid for.
+
+init/register/rebind/deregister/default mutate state outside the current vault, so each refuses
+without an explicit `--yes` (exit 3, with the exact re-run line). list/status are read-only.
 
 `vault status` (Task 1b) is the DEBUGGING SURFACE for discovery: it re-runs the real chain
 (lib/vaultroot.discover) and prints which of the four mechanisms won and what each of the others saw
 — including when the chain refuses, which is exactly when an operator needs it.
 """
+import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib import enginetree, output, paths, vaultreg, vaultroot  # noqa: E402
+from lib.setuplib import REQUIRED_DIRS  # noqa: E402  (the ONE list of what a data vault must contain)
 
 GREEN, RED, YEL, DIM, CYAN, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[36m", "\033[0m"
-MUTATING = ("register", "rebind", "deregister", "default")
+MUTATING = ("init", "register", "rebind", "deregister", "default")
 
 
 def _refuse(e: vaultreg.VaultError):
@@ -49,6 +65,313 @@ def _flag_value(argv: list[str], name: str) -> tuple[str | None, list[str]]:
         out.append(argv[i])
         i += 1
     return val, out
+
+
+# --- init: a DATA-ONLY vault (Phase 2 Task 5) ----------------------------------------------------
+# What a fresh vault gets, and nothing else. Every entry here is DATA — there is no `bin/`, no
+# launcher, no `VERSION`, no `skills/`, because the engine is a versioned tree outside every vault
+# since Task 2 and a vault that carried a copy of it would be the Phase 1 shape this phase exists to
+# end. `plainkeep vault init` asserts that (see `enginetree.engine_paths_in`).
+#
+# `REQUIRED_DIRS` is IMPORTED rather than restated: it is what `plainkeep doctor` gates a vault's
+# readiness on, so a second list here would be a vault that init calls finished and doctor calls
+# incomplete. That drift is not hypothetical — `setuplib`'s own comment records `bin` and `skills`
+# sitting in that list until Task 2, which made `doctor --init` create an empty `bin/` in every vault.
+INIT_GITIGNORE = """\
+# The vault MARKER holds this vault's immutable id (bin/lib/vaultreg.py). It is deliberately NOT
+# committed: an id names ONE vault, and a clone that carried it would be a second directory claiming
+# to be the same vault — which is how a verb writes into the wrong notes. A clone becomes a vault of
+# its own with `plainkeep vault register`.
+.plainkeep/
+
+# Machine-local, rebuildable caches — never source of truth.
+.index/
+/.venv/
+/plugins/.deps/
+.logs/
+.cache/
+"""
+
+# The agent adapters. `plainkeep doctor` FAILS a vault without `AGENTS.md` and without a `CLAUDE.md`
+# that bridges to it, so a vault that init left out of these is a vault whose very first health check
+# is red — which is what "usable immediately" has to mean if it is to mean anything. They are
+# VAULT-owned (doctor's own comment says so: they are that vault's instructions to its agents), so
+# they are generated here rather than installed from the engine, and the operating manual they point
+# at is the engine-owned SKILL.
+#
+# The engine is named through `current`, never through the version that happens to be active — see
+# `enginetree.stable_launcher()`. A path written into a file that outlives the invocation and spells
+# `…/engine/4.0.0/…` keeps pointing at the old pair after the next update and becomes ENOENT when
+# that version is pruned, which is precisely what this task's retention/prune policy makes possible.
+INIT_AGENTS_MD = """\
+# {name} — a plainkeep vault
+
+This directory is DATA. The plainkeep engine is installed separately, as a versioned read-only tree
+outside every vault; nothing here is code, and nothing here should be edited to change how plainkeep
+behaves.
+
+## How to act on this vault
+
+Go through the dispatcher — `plainkeep <verb>` — and never write into `tasks/`, `journal/`, `wiki/`
+or `inbox/` by hand. The verbs enforce the guardrail, the path-wall and the audit log; a direct edit
+enforces none of them.
+
+    plainkeep --vault {name} help        the verb surface
+    plainkeep --vault {name} status      where you are
+    plainkeep --vault {name} doctor      whether this vault is healthy
+
+`plainkeep.json` in this directory is the machine contract (schema, verbs, capabilities). It is
+GENERATED — regenerate it with `plainkeep help` rather than editing it.
+
+## The operating manual
+
+Engine-owned, and it travels with the engine rather than with these notes:
+
+    {skill}
+
+That path goes through `current`, so it keeps naming the engine that is actually active after an
+update or a rollback.
+"""
+
+INIT_CLAUDE_MD = """\
+@AGENTS.md
+
+The vault's instructions live in AGENTS.md, which every agent adapter reads. This file only bridges
+to it, so there is one set of instructions rather than two that drift.
+"""
+
+INIT_JOBS_REGISTRY = {
+    "description": "The jobs registry — scheduler-neutral job definitions. `plainkeep job apply` "
+                   "renders launchd plists; `plainkeep job run <name>` runs any job manually. Jobs "
+                   "call ONE verb; only read/safe_write may be scheduled.",
+    "external_allowlist": [],
+    "jobs": {},
+}
+
+
+def _nearest_existing(p: Path) -> Path:
+    """The closest ancestor of `p` that is actually there — `p` itself when it exists.
+
+    The location questions below are IDENTITY questions: `vaultreg.path_within` walks parents
+    comparing `(st_dev, st_ino)`, and a path with no inode falls back to comparing strings, which is
+    exactly the comparison that module's docstring documents two post-mortems for (case folding on
+    APFS, macOS firmlinks). Asking them of an ancestor is sound in the direction that matters —
+    containment is inherited downwards, so a parent inside the engine tree means the child would be
+    too — and it means the refusal happens BEFORE anything is created."""
+    q = Path(os.path.abspath(os.path.expanduser(str(p))))
+    while not q.exists() and q.parent != q:
+        q = q.parent
+    return q
+
+
+def _init_refusals(target: Path) -> None:
+    """Every reason `target` may not become a new vault. Each one exits; there is no partial init.
+
+    The order is the order an operator can act on: what the LOCATION is (which no amount of fixing
+    the directory changes), then what is already there.
+
+    Called TWICE by `cmd_init`: once on the path as given (which may not exist yet, so the location
+    questions fall back to the nearest existing ancestor and only the two downward-inherited shapes
+    are asked — see `enginetree.inside_engine_verdict`), and once on the canonical path after it has
+    been created, where the full verdict and the real inode comparisons apply."""
+    exists = target.exists()
+    probe = target if exists else _nearest_existing(target)
+    # DISJOINTNESS and the location policy, asked with the same functions `vaultroot.validate()` asks
+    # them with on every dispatch. Creating a vault the dispatcher would then refuse with exit 5 is
+    # the worst outcome available here: it succeeds, and every command afterwards fails.
+    overlap = (enginetree.disjointness_verdict(str(probe)) if exists
+               else enginetree.inside_engine_verdict(str(probe)))
+    if overlap is not None:
+        output.fail(output.EXIT_DENY, f"cannot init a vault at {target}, and {overlap}",
+                    hint="a vault is data and an engine is code — pick a path outside "
+                         f"{enginetree.ENGINE_ROOT}",
+                    verb="vault")
+    denied = vaultroot._policy_verdict(str(probe))
+    if denied is not None:
+        output.fail(output.EXIT_DENY, f"cannot init a vault at {target}, and {denied}",
+                    hint="pick a local path outside that tree", verb="vault")
+    engine_here = enginetree.engine_paths_in(target)
+    if engine_here:
+        output.fail(output.EXIT_USAGE,
+                    f"{target} already carries engine code ({', '.join(engine_here[:3])}) — "
+                    f"`init` creates a DATA-ONLY vault and will not adopt a checkout",
+                    hint=f"to make this checkout a vault instead:\n    "
+                         f"plainkeep vault register {target} --yes",
+                    verb="vault")
+    if vaultreg.read_marker(target) is not None:
+        output.fail(output.EXIT_USAGE, f"{target} is already a plainkeep vault "
+                                       f"({vaultreg.marker_path(target)})",
+                    hint=f"register it: plainkeep vault register {target} --yes", verb="vault")
+
+
+def _generate_manifest(target: Path) -> tuple[bool, str]:
+    """Write `<vault>/plainkeep.json` by DISPATCHING into the new vault. Returns (ok, detail).
+
+    Generated by running the product rather than by importing `manifest.write_manifest()` here, and
+    the reason is the whole shape of this task. `manifest` binds `PLAINKEEP_HOME` at import — to the
+    vault THIS process was pointed at, which is the operator's current vault and not the one being
+    created — so an in-process call would write the manifest into the wrong directory. Spawning the
+    installed launcher with the new root selected is the only spelling that puts it in the right one.
+
+    It is also the proof, not a side effect: this is a real verb going through the real dispatcher —
+    discovery, the marker, the registry entry, the guardrail, the resolver — against the vault that
+    was just created. If a freshly `init`-ed vault were not immediately usable, this is the line that
+    would fail, in the product, on the operator's own machine, and not only in a suite.
+
+    `launcher()`, not `stable_launcher()`: this is a spawn happening NOW, and the version-pinned path
+    is the correct one for a spawn (see enginetree)."""
+    exe = enginetree.launcher()
+    if not exe.is_file():
+        return False, f"no installed launcher at {exe}"
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("PLAINKEEP_VAULT_ID", "PLAINKEEP_VAULT_MECHANISM", "PLAINKEEP_PLUGIN_PACK")}
+    env["PLAINKEEP_HOME"] = str(target)
+    try:
+        r = subprocess.run([str(exe), "help"], capture_output=True, text=True, timeout=120, env=env)
+    except (OSError, subprocess.SubprocessError) as e:
+        return False, str(e)
+    if r.returncode != 0:
+        return False, (r.stderr.strip().splitlines() or ["<no stderr>"])[-1]
+    return (target / "plainkeep.json").is_file(), "written"
+
+
+def cmd_init(argv):
+    """Create a DATA-ONLY vault: content dirs, configuration, plugins/, a generated plainkeep.json,
+    the marker, a registry entry — and no engine code."""
+    _need_yes("init", argv)
+    name, argv = _flag_value(argv, "--name")
+    as_default = "--default" in argv
+    rest = [a for a in argv if not a.startswith("-")]
+    if not rest:
+        output.fail(output.EXIT_USAGE, "usage: plainkeep vault init <path> [--name <slug>] "
+                                       "[--default] --yes", verb="vault")
+    raw = Path(os.path.abspath(os.path.expanduser(rest[0])))
+    if raw.exists() and not raw.is_dir():
+        output.fail(output.EXIT_USAGE, f"not a directory: {raw}", verb="vault")
+
+    # THE LOCATION CHECKS RUN FIRST, against the nearest existing ancestor when the target is not
+    # there yet (see `_nearest_existing`). Creating the directory first would let init `mkdir` inside
+    # a sealed engine tree — which fails with a raw EACCES traceback rather than the disjointness
+    # refusal that is the true and actionable answer — and would leave a directory behind on every
+    # refusal after it.
+    _init_refusals(raw)
+    created_dir = not raw.exists()
+    if created_dir:
+        try:
+            raw.mkdir(parents=True)
+        except OSError as e:
+            output.fail(output.EXIT_UNEXPECTED, f"cannot create {raw}: {e}", verb="vault")
+    target = Path(vaultreg.canonical(raw))
+    # Asked AGAIN on the canonical path now that it exists, so the identity comparisons run with
+    # real inodes rather than on an ancestor. Cheap, and it is the one that is authoritative.
+    try:
+        _init_refusals(target)
+    except SystemExit:
+        if created_dir:
+            try:
+                # Only ever the empty directory this call made moments ago: `rmdir` refuses a
+                # non-empty one, so anything that appeared in between survives.
+                target.rmdir()
+            except OSError:
+                pass
+        raise
+
+    reg = vaultreg.read_registry()
+    existing = vaultreg.entry_for_path(reg, target)
+    if existing:
+        output.fail(output.EXIT_USAGE, f"already registered as '{existing['name']}': {target}",
+                    verb="vault")
+    name = name or vaultreg.suggest_name(target)
+    if not vaultreg.NAME_RE.match(name):
+        output.fail(output.EXIT_USAGE,
+                    f"invalid vault name {name!r} — lowercase letters, digits, '-' and '_', "
+                    f"starting with a letter", verb="vault")
+    if any(v["name"] == name for v in reg["vaults"]):
+        output.fail(output.EXIT_USAGE, f"vault name {name!r} is already taken",
+                    hint="pass a different --name", verb="vault")
+
+    # --- the skeleton. Not behind the path-wall, for `cmd_register`'s reason (test/run_pathwall.py
+    # EXEMPT): the wall classifies against the ACTIVE data root, and the target of an init is by
+    # definition not it — classifying there would refuse every init but one into the current vault.
+    made: list[str] = []
+    for rel in [*REQUIRED_DIRS, "plugins"]:
+        d = target / rel
+        if not d.is_dir():
+            d.mkdir(parents=True, exist_ok=True)
+            made.append(rel + "/")
+        # Git does not track an empty directory, so a vault cloned to a second machine would arrive
+        # missing exactly the structure `doctor` gates on.
+        keep = d / ".gitkeep"
+        if not any(d.iterdir()):
+            keep.touch()
+    skill = enginetree.stable_launcher().parent / "skills" / "operate-plainkeep" / "SKILL.md"
+    for rel, text in ((".gitignore", INIT_GITIGNORE),
+                      ("jobs/registry.json", json.dumps(INIT_JOBS_REGISTRY, indent=2) + "\n"),
+                      ("AGENTS.md", INIT_AGENTS_MD.format(name=name, skill=skill)),
+                      ("CLAUDE.md", INIT_CLAUDE_MD)):
+        f = target / rel
+        if not f.exists():
+            f.write_text(text, encoding="utf-8")
+            made.append(rel)
+
+    # THE CLAIM THIS ACTION IS NAMED FOR, checked before identity is written. `_init_refusals`
+    # refused a target that ALREADY carried engine code; this asks whether anything above put some
+    # there — the difference between a rule that is stated and one the product consults (ADR-019).
+    # Placed here rather than at the end so a violation refuses with nothing registered, which is a
+    # state an operator can simply delete.
+    leaked = enginetree.engine_paths_in(target)
+    if leaked:
+        output.fail(output.EXIT_UNEXPECTED,
+                    f"init produced engine paths inside {target}: {', '.join(leaked)}",
+                    hint="a vault is data — this is a bug in `vault init`; the directory was "
+                         "created but NOT marked or registered, so removing it is safe",
+                    verb="vault")
+
+    # --- identity: the marker, then the registry entry. Same two writes `register` makes, in the
+    # same order and through the same module, so there is one spelling of what a vault IS.
+    marker = vaultreg.new_marker_doc()
+    vaultreg.marker_path(target).parent.mkdir(parents=True, exist_ok=True)
+    vaultreg.marker_path(target).write_text(vaultreg.marker_bytes(marker), encoding="utf-8")
+    reg["vaults"].append({"id": marker["id"], "name": name, "path": str(target)})
+    if as_default or reg["default"] is None:
+        reg["default"] = marker["id"]
+    rp = vaultreg.write_registry(reg)
+
+    manifest_ok, manifest_detail = _generate_manifest(target)
+
+    # ...and asked once more at the end, because `_generate_manifest` dispatches into the vault and
+    # a dispatch is the one thing between the check above and here that writes into it. Reported
+    # rather than refused this time: the vault is registered by now, so a refusal would leave the
+    # operator with a registry entry and an exit code instead of a directory they can delete.
+    leaked = enginetree.engine_paths_in(target)
+
+    data = {"id": marker["id"], "name": name, "path": str(target), "created": made,
+            "registry": str(rp), "default": reg["default"] == marker["id"],
+            "manifest": manifest_ok, "manifest_detail": manifest_detail,
+            "data_only": not leaked, "engine_paths": leaked,
+            "engine": str(enginetree.ENGINE_ROOT)}
+
+    def render(_):
+        print(f"{GREEN}initialized{RESET} '{name}' -> {target}")
+        print(f"  id:       {marker['id']}")
+        print(f"  created:  {len(made)} paths ({', '.join(made[:6])}"
+              + (" …" if len(made) > 6 else "") + ")")
+        print(f"  marker:   {vaultreg.marker_path(target)}")
+        print(f"  registry: {rp}")
+        if manifest_ok:
+            print(f"  manifest: {target / 'plainkeep.json'}  {DIM}(generated by a real dispatch){RESET}")
+        else:
+            print(f"  manifest: {YEL}not generated{RESET} ({manifest_detail})")
+            print(f"    {CYAN}plainkeep --vault {name} help{RESET}  regenerates it")
+        if leaked:
+            print(f"  {RED}NOT data-only{RESET}: {', '.join(leaked)}")
+        else:
+            print(f"  {DIM}data-only: no engine code in the vault (the engine stays at "
+                  f"{enginetree.ENGINE_ROOT}){RESET}")
+        if data["default"]:
+            print(f"  {CYAN}this is now the default vault{RESET}")
+        print(f"  use it:   {CYAN}plainkeep --vault {name} status{RESET}")
+    return output.emit(data, "vault", human=render)
 
 
 # --- actions -------------------------------------------------------------------------------------
@@ -389,8 +712,9 @@ def cmd_status(_argv):
     return output.emit(data, "vault", human=render)
 
 
-ACTIONS = {"register": cmd_register, "rebind": cmd_rebind, "deregister": cmd_deregister,
-           "default": cmd_default, "list": cmd_list, "status": cmd_status}
+ACTIONS = {"init": cmd_init, "register": cmd_register, "rebind": cmd_rebind,
+           "deregister": cmd_deregister, "default": cmd_default, "list": cmd_list,
+           "status": cmd_status}
 
 
 def main(argv):

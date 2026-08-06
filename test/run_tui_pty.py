@@ -188,7 +188,16 @@ class Session:
 def build_vault(td: str) -> Path:
     vault = Path(td) / "plainkeep"
     shutil.copytree(REPO, vault, ignore=shutil.ignore_patterns(
-        ".git", ".index", ".logs", "__pycache__", "*.pyc", "node_modules"))
+        ".git", ".index", ".logs", ".plainkeep", "__pycache__", "*.pyc", "node_modules"))
+    # MARKED HERE, not inherited from the copy. Since Task 1b an unmarked `PLAINKEEP_HOME` is
+    # refused, and this fixture used to get its marker by copying whatever `.plainkeep` the
+    # developer's checkout had — `script/setup` step 4b puts one there. In a bare worktree the copy
+    # carried none, every dispatch answered "not a plainkeep vault", and all 13 checks failed with
+    # no mention of a marker in any of their names. It went unnoticed because the whole suite SKIPS
+    # without a compiled core (gitignored, `cd cli && bun run build`), so the stale fixture was only
+    # reachable on a machine that had both a built core and a registered checkout.
+    from lib.vaultfx import mark_vault
+    mark_vault(vault)
     return vault
 
 

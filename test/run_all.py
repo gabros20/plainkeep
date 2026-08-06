@@ -47,6 +47,7 @@ SUITES = [
     ("engine installer: enginetree (ADR-014 Phase 2 Task 2)", "run_enginetree.py"),
     ("provisioning: uv bootstrap + delivered lock + frozen matrix (ADR-020 Phase 2 Task 4)",
      "run_provision.py"),
+    ("engine update + vault init: failure injection (Phase 2 Task 5)", "run_engineupdate.py"),
     ("trust wave: exit codes + update merge + doctor (0.1/0.3/0.4)", "run_trust.py"),
     ("machine contract: --json + plainkeep.json/3 + dry-run (1.1/1.2/0.5)", "run_json.py"),
     ("multi-root verb resolution: plugins + PLAINKEEP_PATH (2.1/0.2)", "run_resolver.py"),

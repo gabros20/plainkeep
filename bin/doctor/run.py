@@ -3,6 +3,34 @@
 plainkeep doctor [--init] — self-check (§14.4): tools, folder structure, manifest↔bin consistency, agent
 adapters, no tracked secrets/binaries, index freshness. --init creates any missing skeleton folders.
 Exit 1 if any check FAILs (WARN does not fail).
+
+WHEN DOCTOR MAY MUTATE — the answer is NEVER WITHOUT CONSENT, and it is written here rather than left
+implied (Phase 2 Task 5). The plan's phrase "doctor self-heals with `uv sync`" is the kind of
+sentence that becomes a downloader if nobody defines it, so:
+
+  1. **With no flag, doctor writes nothing and downloads nothing.** It reads. Every probe here is a
+     `stat`, an `import`, a `read_text` or a `which`. A diagnostic that repairs what it finds cannot
+     be run to find out what is wrong, and on a vault of irreplaceable notes "it fixed it for you"
+     is not a recovery, it is an unreviewed write.
+  2. **`--init` is the ONLY consent flag, and it consents to exactly two things**: creating the
+     missing `REQUIRED_DIRS` skeleton, and seeding `.obsidian/` from this vault's own
+     `templates/obsidian/` (refuse-don't-overwrite — a customized config is never replaced). Both
+     write INSIDE the selected vault and nowhere else.
+  3. **No flag makes doctor touch the ENGINE.** Not `--init`, not any future one. The engine is
+     installed, sealed and versioned by `bin/lib/enginetree.py`, and repairing it is
+     `--install` / `--update` / `--rollback` — surfaces that stage, checksum and self-test before
+     anything is activated. A health check that re-installed code out from under a running process
+     would be doing the one thing the whole update contract exists to make atomic.
+  4. **Doctor never reaches the network.** No fetch, no `uv sync`, no `pip`, no model pull. Where a
+     dependency is missing, the row NAMES the command that would install it and stops there — the
+     `setup` verbs are where a download happens, behind their own `--yes`.
+
+Enforcement, not assertion (ADR-019 D1/D2): `test/run_engineupdate.py::case_doctor_never_mutates`
+snapshots the whole vault and the whole engine install root, runs the real `plainkeep doctor` through
+the real dispatcher in both modes, and diffs. It then re-runs with `--init` on a vault missing its
+skeleton and requires the diff to be non-empty and confined to the two things above. A companion AST
+ratchet in the same suite reads THIS file's `main()` and fails if any mutating call appears outside
+an `--init`-guarded branch — the call site, not the rule (ADR-019 D2/D3).
 """
 import json
 import os
@@ -178,7 +206,46 @@ def main(argv):
     else:
         ok("engine: disjoint from the vault (data is data, code is code)")
 
-    # 1c. PROVISIONING (Phase 2 Task 4 / ADR-020). Three rows, and each of them exists because an
+    # 1c. the retained pair (Phase 2 Task 5). "The previous pair is retained and remains runnable" is
+    # the update contract, and an operator only finds out whether it is true at the moment they need
+    # it. So it is a doctor row: what would a rollback do, right now, on this machine.
+    pairs = enginetree.pairs_report()
+    if pairs["rollback_to"]:
+        # `current`, not the running version's own path: this row gets pasted into issues and
+        # runbooks, and a version-pinned command is ENOENT the moment that version is pruned —
+        # which the retention policy this row reports is exactly what makes possible.
+        ok(f"engine: a previous pair is retained — rollback target {pairs['rollback_to']} "
+           f"(python3 {enginetree.stable_launcher().parent / 'bin' / 'lib' / 'enginetree.py'} "
+           f"--rollback)")
+    else:
+        # `ok`, NOT `warn`, and the merge with Task 4 is what settled it. A machine that has run
+        # `script/setup` once and never updated has exactly one pair, and having nothing to roll
+        # back to is the CORRECT state for it — the same argument ADR-020 makes for an unprovisioned
+        # engine (a normal state, not a broken one), and warning on every fresh install is how a
+        # WARN bucket stops meaning "look at this". The retained pair becomes a promise the moment
+        # an update is run; until then there is nothing to promise.
+        ok("engine: no previous pair retained yet — there is nothing to roll back to. The first "
+           "`--update` from this version creates one.")
+    if not pairs["state_agrees_with_current"]:
+        warn(f"engine: an update was interrupted between recording its intent and switching the "
+             f"pointer — the state file names {pairs['state_says_activated']!r} and `current` runs "
+             f"{pairs['active']!r}. `current` is what runs; re-run the update to converge.")
+
+    # 1d. DATA-ONLY (Phase 2 Task 5). Reported, never failed: a vault created by `plainkeep vault
+    # init` has no engine code and this row says so, while a vault that predates Task 2 — the
+    # template checkout included, which is legitimately both an engine source and a vault — carries
+    # it, and calling that broken would be false. `vault init` is where the same question is a
+    # refusal. See enginetree.engine_paths_in for why the two callers differ.
+    inside = enginetree.engine_paths_in(paths.PLAINKEEP_HOME)
+    if inside:
+        warn(f"vault: carries engine code ({', '.join(inside[:3])}"
+             + (" …" if len(inside) > 3 else "")
+             + ") — a pre-Task-2 shape. The engine that RUNS is the installed tree above; these are "
+               "a copy. `plainkeep vault init` produces data-only vaults.")
+    else:
+        ok("vault: data-only (no engine code inside the vault)")
+
+    # 1e. PROVISIONING (Phase 2 Task 4 / ADR-020). Three rows, and each of them exists because an
     # operator has a different next move:
     #
     #   * the pinned uv — absent means nothing has downloaded it yet, and the download needs network.
@@ -223,6 +290,17 @@ def main(argv):
                "(ADR-020 D3), so your uv's version and config never steer this resolution")
     except Exception as exc:                 # a broken pin must not take doctor down with it
         warn(f"engine: cannot read the uv pin ({exc})")
+
+    # 1f. THE MUTATION POLICY, stated where it is observable. See the module docstring: doctor is a
+    # DIAGNOSTIC and mutates nothing without an explicit consent flag. Printing which consent this
+    # run was given is what keeps the policy from becoming the kind of rule ADR-019 catalogues — one
+    # that is written down, agreed, and quietly stopped being true.
+    if init:
+        ok("doctor: --init given — this run MAY create missing skeleton folders and seed "
+           ".obsidian/ inside this vault. It still downloads nothing and never touches the engine.")
+    else:
+        ok("doctor: read-only — no flag was given, so this run changes nothing and downloads "
+           "nothing (--init is the only flag that lets it write, and only inside this vault)")
 
     # THE PRECEDENCE INVERSION (Phase 2 Task 3, ADR-018 D2). The SDK reaches a plugin on PYTHONPATH
     # now, and PYTHONPATH loses to `sys.path[0]` — the verb's own directory. A pack shipping a

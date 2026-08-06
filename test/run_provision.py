@@ -1045,10 +1045,20 @@ def case_doctor_names_the_provisioning_command(tmp: Path) -> None:
     # rc==0 here would make this cell about the fixture rather than about the 1c block. The claim is
     # that an unprovisioned engine is a NORMAL state — so every one of these rows rides in the `ok`
     # bucket, none is a WARN and none a FAIL.
+    # NARROWED TO THE PROVISIONING ROWS, and made stronger in the same edit. It used to read every
+    # line containing "engine:" and demand `ok` of all of them, which silently claimed ownership of
+    # every future engine row in doctor: Phase 2 Task 5 added three (the retained pair, an
+    # interrupted update, and it is `warn` there BY DESIGN) and this cell went red for a row it makes
+    # no claim about. The claim is about THIS block, so the block's three rows are matched by their
+    # own text — and each must be FOUND as well as `ok`, so deleting one now fails here rather than
+    # passing vacuously the way an `all()` over an empty list would.
+    PROV_ROW_MARKS = ("pinned uv", "provisioned interpreter", "interpreter ")
+    prov_rows = [re.sub(r"\033\[[0-9;]*m", "", ln) for ln in rows
+                 if any(m in ln for m in PROV_ROW_MARKS)]
     check("1c doctor: every provisioning row is an `ok` row — an unprovisioned engine is a normal "
           "state (the stdlib floor is the contract, ADR-009), not a broken one",
-          all("ok" in re.sub(r"\033\[[0-9;]*m", "", ln).split("engine:")[0] for ln in rows),
-          " || ".join(re.sub(r"\033\[[0-9;]*m", "", ln) for ln in rows)[:300])
+          len(prov_rows) >= 2 and all("ok" in ln.split("engine:")[0] for ln in prov_rows),
+          " || ".join(prov_rows)[:300] or "NO PROVISIONING ROWS FOUND AT ALL")
     # The system-uv row is conditional on the machine having one, so it is asserted only where it
     # applies rather than skipped wholesale — the claim it carries is the one D3 promises operators.
     if provision.system_uv():

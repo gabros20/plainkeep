@@ -95,6 +95,18 @@ LEGACY_ONLY_FILES = (".plainkeep-engine-ref",)
 REMOVAL_TREES = (*enginetree.OWNED_TREES, *LEGACY_ONLY_TREES)
 REMOVAL_FILES = (*enginetree.OWNED_FILES, *LEGACY_ONLY_FILES)
 
+# WHAT THE DIVERGENCE CHECK COMPARES, and it is NOT the removal allowlist. `.plainkeep-engine-ref`
+# records an UPSTREAM commit and is written into the vault by `script/update` itself (`script/update`
+# line 108); `script/engine.txt` — the list of paths that come FROM upstream — does not list it,
+# because it cannot: a file naming a commit can never be inside the tree of the commit it names.
+#
+# So `git diff <ref> HEAD -- .plainkeep-engine-ref` reports `A` in EVERY real vault, against every
+# possible ref, and a divergence check that includes it refuses every migration it is ever asked to
+# do. The file is still in the REMOVAL allowlist — migration deletes it — but it is a record, not
+# engine code, and there is nothing to compare it against.
+DIVERGENCE_TREES = REMOVAL_TREES
+DIVERGENCE_FILES = tuple(f for f in REMOVAL_FILES if f not in LEGACY_ONLY_FILES)
+
 # Paths excluded from the PROTECTED manifest. Every one of them is machine-generated output that the
 # product rewrites as a matter of course, and each is gitignored for that same reason (see the
 # vault's `.gitignore`), so none of them is user content and none is in the git tree the candidate is
@@ -477,12 +489,21 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
     for mode in modes:
         r = _run_probe(launcher, vault, ["vault", "status", "--json"], mode)
         _probe_ok(r, f"vault status ({mode})", vault)
-        try:
-            doc = json.loads(r.stdout)
-        except json.JSONDecodeError:
-            raise VaultError(f"the installed engine's `vault status --json` did not emit JSON "
-                             f"({mode}):\n{r.stdout[:400]}", code=output.EXIT_DENY)
-        selected = doc.get("id") or doc.get("vault_id") or (doc.get("rows") or [{}])[0].get("id")
+        doc = _payload(r.stdout, f"vault status --json ({mode})")
+        selected = doc.get("id") or doc.get("vault_id")
+
+        # WHICH MECHANISM CHOSE IT, not merely which vault got chosen. The proof is about discovery
+        # reaching THIS vault with no `PLAINKEEP_HOME` in the environment; a probe that only compared
+        # ids would still pass if the scrub silently stopped working, because the inherited variable
+        # would select the same correct vault for the wrong reason. The dispatcher reports what chose
+        # (`selected_by`), so the claim is checked rather than assumed.
+        how = str(doc.get("selected_by") or "")
+        if "PLAINKEEP_HOME" in how:
+            raise VaultError(
+                f"the prove-before-remove shell was not scrubbed: the installed engine selected the "
+                f"vault by {how!r}, not by discovery", code=output.EXIT_DENY,
+                hint=f"{'/'.join(SCRUB)} must not be set when `prove()` runs")
+
         if selected != vault_id:
             raise VaultError(
                 f"the installed engine, run from inside {vault} with no PLAINKEEP_HOME, selected "
@@ -490,7 +511,8 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
                 hint="register this vault before migrating:\n    "
                      f"PLAINKEEP_HOME={vault} python3 {enginetree.engine_bin(engine) / 'vault' / 'run.py'}"
                      f" register {vault} --yes")
-        report["probes"].append({"mode": mode, "probe": "vault status", "selected": selected})
+        report["probes"].append({"mode": mode, "probe": "vault status", "selected": selected,
+                                 "selected_by": how})
 
         r = _run_probe(launcher, vault, ["doctor"], mode)
         _probe_ok(r, f"doctor ({mode})", vault)
@@ -511,10 +533,7 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
         stamp = f"plainkeep migration canary {time.strftime('%Y-%m-%dT%H:%M:%S')} ({mode})"
         r = _run_probe(launcher, vault, ["capture", stamp, "--json"], mode)
         _probe_ok(r, f"capture ({mode})", vault)
-        try:
-            wrote = json.loads(r.stdout)
-        except json.JSONDecodeError:
-            wrote = {}
+        wrote = _payload(r.stdout, f"capture --json ({mode})")
         path = wrote.get("path") or wrote.get("wrote") or ""
         if path and not (vault / path).exists() and not Path(path).exists():
             raise VaultError(f"the capture canary reported {path!r} but nothing is there",
@@ -522,6 +541,23 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
         report["wrote"].append(path or "(path not reported)")
         report["probes"].append({"mode": mode, "probe": "capture", "path": path})
     return report
+
+
+def _payload(raw: str, what: str) -> dict:
+    """The `data` object out of a `--json` envelope.
+
+    Every verb's machine output is `{"ops_json": 1, "ok": …, "verb": …, "data": {…}}` (ADR the
+    `plainkeep.json/3` contract, `test/run_json.py`). Reading the payload's keys off the TOP level
+    finds none of them and yields `None` for every field — which is how the vault-identity probe came
+    to compare `None` against a real vault id and refuse every migration it was asked to run. The
+    envelope is unwrapped once, here, rather than at each of the four probes."""
+    try:
+        doc = json.loads(raw)
+    except json.JSONDecodeError:
+        raise VaultError(f"the installed engine's `{what}` did not emit JSON:\n{raw[:400]}",
+                         code=output.EXIT_DENY)
+    data = doc.get("data")
+    return data if isinstance(data, dict) else doc
 
 
 def _probe_ok(r: subprocess.CompletedProcess, what: str, vault: Path) -> None:
@@ -873,7 +909,7 @@ def _divergence(vault: Path, ref: str) -> list[str]:
     after removal they are invisible. So they are not merged, not warned about and not carried: the
     migration stops, writes the patch OUTSIDE the vault, and names it."""
     raw = _git_out(vault, "diff", "--name-status", "-z", ref, "HEAD", "--",
-                   *REMOVAL_TREES, *REMOVAL_FILES)
+                   *DIVERGENCE_TREES, *DIVERGENCE_FILES)
     fields = [f for f in raw.split("\0") if f]
     entries = [f"{fields[i]} {fields[i + 1]}" for i in range(0, len(fields) - 1, 2)]
     if not entries:
@@ -881,7 +917,7 @@ def _divergence(vault: Path, ref: str) -> list[str]:
     d = receipts_dir()
     d.mkdir(parents=True, exist_ok=True)
     patch = d / f"{vaultreg.read_marker(vault)['id']}.divergence.patch"
-    body = _git(vault, "diff", ref, "HEAD", "--", *REMOVAL_TREES, *REMOVAL_FILES).stdout
+    body = _git(vault, "diff", ref, "HEAD", "--", *DIVERGENCE_TREES, *DIVERGENCE_FILES).stdout
     patch.write_text(body, encoding="utf-8")
     raise VaultError(
         f"this vault's engine copy has DIVERGED from the recorded sync ref {ref[:8]} in "

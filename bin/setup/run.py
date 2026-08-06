@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, setuplib  # noqa: E402
+from lib import output, setuplib, vaultreg  # noqa: E402
 
 GLYPHS = {
     "ready": "✓",
@@ -344,6 +344,20 @@ USAGE = "usage: plainkeep setup [<layer> [--yes] | --all [--yes] | --wizard] [--
 
 
 def main(argv: list[str]) -> int:
+    """The verb, with `VaultError` rendered as the protocol's error envelope rather than a traceback.
+
+    The wrapper is here because the dependency matrix this verb installs is now GATED: reading the
+    delivered `pyproject.toml` refuses (exit 5) when the engine tree no longer matches its recorded
+    checksums, and that refusal reaches `main` through `setuplib.search_deps()`. Without this it
+    surfaced as a stack trace and exit 1 — the right decision, reported as a crash."""
+    try:
+        return _main(argv)
+    except vaultreg.VaultError as exc:
+        output.fail(exc.code, exc.message, exc.hint, verb="setup")
+        return exc.code        # unreachable: output.fail exits
+
+
+def _main(argv: list[str]) -> int:
     json_on, argv = output.parse_argv(argv)
     yes = "--yes" in argv or "-y" in argv
     all_ = "--all" in argv

@@ -483,7 +483,17 @@ def _toml_string_arrays(text: str, table: str) -> dict[str, list[str]]:
 
 
 def _pyproject_text(root: Path | None = None) -> str:
+    """The delivered `pyproject.toml`, GATED — one place, so `base_deps`/`extras`/`extra_deps` and
+    everything downstream of them are covered by reading the file through here.
+
+    The gate belongs on this read and not only on `sync()`'s, because THIS is the read the product
+    actually performs: `setuplib.search_deps()`/`models_deps()` turn these strings into a real
+    `pip install` command line (`bin/setup/run.py`), while `sync()` has no `plainkeep <verb>` caller
+    at all. Hot-patching one string into the delivered `[search]` extra put an attacker-chosen package
+    into that command line while `digest_problems` reported the file as tampered — the same
+    ADR-019 shape as the pin: the evidence existed and nothing consulted it."""
     p = engine_root(root) / PYPROJECT_REL
+    require_delivered_intact(root)
     try:
         return p.read_text(encoding="utf-8")
     except OSError as e:

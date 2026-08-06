@@ -292,15 +292,47 @@ def case_product_consults_the_matrix(tmp: Path) -> None:
           "Pillow" not in joined and "trafilatura" not in joined, joined[:300])
 
     # MUTATE the delivered project inside the sealed engine, then ask the verb again.
+    #
+    # The mutation is BLESSED (the manifest is re-recorded, exactly as `install()` would have if this
+    # content had shipped) because the read is now GATED — `provision._pyproject_text` refuses on a
+    # tree that does not match its checksums. Without the re-record this cell would be testing the
+    # gate instead of the wiring, and the wiring is what it is for. The gate gets its own cell below,
+    # which is the pair the r1 review asked for: the right assertion, with the gate in front of it.
     py_toml = engine / "pyproject.toml"
     mutated = py_toml.read_text(encoding="utf-8").replace(
         '    "fastembed>=0.4",\n', '    "fastembed>=0.4",\n    "sentinel-pkg==9.9.9",\n', 1)
     unseal_write(py_toml, mutated)
+    enginetree.record_digests(engine)
     after = setup_dry("search")
     joined_after = " | ".join(after.get("ran", []))
     check("4c wiring: EDITING the delivered pyproject changes what `plainkeep setup search` runs "
           "(the product reads the file; it does not merely agree with it)",
           "sentinel-pkg==9.9.9" in joined_after, joined_after[:300])
+
+    # THE GATE IN FRONT OF THAT SAME PROPERTY. An UNRECORDED edit — the hot patch, the one the seal
+    # cannot see — must not reach a pip command line. Before the fix it did: `setuplib.search_deps()`
+    # read the delivered project through `provision.extras()` with no digest check at all, so an
+    # attacker-chosen package landed in a real `pip install` argv while `digest_problems` reported
+    # the file as tampered. The gate lived only in `provision.sync()`, which no verb calls.
+    unseal_write(py_toml, mutated.replace('    "sentinel-pkg==9.9.9",\n',
+                                          '    "evil-attacker-package",\n', 1))
+    check("4b GATE: the tamper is invisible to the seal and VISIBLE to the checksums",
+          enginetree.seal_problems(engine) == []
+          and any("pyproject.toml does not match" in p for p in enginetree.digest_problems(engine)),
+          str(enginetree.digest_problems(engine))[:200])
+    r = run(PY, str(engine / "bin" / "setup" / "run.py"), "search", "--dry-run", "--json", env=env)
+    check("4b GATE: `plainkeep setup search` REFUSES on a hot-patched dependency matrix (exit 5), "
+          "rather than putting an attacker-chosen package on a pip command line",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {(r.stderr or r.stdout)[:250]}")
+    check("4b GATE: the attacker's package never reaches an argv the operator would run",
+          "evil-attacker-package" not in (r.stdout + r.stderr), (r.stdout + r.stderr)[:250])
+    check("4b GATE: and it refuses as the protocol's error envelope, not as a traceback",
+          "recorded checksums" in (r.stdout + r.stderr) and "Traceback" not in (r.stdout + r.stderr),
+          (r.stdout + r.stderr)[:250])
+    # Back to a tree whose contents match its manifest, so the `models` cells below are about the
+    # models layer rather than about the gate they have just proved.
+    unseal_write(py_toml, mutated)
+    enginetree.record_digests(engine)
 
     models = setup_dry("models")
     mjoined = " | ".join(models.get("ran", []))

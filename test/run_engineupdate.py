@@ -64,6 +64,14 @@ SIGKILL_RC = -signal.SIGKILL
 # here.
 MODES = ("off", "require")
 
+# THE ONE FACT THIS FILE'S PORTABILITY TURNS ON: whether this checkout has a compiled core
+# (`cd cli && bun run build`, gitignored). It is absent on a fresh clone and on CI, and `require`
+# refuses to degrade without it — so a cell that demands `require`, or that demands a manifest cover
+# the core, is a cell that asks about the DEVELOPER'S MACHINE rather than about the code. Every such
+# cell below derives its expectation from this predicate (or from `modes_for()`, which asks the same
+# question of the installed pair) and the absence is announced as a SUITE-NOTE, never swallowed.
+CORE_BUILT = (REPO / ".local" / "bin" / "plainkeep-core").is_file()
+
 
 def check(name: str, cond: bool, detail: str = "") -> None:
     results.append((name, bool(cond), detail))
@@ -222,7 +230,7 @@ def slim_source(tmp: Path, label: str, *, mutate=None) -> Path:
 
 def with_core(src: Path) -> Path:
     core = REPO / ".local" / "bin" / "plainkeep-core"
-    if core.is_file():
+    if CORE_BUILT:
         d = src / ".local" / "bin" / "plainkeep-core"
         d.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(core, d)
@@ -302,24 +310,31 @@ def case_init(tmp: Path) -> None:
     check("init: CLAUDE.md bridges to AGENTS.md (what doctor gates on)",
           "@AGENTS.md" in (target / "CLAUDE.md").read_text(encoding="utf-8"))
 
-    # USABLE IMMEDIATELY, through the real dispatcher, in both modes — including a health check,
-    # because a fresh vault whose first `doctor` is red is not usable in any sense an operator
-    # would accept.
-    for mode in MODES:
+    # USABLE IMMEDIATELY, through the real dispatcher, in every mode the installed pair CARRIES —
+    # including a health check, because a fresh vault whose first `doctor` is red is not usable in
+    # any sense an operator would accept. `modes_for()` and not `MODES`: demanding `require` of an
+    # engine-only pair fails a pair working exactly as designed, and on a checkout with no compiled
+    # core that is the only pair there is.
+    init_modes = modes_for(root)
+    for mode in init_modes:
         d = dispatch(root, target, cfg, "doctor", mode=mode)
         check(f"init: `plainkeep doctor` is GREEN on the fresh vault (PLAINKEEP_CORE={mode})",
               d.returncode == EXIT_OK, f"rc={d.returncode} " + (d.stdout + d.stderr)[-300:])
         c = dispatch(root, target, cfg, "capture", "a first note", mode=mode)
         check(f"init: `plainkeep capture` writes into it (PLAINKEEP_CORE={mode})",
               c.returncode == EXIT_OK, c.stderr[:200])
-    check("init: the captured notes really landed in the new vault's inbox",
-          len(list((target / "inbox").glob("*.md"))) >= 2)
+    # ONE note per mode that ran — the floor is the loop's own length, not a literal. A literal `2`
+    # is a second, hidden assertion that the pair carried a core, and it was exactly that: it stayed
+    # red from an export after the loop above was made portable.
+    check("init: the captured notes really landed in the new vault's inbox (one per mode dispatched)",
+          len(list((target / "inbox").glob("*.md"))) >= len(init_modes),
+          f"{len(list((target / 'inbox').glob('*.md')))} notes for {len(init_modes)} modes")
 
     # ...AND THROUGH THE REAL DISPATCHER. Everything above used the bootstrap invocation, which is
     # the path for a machine with no vault; the ordinary path is `plainkeep vault init`, and it has
     # to survive the gate, the resolver and the verb spawn. ADR-019 D1: a rule is not enforced until
     # a test drives the product's own entry point, and "init works" is exactly such a rule.
-    for mode in MODES:
+    for mode in modes_for(root):
         second = tmp / f"second-vault-{mode}"
         d = dispatch(root, target, cfg, "vault", "init", str(second), "--name", f"second{mode}",
                      "--yes", "--json", mode=mode)
@@ -432,8 +447,12 @@ def case_update_retains_the_previous_pair(tmp: Path) -> None:
         check("update: emits --json", False, r.stdout[:200])
         return
     check("update: reports the pair it replaced", res.get("previous") == "1.0.0", json.dumps(res))
-    check("update: it is a core+ENGINE pair, not an engine alone", res.get("core") is True,
-          json.dumps(res))
+    # `core` is DERIVED by the product from the staged tree (`enginetree.py:1461`), so the honest
+    # question is whether it reports what the source actually carried — "it is a pair" on a machine
+    # with a compiled core, "engine alone" on one without. Pinning `is True` would only be asking
+    # whether the developer ran `bun run build`.
+    check(f"update: it reports the pair it built — core+engine here, not the other one "
+          f"(core built: {CORE_BUILT})", res.get("core") is CORE_BUILT, json.dumps(res))
     check("update: `current` points at the new version", active_version(root) == "2.0.0")
     ok, why = runnable(root, vault, cfg)
     check("update: the NEW pair is fully runnable in both dispatcher modes", ok, why)
@@ -568,8 +587,14 @@ def case_checksum_gate(tmp: Path) -> None:
     check("checksum: `--digests` produces a manifest of the pair", r.returncode == EXIT_OK
           and len(json.loads(r.stdout)["files"]) > 100, r.stderr[:200])
     manifest = json.loads(r.stdout)
-    check("checksum: ...and it covers the compiled core, which verify() never asks about",
-          any(k.endswith("plainkeep-core") for k in manifest["files"]))
+    if CORE_BUILT:
+        check("checksum: ...and it covers the compiled core, which verify() never asks about",
+              any(k.endswith("plainkeep-core") for k in manifest["files"]))
+    else:
+        # Not a silent pass: the manifest must not CLAIM a core this source never carried. That is
+        # the same statement from the other side, and it is the strongest one available here.
+        check("checksum: ...and it does not claim a core this engine-only source never carried",
+              not any(k.endswith("plainkeep-core") for k in manifest["files"]))
     good = tmp / "good-manifest.json"
     good.write_text(json.dumps(manifest), encoding="utf-8")
     bad = tmp / "bad-manifest.json"
@@ -594,7 +619,7 @@ def case_checksum_gate(tmp: Path) -> None:
           r.returncode == EXIT_OK and active_version(root) == "2.0.0", (r.stdout + r.stderr)[:250])
     rec = json.loads((root / "engine" / ".pairs" / "2.0.0.json").read_text(encoding="utf-8"))
     check("checksum: the pair manifest is recorded OUTSIDE the sealed tree it covers",
-          rec["files"] == manifest["files"] and rec["core"] is True,
+          rec["files"] == manifest["files"] and rec["core"] is CORE_BUILT,
           str((root / "engine" / ".pairs" / "2.0.0.json")))
 
     # THE OTHER COMPARISON, and the one `--expect` does not reach. `--expect` checks the SOURCE
@@ -935,7 +960,7 @@ def case_doctor_never_mutates(tmp: Path) -> None:
     # `.logs/` is excluded and the reason is not a convenience: the GUARDRAIL appends one audit line
     # per dispatch, before the verb starts. That is the dispatcher writing, not doctor, and it
     # happens for `plainkeep help` just the same. Everything else in the vault is in scope.
-    for mode in MODES:
+    for mode in modes_for(root):
         before_v = _snapshot(vault, skip=(".logs",))
         before_e = _snapshot(root)
         r = dispatch(root, vault, cfg, "doctor", mode=mode)
@@ -1124,7 +1149,7 @@ def case_two_digest_layers_stay_distinct(tmp: Path) -> None:
     # never in-process, so what is measured is what an operator's command measures.
     root = tmp / "twolayer"
     src = with_core(slim_source(tmp, "twolayer"))
-    core_present = (src / ".local" / "bin" / "plainkeep-core").is_file()
+    core_present = CORE_BUILT and (src / ".local" / "bin" / "plainkeep-core").is_file()
     et(root, "--install", str(src), "--version", "1.0.0")
     r = et(root, "--verify", "--digests")
     check("digest layers: Task 4b's `--verify --digests` runs and finds an intact tree clean "
@@ -1203,8 +1228,22 @@ def main() -> int:
                     except OSError:
                         pass
 
-    check("parity: the runnability proofs really ran in BOTH dispatcher modes",
-          _modes_used == set(MODES), f"modes actually exercised: {sorted(_modes_used)}")
+    # THE FLOOR, unconditionally: a run in which no proof dispatched at all would otherwise satisfy
+    # every "derived" expectation below by being empty.
+    check("parity: the runnability proofs really ran, and the bash floor is among the modes",
+          "off" in _modes_used, f"modes actually exercised: {sorted(_modes_used)}")
+    if CORE_BUILT:
+        check("parity: the runnability proofs really ran in BOTH dispatcher modes",
+              _modes_used == set(MODES), f"modes actually exercised: {sorted(_modes_used)}")
+    else:
+        # The derivation is still pinned — it must collapse to exactly the floor, not to something
+        # else — and the missing leg is announced rather than assumed away.
+        check("parity: with no compiled core the proofs run on the floor ONLY, and say so",
+              _modes_used == {"off"}, f"modes actually exercised: {sorted(_modes_used)}")
+        notes.append("no compiled core in this checkout (cli/: `bun run build`) — every runnability "
+                     "proof ran in PLAINKEEP_CORE=off ONLY. The `require` leg of this suite (init "
+                     "through the dispatcher, doctor's mutation policy, the pair manifests' core "
+                     "coverage) was NOT exercised: build the core and re-run for the full gate.")
 
     print(f"{BOLD}engine update + vault init: failure injection (Phase 2 Task 5) — "
           f"{len(results)} checks{RESET}\n")
@@ -1222,7 +1261,8 @@ def main() -> int:
           f"measurement of a known exposure on the `--install --force` path, not a proof that the "
           f"exposure is gone; the update path cannot reach it, and that is what the matrix shows.")
     print(f"SUITE-NOTE: PLAINKEEP_REQUIRE_CORE and PLAINKEEP_PARITY_FAULT_SIGNALS are never set "
-          f"here. Both dispatcher modes are exercised with PLAINKEEP_CORE=off/require.")
+          f"here. Dispatcher modes are exercised with PLAINKEEP_CORE="
+          f"{'off/require' if CORE_BUILT else 'off (no compiled core in this checkout)'}.")
     for n in notes:
         print(f"SUITE-NOTE: {n}")
     print(f"\n{BOLD}Result:{RESET} {GREEN}{passed} passed{RESET}, "

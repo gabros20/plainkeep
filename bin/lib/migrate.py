@@ -812,6 +812,60 @@ def _refuse_unrepresentable(paths_: list[str]) -> None:
                          "index-info deletion form", code=output.EXIT_DENY)
 
 
+def _clean_tree_gate(vault: Path) -> list[str]:
+    """ACCEPTANCE ITEM 2's clean-tree requirement, scoped to what a migration can actually harm.
+
+    TWO refusals, because "the tree is dirty" conflates two different hazards:
+
+      * **Any STAGED change, anywhere in the vault.** `_apply` runs `git read-tree <commit>`, which
+        rewrites `.git/index` wholesale, so a staged edit to a note is silently discarded. What is at
+        risk is not the file — `read-tree` without `-u` never touches the working tree — it is the
+        operator's staging, and losing that without saying so is exactly the quiet damage this module
+        exists to make impossible.
+      * **Unstaged or untracked changes to an ALLOWLISTED path.** Those are the paths migration
+        deletes. An uncommitted edit to one is destroyed with no record and no patch, which is the
+        same hazard `_divergence` covers for COMMITTED edits. An untracked file inside `bin/` is the
+        specific case the panel named.
+
+    And deliberately NOT a refusal, which is a NARROWING of item 2's literal "clean working tree" and
+    is recorded as a deviation rather than smuggled in: uncommitted changes to NOTES. A migration is
+    a pure deletion of engine paths, verified as such before checkout; an unstaged note edit is
+    outside the removal set and outside the index rewrite, so there is no mechanism by which it can
+    be harmed. Two reasons the strict rule is worse than this one:
+
+      1. It refuses most real vaults most of the time — a person who keeps notes has uncommitted
+         notes — and the pressure that creates is a blind `git add -A` before migrating, which is
+         strictly more dangerous for them than migrating with a dirty journal.
+      2. It makes a KILLED RUN UNRECOVERABLE. Prove-before-remove writes a real note and appends to
+         today's journal, by design; a SIGKILL after that boundary therefore leaves a vault the
+         strict rule refuses to finish migrating, with the engine copy still in place and no way
+         forward but manual git surgery. A gate that a correct partial run cannot get past is not a
+         safety property, it is a trap. `test/run_migrate.py`'s kill matrix is what found this.
+
+    Returns the harmless dirt, so preflight can report it rather than pretend the vault was clean."""
+    staged = _git_out(vault, "diff", "--cached", "--name-only", "HEAD")
+    if staged:
+        names = staged.splitlines()
+        raise VaultError(
+            f"{vault} has {len(names)} STAGED change(s), and migration rewrites the git index:\n  "
+            + "\n  ".join(names[:20]),
+            code=output.EXIT_DENY,
+            hint="commit them or unstage them (`git -C %s restore --staged .`) — a staged edit "
+                 "would be discarded by the index rewrite, silently" % vault)
+
+    entries = [e for e in _git_out(vault, "status", "--porcelain", "--untracked-files=all",
+                                   "-z").split("\0") if e and len(e) > 3]
+    engine_dirt = [e for e in entries if is_allowlisted(e[3:])]
+    if engine_dirt:
+        raise VaultError(
+            f"{vault} has uncommitted changes to {len(engine_dirt)} ENGINE path(s) — the paths "
+            f"migration deletes:\n  " + "\n  ".join(engine_dirt[:20]),
+            code=output.EXIT_DENY,
+            hint="commit or remove them first. They are inside the removal allowlist, so a "
+                 "migration would delete them with no patch and no record; there is no --force")
+    return [e for e in entries if not is_allowlisted(e[3:])]
+
+
 def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict:
     """READ-ONLY and CONFIRM-FREE. Everything a migration would refuse on, asked before anything is
     provisioned and before `--yes` is even looked at. It builds and VERIFIES the candidate tree —
@@ -864,17 +918,7 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
         return doc
 
     if st == "pristine":
-        # CLEAN TREE (acceptance item 2). `--untracked-files=all` on purpose: a stray file inside
-        # `bin/` is exactly the divergence item 3 exists for, and a status that ignored it would call
-        # a vault clean while the thing about to be deleted had something of the operator's in it.
-        dirty = _git_out(vault, "status", "--porcelain", "--untracked-files=all")
-        if dirty:
-            raise VaultError(
-                f"the working tree at {vault} is not clean ({len(dirty.splitlines())} path(s)):\n  "
-                + "\n  ".join(dirty.splitlines()[:20]),
-                code=output.EXIT_DENY,
-                hint="commit or stash them; migration verifies a git tree before it changes "
-                     "anything, and it cannot verify what git does not track")
+        doc["dirty_but_harmless"] = _clean_tree_gate(vault)
 
     # OBJECT INTEGRITY (acceptance item 2). Full `fsck`, not `--connectivity-only`: the migration is
     # about to make a commit the operator's only recovery path depends on, and connectivity says

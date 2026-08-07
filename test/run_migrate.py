@@ -212,6 +212,12 @@ PATH_METHODS = {"resolve", "absolute", "joinpath", "with_name", "with_suffix", "
 PATH_WRAPPERS = {"Path", "str", "fspath", "os.fspath"}
 PATH_FUNCS = {"join", "abspath", "realpath", "normpath", "expanduser", "fspath", "canonical"}
 
+# Calls that ENUMERATE a path's contents. What they yield is inside the vault, so a `for` over one of
+# them binds vault paths — but they are not path-to-path conversions, so `_derives_from` must keep
+# saying no about the call itself (`x = os.walk(vault)` is a generator, not a file). Handled where
+# the binding happens instead, by `_iterates_vault`.
+ITER_FUNCS = {"walk", "rglob", "glob", "iterdir", "scandir"}
+
 
 def _derives_from(node: ast.AST, names: set[str]) -> bool:
     """Is this expression a PATH DERIVED from one of `names` — not merely one that mentions it?
@@ -244,6 +250,30 @@ def _derives_from(node: ast.AST, names: set[str]) -> bool:
         if isinstance(f, ast.Attribute) and f.attr in PATH_FUNCS and node.args:
             return any(_derives_from(a, names) for a in node.args)
     return False
+
+
+def _iterates_vault(node: ast.AST, names: set[str]) -> bool:
+    """Does this `for` iterate over the CONTENTS of a vault path — `os.walk(vault)`, `p.rglob(…)`?
+
+    Review r2 named this the largest remaining false negative, and it is not hypothetical:
+    `protected_manifest` ALREADY contains `for dirpath, dirnames, filenames in os.walk(vault,
+    followlinks=False)`. An author adding a write inside the loop that is already there — the most
+    likely place a write would ever be added to this module — was invisible, because taint reached
+    `vault` and stopped: `os.walk(vault)` is a call `_derives_from` correctly refuses to follow (it
+    yields tuples, not a path), so `dirpath` was a fresh untainted name and
+    `open(os.path.join(dirpath, …), "w")` never registered.
+
+    So the enumeration is recognised at the BINDING rather than in `_derives_from`: the loop targets
+    of such a `for` are vault paths. `os.walk`'s targets include two lists of bare NAMES, which this
+    over-taints; that is the same trade the rest of the detector makes, and the control assertion in
+    `case_ratchet_goes_red` is what keeps the over-taint honest."""
+    if not isinstance(node, ast.Call):
+        return False
+    f = node.func
+    if not isinstance(f, ast.Attribute) or f.attr not in ITER_FUNCS:
+        return False
+    # `os.walk(vault)` carries the path in `args[0]`; `p.rglob("*")` carries it in the receiver.
+    return _derives_from(f.value, names) or any(_derives_from(a, names) for a in node.args)
 
 
 def _params(fn: ast.FunctionDef) -> list[str]:
@@ -350,7 +380,8 @@ def _tainted_names(fn: ast.FunctionDef, seed: set[str] | None = None) -> set[str
                         names.add(n.id)
         # `with open(...) as fh:` and `for p in (...):` bind names the assignment walk cannot see.
         for node in ast.walk(fn):
-            if isinstance(node, ast.For) and _derives_from(node.iter, names):
+            if isinstance(node, ast.For) and (_derives_from(node.iter, names)
+                                              or _iterates_vault(node.iter, names)):
                 for n in ast.walk(node.target):
                     if isinstance(n, ast.Name):
                         names.add(n.id)
@@ -403,7 +434,17 @@ def vault_writes(tree: ast.Module) -> list[tuple[str, int, str]]:
                         if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
                             mode = str(kw.value.value)
                     if any(c in mode for c in "wax+"):
-                        targets = [recv] if bound else node.args[:1]
+                        # BOTH CANDIDATES, and that is a REGRESSION FIX rather than belt-and-braces.
+                        # `io.open(p, "w")` has an `Attribute` func exactly like `p.open("w")` does,
+                        # so the receiver test above calls it bound and took `io` — a module name,
+                        # never vault-derived — as the written path while DISCARDING `p`. Review r2
+                        # measured the whole family (`io`, `gzip`, `codecs`, `builtins`) going from
+                        # caught at ac0acb2 to missed here: a ratchet strictly worse than the one it
+                        # replaced. Which of the receiver and `args[0]` is the file cannot be decided
+                        # from the parse tree alone — it depends on whether `recv` names a module or
+                        # a value — so both are candidates. It costs nothing on the bound spelling:
+                        # there `args[0]` is the mode, a `Constant`, which cannot derive from a vault.
+                        targets = [recv, *node.args[:1]] if bound else node.args[:1]
             elif name in WRITE_FUNCS:
                 f = node.func
                 is_module_call = isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) \
@@ -590,6 +631,24 @@ MUTATIONS = (
      "    _scrub(vault)\n",
      "_apply", "no function runs a working-tree git command", "_scrub",
      "\n\ndef _scrub(where):\n    _git(where, 'clean', '-fdx')\n"),
+
+    # --- review r2, measured GREEN at fd8200c: shapes the fix wave made STRICTLY WORSE ---
+    # `<module>.open(path, mode)` parses as an Attribute call exactly like the bound `p.open(mode)`,
+    # so the widened detector took the MODULE as the written path and dropped `args[0]`. These were
+    # caught at ac0acb2. Two family members are ratcheted rather than one because the bug was in the
+    # shape, not in the name: any module whose `open` takes the path first has it.
+    ("r2: `io.open(path, 'w')` — a module-qualified open, which is not a bound method",
+     "    io.open(vault / 'wiki' / 'oops.md', 'w').write('injected')\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+    ("r2: `gzip.open(path, 'wb')` — the same shape, a binary mode and another module",
+     "    gzip.open(vault / 'wiki' / 'oops.md.gz', 'wb').write(b'injected')\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+
+    # --- review r2, the largest surviving false negative: the loop this module already contains ---
+    ("r2: a write inside an `os.walk(vault)` loop, where the module already walks the vault",
+     "    for dp, _dn, _fn in os.walk(vault, followlinks=False):\n"
+     "        open(os.path.join(dp, 'oops.md'), 'w').write('injected')\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
 )
 
 

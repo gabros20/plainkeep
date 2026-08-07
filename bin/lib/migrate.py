@@ -812,8 +812,12 @@ def _refuse_unrepresentable(paths_: list[str]) -> None:
                          "index-info deletion form", code=output.EXIT_DENY)
 
 
-def _clean_tree_gate(vault: Path) -> list[str]:
+def _clean_tree_gate(vault: Path, *, op: str = "migration") -> list[str]:
     """ACCEPTANCE ITEM 2's clean-tree requirement, scoped to what a migration can actually harm.
+
+    `op` names the direction for the message only. Both hazards are symmetric — `rollback()` runs the
+    same index rewrite and then a `checkout-index -f` over the same allowlist — so it is the same
+    gate, called twice, rather than two gates that could drift.
 
     TWO refusals, because "the tree is dirty" conflates two different hazards:
 
@@ -847,7 +851,7 @@ def _clean_tree_gate(vault: Path) -> list[str]:
     if staged:
         names = staged.splitlines()
         raise VaultError(
-            f"{vault} has {len(names)} STAGED change(s), and migration rewrites the git index:\n  "
+            f"{vault} has {len(names)} STAGED change(s), and {op} rewrites the git index:\n  "
             + "\n  ".join(names[:20]),
             code=output.EXIT_DENY,
             hint="commit them or unstage them (`git -C %s restore --staged .`) — a staged edit "
@@ -859,10 +863,10 @@ def _clean_tree_gate(vault: Path) -> list[str]:
     if engine_dirt:
         raise VaultError(
             f"{vault} has uncommitted changes to {len(engine_dirt)} ENGINE path(s) — the paths "
-            f"migration deletes:\n  " + "\n  ".join(engine_dirt[:20]),
+            f"migration deletes and rollback restores over:\n  " + "\n  ".join(engine_dirt[:20]),
             code=output.EXIT_DENY,
-            hint="commit or remove them first. They are inside the removal allowlist, so a "
-                 "migration would delete them with no patch and no record; there is no --force")
+            hint=f"commit or remove them first. They are inside the removal allowlist, so {op} "
+                 "would destroy them with no patch and no record; there is no --force")
     return [e for e in entries if not is_allowlisted(e[3:])]
 
 
@@ -1069,7 +1073,14 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
     one of them is re-derived below where it is load-bearing (`_apply` rebuilds and re-verifies the
     candidate tree, and `update-ref` is a compare-and-swap on the HEAD this doc recorded) — but a
     preflight runs a FULL `git fsck`, and running it twice per migration doubles the one cost that
-    scales with the size of the vault's history."""
+    scales with the size of the vault's history.
+
+    That sentence used to be true of the allowlist gate and the CAS and FALSE of the two refusals
+    below, which were reached only from `preflight()`. A caller handing in a hand-built `pre` — this
+    is a public function, and `pre` is a keyword argument, not a flag — therefore migrated a vault
+    carrying committed local engine edits and destroyed them with no patch and no record. There is no
+    `--force` in this module and a keyword argument is not allowed to be one, so both are re-derived
+    here."""
     _check_kill_stage()
     if not yes:
         raise VaultError("refusing to migrate without --yes", code=output.EXIT_CONFIRM,
@@ -1081,6 +1092,9 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
             pre = preflight(vault, engine_source=engine_source, scratch=scratch)
         vault = Path(pre["vault"])
         vault_id = pre["vault_id"]
+        if pre["state"] == "pristine":
+            _clean_tree_gate(vault)
+            _divergence(vault, _engine_ref(vault))
         _kill_hook("preflight-done")
 
         src = Path(pre["engine_source"])
@@ -1249,6 +1263,14 @@ def rollback(vault, *, yes: bool = False) -> dict:
                  f"    git -C {vault} revert {str(rec.get('after_commit'))[:12]}")
     branch = rec["branch"]
     before = rec["before_commit"]
+
+    # THE STAGED-CHANGE REFUSAL, IN THE DIRECTION IT WAS MISSING. `_clean_tree_gate` refuses any
+    # staged change on the forward path because `read-tree` rewrites `.git/index` wholesale and
+    # losing an operator's staging without saying so is exactly the quiet damage this module exists
+    # to make impossible. `rollback()` runs the same `read-tree`, and then a `checkout-index -f` that
+    # would overwrite an untracked file sitting at an allowlisted path — so it needs the same gate,
+    # not a weaker one.
+    _clean_tree_gate(vault, op="rollback")
 
     # Same gate as the forward direction, in reverse: the restoration must be a pure ADDITION of
     # allowlisted paths. Anything else and the rollback refuses rather than "restoring".

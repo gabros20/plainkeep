@@ -1240,6 +1240,41 @@ def case_rollback(tmp: Path) -> None:
           mig(fx, "--preflight", str(v)).stderr[:250])
 
 
+def case_rollback_refuses_staged_changes(tmp: Path) -> None:
+    """THE HAZARD `_clean_tree_gate` EXISTS FOR, UNGUARDED IN REVERSE (review r1, I2).
+
+    `rollback()` runs the same `git read-tree` the forward path refuses a staged tree for, and then a
+    `checkout-index -f` on top. Staging a note and rolling back used to exit 0 and empty the index,
+    silently — the file survived, the operator's staging did not, and nothing said so."""
+    fx = vm.phase1_vault(tmp, "rb-staged")
+    v = fx["vault"]
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("item 12: fixture — migrated", r.returncode == EXIT_OK, r.stderr[:300])
+    if r.returncode != EXIT_OK:
+        return
+    (v / "wiki").mkdir(parents=True, exist_ok=True)
+    (v / "wiki" / "staged-work.md").write_text("# work in progress\n", encoding="utf-8")
+    vm.git(v, "add", "wiki/staged-work.md")
+    staged = vm.git(v, "diff", "--cached", "--name-only").stdout.split()
+    check("item 12: fixture — there is a staged change", staged == ["wiki/staged-work.md"],
+          str(staged))
+
+    rb = mig(fx, "--rollback", str(v), "--yes")
+    check("item 12: rollback REFUSES a staged change rather than discarding it",
+          rb.returncode == EXIT_DENY and "STAGED" in (rb.stderr + rb.stdout),
+          f"rc={rb.returncode} {(rb.stderr + rb.stdout)[:250]}")
+    check("item 12: ...and the operator's staging is still there",
+          vm.git(v, "diff", "--cached", "--name-only").stdout.split() == ["wiki/staged-work.md"],
+          vm.git(v, "diff", "--cached", "--name-only").stdout[:200])
+    check("item 12: ...and nothing was rolled back", not (v / "bin").exists())
+
+    # Unstage, and the same rollback now works — the gate is a gate, not a wall.
+    vm.git(v, "restore", "--staged", "wiki/staged-work.md")
+    rb2 = mig(fx, "--rollback", str(v), "--yes")
+    check("item 12: ...and once unstaged, the rollback proceeds", rb2.returncode == EXIT_OK,
+          f"rc={rb2.returncode} {(rb2.stderr or rb2.stdout)[:250]}")
+
+
 def case_rollback_refuses_work_on_top(tmp: Path) -> None:
     """A commit made since the migration means the operator has work on top. Refuse, don't rewrite."""
     fx = vm.phase1_vault(tmp, "rb-refuse")
@@ -1471,6 +1506,112 @@ def case_allowlist_gate_aborts_on_an_unexpected_path(tmp: Path) -> None:
           a.get("ok") is True and a.get("n", 0) > 50, str(a)[:250])
 
 
+PRE_WAIVER_DRIVER = r'''
+"""Call `migrate.migrate()` with a HAND-BUILT `pre`, the way any caller of this module's public API
+can, and report whether the gates that only `preflight()` used to run still fire.
+
+A subprocess for the same reason `GATE_DRIVER` is one: `migrate.py` inserts `bin/` on `sys.path` and
+imports `lib`, which the suite has bound to `test/lib`.
+"""
+import json, sys
+from pathlib import Path
+
+vault = Path(sys.argv[1])
+sys.path.insert(0, str(Path(sys.argv[2])))
+import importlib.util
+spec = importlib.util.spec_from_file_location("_pk_migrate", sys.argv[3])
+m = importlib.util.module_from_spec(spec); sys.modules["_pk_migrate"] = m
+spec.loader.exec_module(m)
+
+import subprocess
+head = subprocess.run(["git", "-C", str(vault), "rev-parse", "HEAD"],
+                      capture_output=True, text=True).stdout.strip()
+branch = subprocess.run(["git", "-C", str(vault), "symbolic-ref", "--quiet", "HEAD"],
+                        capture_output=True, text=True).stdout.strip()
+marker = m.vaultreg.read_marker(vault)
+
+# EVERY FIELD `migrate()` READS, hand-built — no `preflight()` anywhere in this process. This is the
+# whole shape of the finding: `pre` is a keyword argument on a public function, so a caller supplies
+# it and the refusals reached only from `preflight()` never run.
+pre = {"schema": m.SCHEMA, "vault": str(vault), "vault_id": marker["id"], "branch": branch,
+       "state": "pristine", "head": head, "engine_source": str(vault),
+       "engine_version": (vault / "VERSION").read_text().strip()}
+out = {}
+try:
+    doc = m.migrate(vault, yes=True, pre=pre)
+    out = {"refused": False, "removed": len(doc.get("removed") or [])}
+except Exception as e:
+    out = {"refused": True, "code": getattr(e, "code", None),
+           "message": getattr(e, "message", str(e))[:400]}
+out["engine_still_there"] = (vault / "bin" / "lib" / "vaultroot.py").is_file()
+out["head_moved"] = subprocess.run(["git", "-C", str(vault), "rev-parse", "HEAD"],
+                                   capture_output=True, text=True).stdout.strip() != head
+print(json.dumps(out))
+'''
+
+
+def _drive_pre_waiver(fx: dict, tmp: Path) -> dict:
+    drv = tmp / "pre_waiver.py"
+    drv.write_text(PRE_WAIVER_DRIVER, encoding="utf-8")
+    r = subprocess.run([PY, str(drv), str(fx["vault"]), str(REPO / "bin"), str(MIGRATE)],
+                       capture_output=True, text=True,
+                       env=vm._clean_env(PLAINKEEP_ENGINE_HOME=fx["root"],
+                                         PLAINKEEP_CONFIG_HOME=fx["cfg"],
+                                         PLAINKEEP_BIN_DIR=str(fx["base"] / "bin")))
+    try:
+        return json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return {"error": (r.stderr or r.stdout)[-600:]}
+
+
+def case_the_pre_argument_is_not_a_waiver(tmp: Path) -> None:
+    """REVIEW r1, I1. `migrate(pre=…)` used to skip the divergence refusal and the clean-tree gate.
+
+    `case_no_force_anywhere` cannot see this: it looks for six literal flag spellings and a
+    `force=True` kwarg. The waiver was neither — it was a documented optimisation whose docstring
+    claimed every check was "re-derived below where it is load-bearing", which was true of the
+    allowlist gate and the CAS and false of these two, because both were reached only from
+    `preflight()`.
+
+    Measured before the fix: a vault carrying a committed agent edit to `bin/lib/vaultroot.py` is
+    refused by the CLI with exit 5, and `migrate.migrate(vault, yes=True, pre={…})` COMPLETED the
+    migration — 122 paths removed, the edit gone, no patch, no record. Not a route to deleting a
+    note; a route to silently destroying an operator's local engine edits, which is exactly what
+    item 3 and the no-`--force` rule exist to prevent."""
+    fx = vm.phase1_vault(tmp, "pre-diverged")
+    v = fx["vault"]
+    vm.diverge(v)
+    cli = mig(fx, "--migrate", str(v), "--yes")
+    check("I1: fixture — the CLI refuses a diverged vault", cli.returncode == EXIT_DENY,
+          f"rc={cli.returncode} {cli.stderr[:200]}")
+
+    out = _drive_pre_waiver(fx, tmp)
+    check("I1: migrate(pre=…) REFUSES a diverged vault, same as the CLI",
+          out.get("refused") is True and out.get("code") == EXIT_DENY, json.dumps(out)[:400])
+    check("I1: ...naming the divergence rather than some other refusal",
+          "DIVERGED" in str(out.get("message", "")), str(out.get("message"))[:250])
+    check("I1: ...and the operator's local engine edit is still on disk",
+          out.get("engine_still_there") is True, json.dumps(out)[:300])
+    check("I1: ...and HEAD never moved", out.get("head_moved") is False, json.dumps(out)[:300])
+    vm.wipe(fx["base"])
+
+    # The other half of the same waiver: the clean-tree gate. A STAGED change is the hazard —
+    # `_apply`'s `read-tree` rewrites the index wholesale.
+    fx2 = vm.phase1_vault(tmp, "pre-staged")
+    v2 = fx2["vault"]
+    (v2 / "wiki" / "staged.md").write_text("# staged\n", encoding="utf-8")
+    vm.git(v2, "add", "wiki/staged.md")
+    out2 = _drive_pre_waiver(fx2, tmp)
+    check("I1: migrate(pre=…) REFUSES a staged change, same as the CLI",
+          out2.get("refused") is True and out2.get("code") == EXIT_DENY, json.dumps(out2)[:400])
+    check("I1: ...naming the staged change", "STAGED" in str(out2.get("message", "")),
+          str(out2.get("message"))[:250])
+    check("I1: ...and the staging survives",
+          vm.git(v2, "diff", "--cached", "--name-only").stdout.split() == ["wiki/staged.md"],
+          vm.git(v2, "diff", "--cached", "--name-only").stdout[:200])
+    vm.wipe(fx2["base"])
+
+
 def case_divergence_is_scoped_to_what_the_ref_actually_synced(tmp: Path) -> None:
     """REVIEW r1, I3. The divergence gate assumed every removal-allowlist path was synced by the ref.
 
@@ -1680,8 +1821,10 @@ CASES = (
     ("item 12: second run is a no-op", case_second_run_is_a_noop),
     ("item 12: rollback", case_rollback),
     ("item 12: rollback refuses work on top", case_rollback_refuses_work_on_top),
+    ("item 12: rollback refuses staged changes", case_rollback_refuses_staged_changes),
     ("item 6: the allowlist gate", case_allowlist_gate_aborts_on_an_unexpected_path),
     ("no --force anywhere", case_no_force_anywhere),
+    ("item 3: `pre` is not a waiver", case_the_pre_argument_is_not_a_waiver),
     ("item 3: divergence is scoped to the ref's manifest",
      case_divergence_is_scoped_to_what_the_ref_actually_synced),
     ("item 3: divergence when the ref carries no manifest",

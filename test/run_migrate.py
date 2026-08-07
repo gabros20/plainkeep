@@ -2064,6 +2064,131 @@ def case_rollback_refuses_a_provisional_receipt(tmp: Path) -> None:
           r2.returncode == EXIT_OK, f"rc={r2.returncode} {(r2.stderr or r2.stdout)[:300]}")
 
 
+def _kill_then(tmp: Path, name: str, stage: str) -> tuple[dict, Path, Path, str]:
+    """A vault migrated up to `stage` and then SIGKILLed, with its launcher symlink into the vault."""
+    fx = vm.phase1_vault(tmp, name)
+    v = fx["vault"]
+    bindir = fx["base"] / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    link = bindir / "plainkeep"
+    link.symlink_to(v / "plainkeep")
+    pristine = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+    r = mig(fx, "--migrate", str(v), "--yes", bindir=bindir, PLAINKEEP_MIGRATE_KILL_AT=stage)
+    check(f"NEW-1@{stage}: fixture — the run died at the boundary", r.returncode in (-9, 137),
+          f"rc={r.returncode} {r.stderr[:200]}")
+    return fx, bindir, link, pristine
+
+
+def case_rollback_without_rerunning_an_interrupted_migration(tmp: Path) -> None:
+    """REVIEW r2, NEW-1. The PROVISIONAL refusal told all three interruptions the earliest one's story.
+
+    `case_rollback_after_an_interrupted_migration` re-runs the migration before rolling back, so it
+    never asks the question an operator asks first: I killed it, can I undo it NOW? Measured at
+    `fd8200c`, the answer at `worktree-pruned` was a refusal reading "the run that wrote it was
+    interrupted BEFORE IT REMOVED ANYTHING" — with the vault's entire engine copy gone from the
+    working tree and HEAD sitting on the migration commit. The action was safe; the sentence was the
+    opposite of the truth, which in this module is the defect, not a wording nit.
+
+    Four vaults, four different truths, and the point is that they are different:
+
+      * `symlink` — nothing was committed and nothing removed. The original sentence, where it is
+        true, unchanged.
+      * `tree-written` — the commit is in place, the removal is not. Refuses, says HALF APPLIED, and
+        sends the operator to the re-run that converges. The receipt is NOT completed here: a
+        `removed` list derived from that commit would name files still on disk.
+      * `worktree-pruned` — the migration really is done. The receipt is completed and the rollback
+        SUCCEEDS, which also deletes the mandatory re-run step.
+      * `worktree-pruned` + a commit on top — the dead end the r2 review carried forward: the removal
+        happened, so re-running is a permanent no-op, and the old hint said to re-run. Now it names
+        the migration commit and the `git revert` that undoes it."""
+    lie = "before it removed anything"
+
+    # 1. `symlink`: the message that was always true, still true, still there.
+    fx, bindir, link, pristine = _kill_then(tmp, "n1-symlink", "symlink")
+    rb = mig(fx, "--rollback", str(fx["vault"]), "--yes", bindir=bindir)
+    out = rb.stderr + rb.stdout
+    check("NEW-1@symlink: rollback still refuses a receipt whose run committed nothing",
+          rb.returncode == EXIT_DENY and "PROVISIONAL" in out and lie in out,
+          f"rc={rb.returncode} {out[:300]}")
+    check("NEW-1@symlink: ...and that claim is TRUE — HEAD never moved and the engine is intact",
+          vm.git(fx["vault"], "rev-parse", "HEAD").stdout.strip() == pristine
+          and (fx["vault"] / "bin").is_dir())
+    vm.wipe(fx["base"])
+
+    # 2. `tree-written`: committed, not removed. The refusal must not claim either extreme.
+    fx, bindir, link, pristine = _kill_then(tmp, "n1-tree", "tree-written")
+    v, root = fx["vault"], fx["root"]
+    rec_p = root / "migrations" / f"{fx['vault_id']}.json"
+    head_at_kill = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+    rb = mig(fx, "--rollback", str(v), "--yes", bindir=bindir)
+    out = rb.stderr + rb.stdout
+    check("NEW-1@tree-written: rollback refuses a half-applied migration",
+          rb.returncode == EXIT_DENY and "HALF APPLIED" in out, f"rc={rb.returncode} {out[:300]}")
+    check("NEW-1@tree-written: ...and does NOT claim nothing was removed, which is the r2 finding",
+          lie not in out, out[:300])
+    check("NEW-1@tree-written: ...and says so because the commit is real and the engine is still on "
+          "disk", head_at_kill != pristine and (v / "bin").is_dir())
+    check("NEW-1@tree-written: ...and the receipt is left PROVISIONAL rather than completed with a "
+          "removal that has not happened",
+          rec_p.is_file() and not json.loads(rec_p.read_text(encoding="utf-8")).get("after_commit"),
+          rec_p.read_text(encoding="utf-8")[:200] if rec_p.is_file() else "receipt gone")
+    check("NEW-1@tree-written: ...and hands back the launcher target",
+          str(v / "plainkeep") in out, out[:400])
+    check("NEW-1@tree-written: ...and re-running still converges, so the refusal is not a dead end",
+          mig(fx, "--migrate", str(v), "--yes", bindir=bindir).returncode == EXIT_OK)
+    vm.wipe(fx["base"])
+
+    # 3. `worktree-pruned`: the migration is done. Roll it back WITHOUT re-running it first.
+    trees, files = allowlist()
+    fx, bindir, link, pristine = _kill_then(tmp, "n1-pruned", "worktree-pruned")
+    v, root = fx["vault"], fx["root"]
+    rec_p = root / "migrations" / f"{fx['vault_id']}.json"
+    check("NEW-1@worktree-pruned: fixture — the engine really is gone and HEAD really moved",
+          not (v / "bin").exists()
+          and vm.git(v, "rev-parse", "HEAD").stdout.strip() != pristine)
+    before_prot = protected_only(sha_tree(v), trees, files)
+    rb, rbdoc = mig_json(fx, "--rollback", str(v), "--yes", bindir=bindir)
+    check("NEW-1@worktree-pruned: --rollback --yes SUCCEEDS without a re-run",
+          rb.returncode == EXIT_OK, f"rc={rb.returncode} {(rb.stderr or rb.stdout)[:300]}")
+    if rb.returncode == EXIT_OK:
+        check("NEW-1@worktree-pruned: ...restoring the paths the migration removed, not zero of them",
+              len(rbdoc.get("restored") or []) > 0, json.dumps(rbdoc)[:200])
+        check("NEW-1@worktree-pruned: ...the engine copy is back in the working tree",
+              (v / "bin").is_dir() and (v / "script").is_dir() and (v / "VERSION").is_file())
+        check("NEW-1@worktree-pruned: ...HEAD is the pre-migration commit",
+              vm.git(v, "rev-parse", "HEAD").stdout.strip() == pristine)
+        check("NEW-1@worktree-pruned: ...the launcher symlink points back into the vault",
+              link.is_symlink() and os.readlink(link) == str(v / "plainkeep"),
+              os.readlink(link) if link.is_symlink() else "not a symlink")
+        check("NEW-1@worktree-pruned: ...the receipt is gone because the rollback really happened",
+              not rec_p.is_file())
+        after_prot = protected_only(sha_tree(v), trees, files)
+        check("NEW-1@worktree-pruned: ...and not one protected file was lost",
+              not (set(before_prot) - set(after_prot)),
+              str(sorted(set(before_prot) - set(after_prot))[:5]))
+    vm.wipe(fx["base"])
+
+    # 4. The dead end: a commit on top of a kill that DID remove everything. Re-running cannot help.
+    fx, bindir, link, pristine = _kill_then(tmp, "n1-ontop", "worktree-pruned")
+    v = fx["vault"]
+    migration_commit = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+    _commit_new(v, "wiki/after.md", "# work done after the interrupted migration\n")
+    tip = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+    rb = mig(fx, "--rollback", str(v), "--yes", bindir=bindir)
+    out = rb.stderr + rb.stdout
+    check("NEW-1@commit-on-top: rollback refuses work on top of an interrupted migration",
+          rb.returncode == EXIT_DENY, f"rc={rb.returncode} {out[:300]}")
+    check("NEW-1@commit-on-top: ...and does NOT claim nothing was removed", lie not in out, out[:300])
+    check("NEW-1@commit-on-top: ...and does NOT send the operator to a re-run that is a no-op",
+          "re-run the migration to finish it" not in out, out[:400])
+    check("NEW-1@commit-on-top: ...it names the migration commit and the revert that undoes it",
+          "revert" in out and migration_commit[:12] in out, out[:400])
+    check("NEW-1@commit-on-top: ...and the operator's own commit is untouched",
+          vm.git(v, "rev-parse", "HEAD").stdout.strip() == tip
+          and (v / "wiki" / "after.md").is_file())
+    vm.wipe(fx["base"])
+
+
 def case_no_force_anywhere(_tmp: Path) -> None:
     """There is no `--force`, and no other spelling of one. Asked of the parse tree and the CLI.
 
@@ -2158,6 +2283,8 @@ CASES = (
      case_divergence_when_the_ref_carries_no_manifest),
     ("item 12: rollback refuses a provisional receipt",
      case_rollback_refuses_a_provisional_receipt),
+    ("items 11+12: rollback WITHOUT re-running the interrupted migration",
+     case_rollback_without_rerunning_an_interrupted_migration),
     ("item 11: fault injection matrix", case_kill_matrix),
     ("item 11: unknown boundary refuses", case_unknown_kill_stage_refuses),
     ("environment independence", case_suite_is_environment_independent),

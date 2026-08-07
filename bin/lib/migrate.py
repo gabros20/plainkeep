@@ -1114,6 +1114,12 @@ def _finalize_interrupted_receipt(vault: Path, vault_id: str) -> dict | None:
     its parent must be the `before_commit` the provisional recorded. A receipt that aimed a rollback
     at the wrong commit would be worse than the absent one it replaces.
 
+    It also refuses while the working tree STILL CARRIES engine paths, which is the `tree-written`
+    boundary: HEAD is the migration commit and its parent is right, but the removal itself never ran,
+    so `removed` derived from that commit would describe deletions the operator can still see on
+    disk. Completing there would write the same class of untruth this function is called from
+    `rollback()` to stop telling. That state is a `resume`, and re-running is what finishes it.
+
     `removed` is DERIVED FROM THE COMMIT rather than left empty, and that is not cosmetic. It is the
     number `rollback()`'s empty-restore refusal compares against — the check that turns "restored 0
     paths" into a refusal instead of a success — so a recovered receipt claiming zero removals would
@@ -1128,7 +1134,7 @@ def _finalize_interrupted_receipt(vault: Path, vault_id: str) -> dict | None:
     if rec is None or rec.get("after_commit"):
         return rec
     head = _git_out(vault, "rev-parse", "HEAD")
-    if not _is_migration_commit(vault, head):
+    if not _is_migration_commit(vault, head) or _worktree_residue(vault):
         return rec
     parent = _git(vault, "rev-parse", "HEAD^", check=False)
     if parent.returncode != 0 or parent.stdout.strip() != rec.get("before_commit"):
@@ -1142,6 +1148,22 @@ def _finalize_interrupted_receipt(vault: Path, vault_id: str) -> dict | None:
                 "recovered_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
     write_receipt(rec)
     return rec
+
+
+def _migration_commit_in(vault: Path, before: str | None, head: str) -> str | None:
+    """The migration commit in `before..head` when HEAD itself is not one.
+
+    The one question that separates "this receipt describes a migration that never started" from
+    "…that finished and then had work committed on top of it". Both leave a PROVISIONAL receipt, and
+    telling them apart is what stops `rollback()` asserting that nothing was removed to an operator
+    whose engine copy is gone. Matched on the commit trailer, the same evidence `_is_migration_commit`
+    uses, so a rewritten or amended history answers honestly rather than by hash."""
+    if not before:
+        return None
+    r = _git(vault, "log", "--format=%H", "-F", f"--grep={TRAILER}:", f"{before}..{head}",
+             check=False)
+    hits = r.stdout.split() if r.returncode == 0 else []
+    return hits[-1] if hits else None       # oldest match: the migration, not what came after it
 
 
 def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = None) -> dict:
@@ -1366,7 +1388,12 @@ def rollback(vault, *, yes: bool = False) -> dict:
 
     Refuses when HEAD is not the migration commit. A commit made since means the operator has work on
     top of it, and rewriting their branch to undo one commit underneath it is the destructive
-    recovery the whole design exists to avoid — `git revert` is theirs to run."""
+    recovery the whole design exists to avoid — `git revert` is theirs to run.
+
+    A PROVISIONAL receipt is completed here before anything else, so an interrupted migration that
+    actually finished its removal can be undone without being re-run first. What cannot be completed
+    is refused, and the refusal says which of the three interruptions this vault is in rather than
+    telling all of them the story of the earliest one."""
     if not yes:
         raise VaultError("refusing to roll back without --yes", code=output.EXIT_CONFIRM)
     vault = Path(vaultreg.canonical(str(vault)))
@@ -1380,16 +1407,56 @@ def rollback(vault, *, yes: bool = False) -> dict:
                          hint="if the migration commit is in the history, revert it yourself:\n"
                               f"    git -C {vault} revert <commit>")
     if not rec.get("after_commit"):
-        # A PROVISIONAL receipt: the run that wrote it was interrupted before it removed anything.
-        # There is no commit to undo, and saying so is the honest answer — the alternative is the
-        # "HEAD is X, not the migration commit None" that this branch used to produce.
+        # A PROVISIONAL receipt describes THREE different vaults, and the refusal used to describe
+        # only the first one — to all three. Review r2 (NEW-1) measured it telling an operator whose
+        # entire engine copy had been removed that the run "was interrupted before it removed
+        # anything": the one sentence a module built on "no quiet or misleading damage" cannot say.
+        #
+        # So the completable case is COMPLETED FIRST — `_finalize_interrupted_receipt` already owns
+        # the HEAD-is-a-migration-commit-whose-parent-is-`before_commit` test — and a kill at
+        # `worktree-pruned` then rolls back here and now, without the re-run step the old hint made
+        # mandatory. What is left is genuinely un-completable, and the two shapes of it get their own
+        # answers below.
+        rec = _finalize_interrupted_receipt(vault, marker["id"]) or rec
+    if not rec.get("after_commit"):
         rt = rec.get("launcher_route") or {}
+        launcher = (f"\nIf the launcher was already repointed, it belongs at:\n"
+                    f"    {rt.get('path')} -> {rt.get('old_target') or rt.get('target')}")
+        head = _git_out(vault, "rev-parse", "HEAD")
+        residue = _worktree_residue(vault)
+        if residue and _is_migration_commit(vault, head):
+            # `tree-written`: the commit is made, the removal is not. Rolling back is not the way
+            # out — re-running is, and it converges (the kill matrix proves it at this boundary).
+            raise VaultError(
+                "this vault's migration receipt is PROVISIONAL and the migration is HALF APPLIED — "
+                f"the migration commit {head[:12]} is in place but the removal was interrupted "
+                f"part-way, so {len(residue)} engine path(s) are still in the working tree",
+                code=output.EXIT_DENY,
+                hint="re-run the migration to finish it; it converges, and it can be rolled back "
+                     "afterwards. This command will not undo a removal that has not happened."
+                     + launcher)
+        done = _migration_commit_in(vault, rec.get("before_commit"), head)
+        if done:
+            # The dead end review r2 named: a kill at `worktree-pruned` followed by a commit. The
+            # removal DID happen, so re-running is a permanent no-op that cannot finish this
+            # receipt, and rewriting the branch under the operator's own commit is the destructive
+            # recovery this module refuses. `git revert` is the route, and naming the commit is the
+            # difference between advice and a dead end.
+            raise VaultError(
+                "this vault's migration receipt is PROVISIONAL and can no longer be completed: the "
+                f"migration commit {done[:12]} IS in this history — the engine copy was removed — "
+                "but there is work committed on top of it, so HEAD is no longer that commit",
+                code=output.EXIT_DENY,
+                hint="undo it with a commit of your own; re-running the migration will NOT finish "
+                     "this receipt, because the vault is already migrated:\n"
+                     f"    git -C {vault} revert {done[:12]}" + launcher)
+        # And the case the old message was written for, where it was always true: the run stopped
+        # before it committed anything. HEAD never moved and there is nothing to undo.
         raise VaultError(
             "this vault's migration receipt is PROVISIONAL — the run that wrote it was interrupted "
             "before it removed anything, so there is no migration commit to roll back",
             code=output.EXIT_DENY,
-            hint="re-run the migration to finish it. If the launcher was already repointed, it "
-                 f"belongs at:\n    {rt.get('path')} -> {rt.get('old_target') or rt.get('target')}")
+            hint="re-run the migration to finish it." + launcher)
     head = _git_out(vault, "rev-parse", "HEAD")
     if head != rec.get("after_commit"):
         raise VaultError(

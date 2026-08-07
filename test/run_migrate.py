@@ -1729,15 +1729,25 @@ marker = m.vaultreg.read_marker(vault)
 # EVERY FIELD `migrate()` READS, hand-built — no `preflight()` anywhere in this process. This is the
 # whole shape of the finding: `pre` is a keyword argument on a public function, so a caller supplies
 # it and the refusals reached only from `preflight()` never run.
+#
+# `argv[4]`, when present, is the JSON-encoded `state` to declare — the review-r2 sweep. `"__ABSENT__"`
+# omits the key entirely, which is its own row: a `KeyError` escaping a public function is not a
+# refusal either.
 pre = {"schema": m.SCHEMA, "vault": str(vault), "vault_id": marker["id"], "branch": branch,
        "state": "pristine", "head": head, "engine_source": str(vault),
        "engine_version": (vault / "VERSION").read_text().strip()}
+if len(sys.argv) > 4:
+    declared = json.loads(sys.argv[4])
+    if declared == "__ABSENT__":
+        pre.pop("state")
+    else:
+        pre["state"] = declared
 out = {}
 try:
     doc = m.migrate(vault, yes=True, pre=pre)
     out = {"refused": False, "removed": len(doc.get("removed") or [])}
 except Exception as e:
-    out = {"refused": True, "code": getattr(e, "code", None),
+    out = {"refused": True, "code": getattr(e, "code", None), "exc": type(e).__name__,
            "message": getattr(e, "message", str(e))[:400]}
 out["engine_still_there"] = (vault / "bin" / "lib" / "vaultroot.py").is_file()
 out["head_moved"] = subprocess.run(["git", "-C", str(vault), "rev-parse", "HEAD"],
@@ -1746,10 +1756,18 @@ print(json.dumps(out))
 '''
 
 
-def _drive_pre_waiver(fx: dict, tmp: Path) -> dict:
+# `None` IS one of the state values under test (JSON `null`), so the "don't override" sentinel cannot
+# be `None`.
+_KEEP_DEFAULT_STATE = object()
+
+
+def _drive_pre_waiver(fx: dict, tmp: Path, state: object = _KEEP_DEFAULT_STATE) -> dict:
     drv = tmp / "pre_waiver.py"
     drv.write_text(PRE_WAIVER_DRIVER, encoding="utf-8")
-    r = subprocess.run([PY, str(drv), str(fx["vault"]), str(REPO / "bin"), str(MIGRATE)],
+    argv = [PY, str(drv), str(fx["vault"]), str(REPO / "bin"), str(MIGRATE)]
+    if state is not _KEEP_DEFAULT_STATE:
+        argv.append(json.dumps(state))
+    r = subprocess.run(argv,
                        capture_output=True, text=True,
                        env=vm._clean_env(PLAINKEEP_ENGINE_HOME=fx["root"],
                                          PLAINKEEP_CONFIG_HOME=fx["cfg"],
@@ -1806,6 +1824,65 @@ def case_the_pre_argument_is_not_a_waiver(tmp: Path) -> None:
           vm.git(v2, "diff", "--cached", "--name-only").stdout.split() == ["wiki/staged.md"],
           vm.git(v2, "diff", "--cached", "--name-only").stdout[:200])
     vm.wipe(fx2["base"])
+
+
+# The state values review r2 measured MIGRATING a diverged vault at fd8200c. Each completed a
+# 122-path removal: `removed=122`, the committed engine edit gone, HEAD moved, no divergence patch
+# and the operator's staging discarded. `"__ABSENT__"` is the key-absent row, which was a raw
+# `KeyError` out of a public function rather than a refusal.
+UNRECOGNISED_PRE_STATES = ("bogus-state", "migrated", "", None, "PRISTINE", "pristine ", "clean",
+                           "__ABSENT__")
+
+
+def case_an_unrecognised_pre_state_is_not_a_waiver_either(tmp: Path) -> None:
+    """REVIEW r2, NEW-2. Closing the `pre` waiver under `state == "pristine"` left it open everywhere else.
+
+    The gate `case_the_pre_argument_is_not_a_waiver` proves is keyed on `pre["state"] == "pristine"`,
+    and `_apply`'s resume branch on `== "resume"`. Every OTHER value fell through both — no
+    divergence refusal, no clean-tree refusal — and the pristine path then built, committed and
+    removed normally. That cell passed over the hole because it only ever declared `"pristine"`,
+    which is exactly the shape of a suite being green about a property it does not test.
+
+    So the sweep is the point: one diverged vault, driven once per unrecognised state, asserting the
+    refusal AND the absence of damage each time. The vault is reused deliberately — every row must
+    refuse, so every row must leave it exactly as the row before found it, and a row that migrated
+    would take the rest of the sweep down with it rather than hiding in a fresh fixture.
+
+    `"migrated"` earns its row twice over: it is the one unrecognised value `state()` can really
+    return, so it is the value a caller is most likely to hand in, and refusing it is also what turns
+    the raw `FileNotFoundError` an already-migrated vault used to raise into an answer."""
+    fx = vm.phase1_vault(tmp, "pre-bogus-state")
+    v = fx["vault"]
+    vm.diverge(v)
+    head0 = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+
+    for declared in UNRECOGNISED_PRE_STATES:
+        label = repr(declared) if declared != "__ABSENT__" else "no `state` key at all"
+        out = _drive_pre_waiver(fx, tmp, declared)
+        check(f"NEW-2: migrate(pre=…) with state {label} REFUSES",
+              out.get("refused") is True and out.get("code") == EXIT_DENY,
+              json.dumps(out)[:400])
+        check(f"NEW-2: ...as a VaultError, not a stray exception ({label})",
+              out.get("exc") == "VaultError", str(out.get("exc")))
+        check(f"NEW-2: ...and removes nothing ({label})", "removed" not in out,
+              f"removed={out.get('removed')}")
+        check(f"NEW-2: ...and the committed engine edit is still on disk ({label})",
+              out.get("engine_still_there") is True, json.dumps(out)[:300])
+        check(f"NEW-2: ...and HEAD never moved ({label})", out.get("head_moved") is False,
+              json.dumps(out)[:300])
+
+    # The two RECOGNISED states are unaffected: `pristine` is refused by the divergence gate the
+    # cell above measures, and `resume` — which this validation deliberately still allows through —
+    # is caught one layer deeper by `verify_candidate`, which is the defence in depth that makes
+    # allowing it safe.
+    res = _drive_pre_waiver(fx, tmp, "resume")
+    check("NEW-2: state 'resume' is still ALLOWED through the validation and caught by "
+          "verify_candidate", res.get("refused") is True and res.get("code") == EXIT_DENY
+          and "pure deletion" in str(res.get("message", "")), json.dumps(res)[:400])
+    check("NEW-2: ...and the sweep left the vault exactly as it found it",
+          vm.git(v, "rev-parse", "HEAD").stdout.strip() == head0
+          and (v / "bin" / "lib" / "vaultroot.py").is_file(), "the vault was damaged by the sweep")
+    vm.wipe(fx["base"])
 
 
 def case_divergence_is_scoped_to_what_the_ref_actually_synced(tmp: Path) -> None:
@@ -2073,6 +2150,8 @@ CASES = (
     ("item 6: the allowlist gate", case_allowlist_gate_aborts_on_an_unexpected_path),
     ("no --force anywhere", case_no_force_anywhere),
     ("item 3: `pre` is not a waiver", case_the_pre_argument_is_not_a_waiver),
+    ("item 3: an unrecognised `pre` state is not a waiver either",
+     case_an_unrecognised_pre_state_is_not_a_waiver_either),
     ("item 3: divergence is scoped to the ref's manifest",
      case_divergence_is_scoped_to_what_the_ref_actually_synced),
     ("item 3: divergence when the ref carries no manifest",

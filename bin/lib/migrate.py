@@ -1158,7 +1158,8 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
     is a public function, and `pre` is a keyword argument, not a flag — therefore migrated a vault
     carrying committed local engine edits and destroyed them with no patch and no record. There is no
     `--force` in this module and a keyword argument is not allowed to be one, so both are re-derived
-    here."""
+    here — and the `state` they are keyed on is VALIDATED first, because re-deriving a refusal under
+    `state == "pristine"` only moves the waiver into every other spelling of the state."""
     _check_kill_stage()
     if not yes:
         raise VaultError("refusing to migrate without --yes", code=output.EXIT_CONFIRM,
@@ -1168,6 +1169,28 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
     try:
         if pre is None:
             pre = preflight(vault, engine_source=engine_source, scratch=scratch)
+        # THE STATE IS THE KEY BOTH GATES BELOW ARE HUNG ON, so it is validated before either of them
+        # is consulted. Closing the `pre` waiver by re-deriving the two refusals under
+        # `state == "pristine"` left the hole one narrowing smaller rather than shut: `_apply`'s
+        # resume branch is keyed on `== "resume"`, so ANY THIRD VALUE fell through both and the
+        # pristine path built, committed and removed normally. Review r2 measured seven of them —
+        # `"bogus-state"`, `"migrated"`, `""`, `null`, `"PRISTINE"`, `"pristine "`, `"clean"` — each
+        # completing a 122-path removal on a vault carrying a committed engine edit, with no
+        # divergence patch and the operator's staging discarded. An exact-string gate on
+        # caller-supplied data has to refuse what it does not recognise, not fall through it.
+        declared = pre.get("state")
+        if declared not in ("pristine", "resume"):
+            raise VaultError(
+                f"refusing to migrate {vault}: the preflight handed in declares state "
+                f"{declared!r}, which is not a state a migration can start from",
+                code=output.EXIT_DENY,
+                hint=("this vault is already migrated — there is nothing to remove. `--rollback` is "
+                      "the command that undoes a migration"
+                      if declared == "migrated" else
+                      "`state()` answers only 'pristine', 'resume' or 'migrated', so a `pre` "
+                      "carrying anything else did not come from `preflight()`. It is not a waiver: "
+                      "the divergence and clean-tree refusals are keyed on this value, and an "
+                      "unrecognised one would skip both. There is no --force"))
         vault = Path(pre["vault"])
         vault_id = pre["vault_id"]
         if pre["state"] == "pristine":

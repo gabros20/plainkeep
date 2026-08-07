@@ -199,15 +199,29 @@ PATH_METHODS = {"resolve", "absolute", "joinpath", "with_name", "with_suffix", "
                 "readlink", "relative_to"}
 
 
+# Calls that turn one path into ANOTHER SPELLING OF THE SAME PATH. Taint follows these, which is
+# what makes `open(str(vault / rel), "w")` and `os.remove(os.path.join(str(vault), rel))` visible —
+# the r1 review's second evasion, where a `str()` fell through to `return False` and took the
+# `os.path.join` case with it, because its argument was the `str()`.
+#
+# `relpath` is deliberately ABSENT. It derives from its FIRST argument and merely resolves against
+# the second, so following it from either argument would taint `os.path.relpath(dirpath, root)` in
+# `protected_manifest` and flag the `.replace(os.sep, "/")` on the next line as a write. That is the
+# false positive the module docstring warns about: a ratchet that cries wolf is one an author learns
+# to override, and the value of this one is that it has never had to be.
+PATH_WRAPPERS = {"Path", "str", "fspath", "os.fspath"}
+PATH_FUNCS = {"join", "abspath", "realpath", "normpath", "expanduser", "fspath", "canonical"}
+
+
 def _derives_from(node: ast.AST, names: set[str]) -> bool:
     """Is this expression a PATH DERIVED from one of `names` — not merely one that mentions it?
 
     The distinction is the whole accuracy of the ratchet. `vault / rel` is a vault path.
     `receipts_dir() / f"{read_marker(vault)['id']}.patch"` MENTIONS `vault` and is a path in the
     install root; a "mentions it anywhere" rule flags that write and the ratchet becomes noise an
-    author learns to override. So taint follows `/` joins, `Path(...)` wrapping, and the path-to-path
-    attributes above, and stops at any other call — a function that takes a vault and returns a
-    string is not a vault path.
+    author learns to override. So taint follows `/` joins, the path-to-path attributes above, and the
+    wrappers that re-spell a path without changing which file it names — and stops at any other call,
+    because a function that takes a vault and returns a string is not a vault path.
     """
     if isinstance(node, ast.Name):
         return node.id in names
@@ -217,23 +231,112 @@ def _derives_from(node: ast.AST, names: set[str]) -> bool:
         return _derives_from(node.value, names)
     if isinstance(node, ast.Subscript):
         return _derives_from(node.value, names)
+    if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+        return any(_derives_from(e, names) for e in node.elts)
+    if isinstance(node, ast.Starred):
+        return _derives_from(node.value, names)
     if isinstance(node, ast.Call):
         f = node.func
         if isinstance(f, ast.Attribute) and f.attr in PATH_METHODS:
             return _derives_from(f.value, names)
-        if isinstance(f, ast.Name) and f.id == "Path" and node.args:
+        if isinstance(f, ast.Name) and f.id in PATH_WRAPPERS and node.args:
             return _derives_from(node.args[0], names)
-        if isinstance(f, ast.Attribute) and f.attr in ("join", "abspath", "realpath") and node.args:
+        if isinstance(f, ast.Attribute) and f.attr in PATH_FUNCS and node.args:
             return any(_derives_from(a, names) for a in node.args)
     return False
 
 
-def _tainted_names(fn: ast.FunctionDef) -> set[str]:
-    """Local names holding a path DERIVED from this function's `vault` parameter, to a fixed point.
+def _params(fn: ast.FunctionDef) -> list[str]:
+    """Named parameters in positional order. `*args`/`**kwargs` are handled separately by
+    `_taint_seeds` — they are not positions, they are catch-alls, and a call that lands a vault path
+    in one has to taint the catch-all rather than a position that does not exist."""
+    return [a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)]
+
+
+def _module_functions(tree: ast.Module) -> list[ast.FunctionDef]:
+    return [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+
+
+def _taint_seeds(tree: ast.Module) -> dict[str, set[str]]:
+    """Which PARAMETERS of each function in this module can be handed a vault path — INTER-PROCEDURAL.
+
+    This is the step the r1 review's third and worst evasion turned on. Taint used to be seeded only
+    from a parameter literally spelled `vault`, so
+
+        def _stow(p): p.write_text("injected")
+        ...
+        _stow(vault / "wiki" / "oops.md")
+
+    was invisible: `_stow` has no `vault` parameter, so the analysis never looked inside it, and a
+    two-line helper defeated the whole ratchet while the module docstring, the pathwall exemption and
+    the task report all went on asserting that no call in this file opens a vault path for writing.
+    A detector whose false-negative set is that cheap to hit is not evidence of a property.
+
+    So the seed set is propagated ACROSS CALL EDGES to a fixed point: if any function passes a
+    vault-derived expression to a module-local function, that function's corresponding parameter is a
+    vault path too, and so on transitively. The question the ratchet asks becomes the PROPERTY — "no
+    write lands inside a vault, from any function, however many hops away" — rather than the five
+    shapes its author happened to imagine.
+
+    `*args`/`**kwargs` forwarding cannot be matched positionally, so a starred vault-derived argument
+    taints EVERY parameter of the callee. That over-taints; the alternative is losing the edge, and
+    losing edges is the failure this whole function exists to fix."""
+    fns = _module_functions(tree)
+    seeds: dict[str, set[str]] = {
+        fn.name: {a for a in _params(fn) if a == "vault"} for fn in fns}
+    for _ in range(12):                       # a fixed point; the call graph here is a few hops deep
+        changed = False
+        for fn in fns:
+            tainted = _tainted_names(fn, seeds.get(fn.name, set()))
+            if not tainted:
+                continue
+            for node in ast.walk(fn):
+                if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                    continue
+                callees = [c for c in fns if c.name == node.func.id]
+                for callee in callees:
+                    params = _params(callee)
+                    var = callee.args.vararg.arg if callee.args.vararg else None
+                    kwvar = callee.args.kwarg.arg if callee.args.kwarg else None
+                    catchall = set(params) | ({var} if var else set()) \
+                        | ({kwvar} if kwvar else set())
+                    hit: set[str] = set()
+                    for i, a in enumerate(node.args):
+                        if isinstance(a, ast.Starred):
+                            if _derives_from(a.value, tainted):
+                                hit |= catchall     # cannot be matched positionally
+                            continue
+                        if not _derives_from(a, tainted):
+                            continue
+                        hit.add(params[i] if i < len(params) else var)
+                    for kw in node.keywords:
+                        if not _derives_from(kw.value, tainted):
+                            continue
+                        if kw.arg is None:          # `**mapping` forwarding
+                            hit |= catchall
+                        else:
+                            hit.add(kw.arg if kw.arg in params else kwvar)
+                    hit.discard(None)
+                    merged = seeds.get(callee.name, set()) | hit
+                    if merged != seeds.get(callee.name, set()):
+                        seeds[callee.name] = merged
+                        changed = True
+        if not changed:
+            break
+    return seeds
+
+
+def _tainted_names(fn: ast.FunctionDef, seed: set[str] | None = None) -> set[str]:
+    """Local names holding a path DERIVED from this function's vault-bearing parameters, to a fixed
+    point.
 
     `p = vault / rel` taints `p`; `q = p.parent` taints `q`. `m = read_marker(vault)` does not —
-    that is a dict. Iterated because an assignment may reference a name a later line taints."""
-    names = {a.arg for a in (*fn.args.args, *fn.args.kwonlyargs) if a.arg == "vault"}
+    that is a dict. Iterated because an assignment may reference a name a later line taints.
+
+    `seed` is the parameter set `_taint_seeds` derived for this function; without it the seed is the
+    parameter spelled `vault`, which is what this used to be and is kept as the default so a caller
+    that only wants the intra-procedural answer can still ask for it."""
+    names = set(seed) if seed is not None else {a for a in _params(fn) if a == "vault"}
     for _ in range(4):
         for node in ast.walk(fn):
             if not isinstance(node, (ast.Assign, ast.AnnAssign)) or node.value is None:
@@ -243,6 +346,12 @@ def _tainted_names(fn: ast.FunctionDef) -> set[str]:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             for t in targets:
                 for n in ast.walk(t):
+                    if isinstance(n, ast.Name):
+                        names.add(n.id)
+        # `with open(...) as fh:` and `for p in (...):` bind names the assignment walk cannot see.
+        for node in ast.walk(fn):
+            if isinstance(node, ast.For) and _derives_from(node.iter, names):
+                for n in ast.walk(node.target):
                     if isinstance(n, ast.Name):
                         names.add(n.id)
     return names
@@ -259,9 +368,10 @@ def vault_writes(tree: ast.Module) -> list[tuple[str, int, str]]:
     Returns `(function, lineno, what)`. The question is asked per function and of the parse tree, so
     a substring of a docstring, a comment naming `os.remove`, or a helper's own `def` cannot satisfy
     or trip it."""
+    seeds = _taint_seeds(tree)
     found: list[tuple[str, int, str]] = []
-    for fn in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
-        tainted = _tainted_names(fn)
+    for fn in _module_functions(tree):
+        tainted = _tainted_names(fn, seeds.get(fn.name, set()))
         if not tainted:
             continue
         for node in ast.walk(fn):
@@ -270,15 +380,30 @@ def vault_writes(tree: ast.Module) -> list[tuple[str, int, str]]:
             name = _call_name(node)
             targets: list[ast.AST] = []
             if name == "open":
-                mode = ""
-                for a in node.args[1:]:
-                    if isinstance(a, ast.Constant) and isinstance(a.value, str):
-                        mode = a.value
-                for kw in node.keywords:
-                    if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
-                        mode = str(kw.value.value)
-                if any(c in mode for c in "wax+") and node.args:
-                    targets = [node.args[0]]
+                # THREE SPELLINGS OF `open`, because the r1 review got through on the most ordinary
+                # one. `p.open("w")` is a BOUND METHOD: the mode is `args[0]`, not `args[1]`, and the
+                # file is the RECEIVER, so reading the mode out of `args[1:]` left it empty and no
+                # target was ever taken. The module docstring's own words are "not `open`".
+                f = node.func
+                recv = f.value if isinstance(f, ast.Attribute) else None
+                os_open = isinstance(recv, ast.Name) and recv.id == "os"
+                bound = recv is not None and not os_open
+                if os_open:
+                    # `os.open(p, flags)` takes an INT flag set, not a mode string, so there is no
+                    # mode to inspect. Taken as a write whenever the target is a vault path: erring
+                    # RED costs a reviewed exemption, and erring the other way is a hole the size of
+                    # the whole constraint.
+                    targets = node.args[:1]
+                else:
+                    mode = ""
+                    for a in (node.args if bound else node.args[1:]):
+                        if isinstance(a, ast.Constant) and isinstance(a.value, str):
+                            mode = a.value
+                    for kw in node.keywords:
+                        if kw.arg == "mode" and isinstance(kw.value, ast.Constant):
+                            mode = str(kw.value.value)
+                    if any(c in mode for c in "wax+"):
+                        targets = [recv] if bound else node.args[:1]
             elif name in WRITE_FUNCS:
                 f = node.func
                 is_module_call = isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name) \
@@ -287,8 +412,11 @@ def vault_writes(tree: ast.Module) -> list[tuple[str, int, str]]:
                     # `os.replace(a, b)` / `shutil.move(a, b)` write at BOTH ends.
                     targets = list(node.args[:2])
                 elif isinstance(f, ast.Attribute):
-                    # A bound method: the receiver is the thing written. `str.replace` cannot reach
-                    # here because a string is never path-derived under `_derives_from`.
+                    # A bound method: the receiver is the thing written. `str.replace` CAN reach here
+                    # now that `str(...)` preserves taint — `str(vault).replace(a, b)` is reported as
+                    # a write. That is a false positive the module does not currently produce, and it
+                    # is the direction to be wrong in: the alternative was letting
+                    # `open(str(vault / rel), "w")` through, which the r1 review measured.
                     targets = [f.value, *node.args[:1]]
                 elif node.args:
                     targets = [node.args[0]]
@@ -385,32 +513,96 @@ def case_ratchet_no_worktree_git(_tmp: Path) -> None:
 
 
 # --- the mutation test: show the ratchets RED -----------------------------------------------------
+# Each entry: (label, injected line(s), injection site, which ratchet, function the ratchet must
+# NAME, module-level preamble). The preamble exists because the most effective evasion the r1 review
+# found was a HELPER — the write does not live at the injection site at all, so the function the
+# ratchet must name is the helper, not the site.
+#
+# THE FIRST FIVE are the original battery. THE NEXT FOUR are the shapes the r1 review measured
+# passing straight through the ratchet as it stood; each was reproduced GREEN at `ac0acb2` before the
+# detector was widened. THE REST were written to attack the WIDENED detector — shapes chosen to break
+# the new machinery rather than to confirm it, which is the only way a mutation battery is evidence
+# of a property rather than a list of what its author already imagined.
 MUTATIONS = (
-    # (label, the line to inject, the function it is injected into, which ratchet must fire)
     ("a write into a vault path in an innocent-looking function",
      "    (vault / 'wiki' / 'stowaway.md').write_text('x', encoding='utf-8')\n",
-     "protected_manifest", "no function writes inside a vault"),
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
     ("a shutil.rmtree of a vault subtree",
      "    shutil.rmtree(vault / 'inbox', ignore_errors=True)\n",
-     "protected_manifest", "no function writes inside a vault"),
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
     ("an os.remove reached through a local alias",
      "    doomed = vault / 'plainkeep.json'\n    os.remove(doomed)\n",
-     "protected_manifest", "no function writes inside a vault"),
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
     ("a working-tree git checkout smuggled into the forward path",
      "    _git(vault, 'checkout', '--', '.')\n",
-     "_apply", "no function runs a working-tree git command"),
+     "_apply", "no function runs a working-tree git command", "_apply", ""),
     ("a read-tree -u, which writes files where a bare read-tree does not",
      "    _git(vault, 'read-tree', '-u', 'HEAD')\n",
-     "_apply", "no function runs a working-tree git command"),
+     "_apply", "no function runs a working-tree git command", "_apply", ""),
+
+    # --- r1 review, measured GREEN at ac0acb2 ---
+    ("r1: a two-line module-level helper whose parameter is not called `vault`",
+     "    _stow(vault / 'wiki' / 'oops.md')\n",
+     "protected_manifest", "no function writes inside a vault", "_stow",
+     "\n\ndef _stow(p):\n    p.write_text('injected', encoding='utf-8')\n"),
+    ("r1: `p.open('w')` — the bound-method spelling of open",
+     "    (vault / 'wiki' / 'oops.md').open('w').write('injected')\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+    ("r1: `open(str(...), 'w')` — a str() between the vault and the open",
+     "    open(str(vault / 'wiki' / 'oops.md'), 'w').write('injected')\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+    ("r1: `os.remove(os.path.join(str(vault), ...))`",
+     "    os.remove(os.path.join(str(vault), 'plainkeep.json'))\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+
+    # --- written to attack the WIDENED detector ---
+    ("adversarial: os.open with an int flag set and os.fspath, no mode string anywhere",
+     "    os.open(os.fspath(vault / 'plainkeep.json'), os.O_WRONLY | os.O_TRUNC)\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+    ("adversarial: a TWO-HOP helper chain, neither parameter named like a path",
+     "    _outer(vault / 'wiki' / 'oops.md')\n",
+     "protected_manifest", "no function writes inside a vault", "_inner",
+     "\n\ndef _outer(a):\n    _inner(a)\n\n\ndef _inner(b):\n    b.unlink()\n"),
+    ("adversarial: a KEYWORD-ONLY parameter, so no positional index lines up",
+     "    _kwstow(dest=vault / 'wiki' / 'oops.md')\n",
+     "protected_manifest", "no function writes inside a vault", "_kwstow",
+     "\n\ndef _kwstow(*, dest):\n    dest.write_bytes(b'injected')\n"),
+    ("adversarial: a *args forwarder between the vault and the write",
+     "    _fwd(vault / 'wiki' / 'oops.md')\n",
+     "protected_manifest", "no function writes inside a vault", "_sink",
+     "\n\ndef _fwd(*a):\n    _sink(*a)\n\n\ndef _sink(q):\n    q.touch()\n"),
+    ("adversarial: append mode inside a `with`, which binds a name the write never mentions",
+     "    with (vault / 'journal' / 'today.md').open('a') as fh:\n        fh.write('injected')\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+    ("adversarial: the DESTINATION argument of shutil.copy, spelled as a str",
+     "    shutil.copy(__file__, str(vault / 'wiki' / 'oops.md'))\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+    ("adversarial: a loop variable bound from a list literal of vault paths",
+     "    for q in [vault / 'wiki' / 'a.md', vault / 'wiki' / 'b.md']:\n"
+     "        q.write_text('injected', encoding='utf-8')\n",
+     "protected_manifest", "no function writes inside a vault", "protected_manifest", ""),
+    ("adversarial: a helper that takes the vault ROOT and joins inside itself",
+     "    _under(vault)\n",
+     "protected_manifest", "no function writes inside a vault", "_under",
+     "\n\ndef _under(root):\n    (root / 'wiki' / 'oops.md').write_text('injected', "
+     "encoding='utf-8')\n"),
+    ("adversarial: a working-tree git verb reached through a helper that renames the vault",
+     "    _scrub(vault)\n",
+     "_apply", "no function runs a working-tree git command", "_scrub",
+     "\n\ndef _scrub(where):\n    _git(where, 'clean', '-fdx')\n"),
 )
 
 
-def _inject(src: str, fn_name: str, line: str) -> str:
-    """Put `line` as the first statement of `fn_name`, after its docstring.
+def _inject(src: str, fn_name: str, line: str, preamble: str = "") -> str:
+    """Put `line` as the first statement of `fn_name`, after its docstring, and append `preamble`.
 
     Injecting into a real function rather than appending a new one is the point: ADR-019 decision 2
     says mutate the CALL SITE, and a ratchet that only noticed a suspiciously-named new function
-    would be the same class of gate as the one that matched its own guard's `def`."""
+    would be the same class of gate as the one that matched its own guard's `def`.
+
+    `preamble` adds a module-level helper for the mutations whose whole point is that the write is
+    somewhere else. The CALL is still at the site; only the primitive moved, which is exactly the
+    evasion the r1 review measured."""
     tree = ast.parse(src)
     fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == fn_name)
     body = fn.body
@@ -418,7 +610,7 @@ def _inject(src: str, fn_name: str, line: str) -> str:
                         and isinstance(getattr(body[0], "value", None), ast.Constant)) else body[0]
     lines = src.splitlines(keepends=True)
     at = first.lineno - 1
-    return "".join(lines[:at]) + line + "".join(lines[at:])
+    return "".join(lines[:at]) + line + "".join(lines[at:]) + preamble
 
 
 def case_ratchet_goes_red(tmp: Path) -> None:
@@ -438,9 +630,9 @@ def case_ratchet_goes_red(tmp: Path) -> None:
     check("mutation control: the UNMUTATED module is clean under both ratchets",
           not control, str(control))
 
-    for i, (label, line, fn_name, which) in enumerate(MUTATIONS):
+    for i, (label, line, fn_name, which, named, preamble) in enumerate(MUTATIONS):
         try:
-            mutated = _inject(src, fn_name, line)
+            mutated = _inject(src, fn_name, line, preamble)
             tree = ast.parse(mutated)
         except (SyntaxError, StopIteration) as e:
             check(f"mutation {i}: fixture — {label} injects into {fn_name}()", False, repr(e))
@@ -453,8 +645,8 @@ def case_ratchet_goes_red(tmp: Path) -> None:
             hits = [(f, ln) for f, ln, _ in git_worktree_calls(tree)
                     if f not in GIT_WORKTREE_ALLOWED]
         check(f"mutation {i}: the ratchet goes RED on {label}", bool(hits), "ratchet stayed green")
-        check(f"mutation {i}: ...and NAMES {fn_name}()",
-              any(f == fn_name for f, _ in hits), f"named {hits}")
+        check(f"mutation {i}: ...and NAMES {named}()",
+              any(f == named for f, _ in hits), f"named {hits}")
 
 
 def case_ratchet_survives_a_broken_tree(tmp: Path) -> None:

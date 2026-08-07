@@ -1240,6 +1240,143 @@ def case_rollback(tmp: Path) -> None:
           mig(fx, "--preflight", str(v)).stderr[:250])
 
 
+ROLLBACK_AFTER_KILL_STAGES = ("symlink", "tree-written", "worktree-pruned", "receipt")
+
+
+def case_rollback_after_an_interrupted_migration(tmp: Path) -> None:
+    """ITEM 12's SECOND HALF, COMPOSED WITH ITEM 11 — the cell whose absence hid two BLOCKING bugs.
+
+    `case_kill_matrix` proves a killed run RE-RUNS to completion; `case_rollback` proves an
+    UNINTERRUPTED migration rolls back. Neither asks the question an operator actually asks after a
+    laptop sleeps mid-migration: having recovered, can I still undo this? Review r1 measured the
+    answer at two of the four late boundaries and it was no, in the worst available way:
+
+      * kill at `tree-written` — the resumed run recorded `before_commit == after_commit`, so
+        `--rollback --yes` diffed a commit against itself, passed every gate VACUOUSLY, restored 0 of
+        122 paths, printed "rolled back", and unlinked the receipt. After that there was no rollback
+        at all and no record of the pre-migration commit.
+      * kill at `worktree-pruned` — a fully migrated vault with NO receipt, because the receipt was
+        written after the removal and the re-run took the no-op branch. Rollback: exit 4, forever.
+
+    So this cell asserts RESTORATION rather than exit 0: the engine paths are back on disk and in the
+    commit, HEAD is the pre-migration commit, the launcher symlink points into the vault again, and
+    the receipt is gone only because the rollback SUCCEEDED. A rollback that reports success and
+    restores nothing must fail this cell, which is precisely what the old one did."""
+    trees, files = allowlist()
+    for stage in ROLLBACK_AFTER_KILL_STAGES:
+        fx = vm.phase1_vault(tmp, f"rbkill-{stage}")
+        v, root = fx["vault"], fx["root"]
+        bindir = fx["base"] / "bin"
+        bindir.mkdir(parents=True, exist_ok=True)
+        link = bindir / "plainkeep"
+        link.symlink_to(v / "plainkeep")
+        pristine = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+        before_prot = protected_only(sha_tree(v), trees, files)
+
+        r = mig(fx, "--migrate", str(v), "--yes", bindir=bindir, PLAINKEEP_MIGRATE_KILL_AT=stage)
+        check(f"rollback@{stage}: fixture — the run died at the boundary",
+              r.returncode in (-9, 137), f"rc={r.returncode} {r.stderr[:200]}")
+        r2 = mig(fx, "--migrate", str(v), "--yes", bindir=bindir)
+        check(f"rollback@{stage}: fixture — the re-run converged", r2.returncode == EXIT_OK,
+              f"rc={r2.returncode} {(r2.stderr or r2.stdout)[:300]}")
+        if r2.returncode != EXIT_OK:
+            vm.wipe(fx["base"])
+            continue
+
+        # THE RECEIPT MUST EXIST AND MUST DESCRIBE A REAL MIGRATION. `before == after` is the exact
+        # shape that made every gate below pass vacuously.
+        rec_p = root / "migrations" / f"{fx['vault_id']}.json"
+        check(f"rollback@{stage}: a migration receipt exists after the recovery", rec_p.is_file())
+        if not rec_p.is_file():
+            vm.wipe(fx["base"])
+            continue
+        rec = json.loads(rec_p.read_text(encoding="utf-8"))
+        check(f"rollback@{stage}: the receipt records the PRE-migration commit, not the migration one",
+              rec.get("before_commit") == pristine
+              and rec.get("before_commit") != rec.get("after_commit"),
+              f"before={str(rec.get('before_commit'))[:10]} after={str(rec.get('after_commit'))[:10]} "
+              f"pristine={pristine[:10]}")
+
+        rb, rbdoc = mig_json(fx, "--rollback", str(v), "--yes", bindir=bindir)
+        check(f"rollback@{stage}: --rollback --yes exits 0", rb.returncode == EXIT_OK,
+              f"rc={rb.returncode} {(rb.stderr or rb.stdout)[:300]}")
+        if rb.returncode != EXIT_OK:
+            check(f"rollback@{stage}: ...and the receipt SURVIVES a rollback that did not happen",
+                  rec_p.is_file())
+            vm.wipe(fx["base"])
+            continue
+
+        # RESTORATION, asked of the filesystem and the repository rather than of the exit code.
+        n = len(rbdoc.get("restored") or [])
+        check(f"rollback@{stage}: it restored the paths the migration removed, not zero of them",
+              n == len(rec.get("removed") or []) and n > 0,
+              f"restored={n} removed={len(rec.get('removed') or [])}")
+        check(f"rollback@{stage}: the engine copy is back in the working tree",
+              (v / "bin").is_dir() and (v / "script").is_dir() and (v / "VERSION").is_file(),
+              f"bin={(v / 'bin').is_dir()} script={(v / 'script').is_dir()}")
+        check(f"rollback@{stage}: HEAD is the pre-migration commit",
+              vm.git(v, "rev-parse", "HEAD").stdout.strip() == pristine,
+              f"{vm.git(v, 'rev-parse', 'HEAD').stdout.strip()[:10]} want {pristine[:10]}")
+        check(f"rollback@{stage}: the launcher symlink points back into the vault",
+              link.is_symlink() and os.readlink(link) == str(v / "plainkeep"),
+              os.readlink(link) if link.is_symlink() else "not a symlink")
+        check(f"rollback@{stage}: the receipt is gone, because the rollback really happened",
+              not rec_p.is_file())
+        after_prot = protected_only(sha_tree(v), trees, files)
+        check(f"rollback@{stage}: not one protected file was lost across kill+recovery+rollback",
+              not (set(before_prot) - set(after_prot)),
+              str(sorted(set(before_prot) - set(after_prot))[:5]))
+        # And the vault is migratable again, which is the same closing question `case_rollback` asks.
+        check(f"rollback@{stage}: the rolled-back vault preflights green again",
+              mig(fx, "--preflight", str(v), bindir=bindir).returncode == EXIT_OK,
+              mig(fx, "--preflight", str(v), bindir=bindir).stderr[:250])
+        vm.wipe(fx["base"])
+
+
+def case_rollback_refuses_a_receipt_that_restores_nothing(tmp: Path) -> None:
+    """THE SECOND HALF OF B1's FIX, and it is independent of how the receipt got that way.
+
+    "Restored 0 paths" is never a correct rollback of a migration that removed 122. Both degenerate
+    receipts — `before_commit == after_commit`, and a well-formed one whose diff is empty — must
+    REFUSE and must LEAVE THE RECEIPT IN PLACE, because a receipt that cannot be trusted is still the
+    only record of the pre-migration commit and the old launcher target."""
+    fx = vm.phase1_vault(tmp, "rb-degenerate")
+    v, root = fx["vault"], fx["root"]
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("item 12: fixture — migrated", r.returncode == EXIT_OK, r.stderr[:300])
+    if r.returncode != EXIT_OK:
+        return
+    rec_p = root / "migrations" / f"{fx['vault_id']}.json"
+    good = json.loads(rec_p.read_text(encoding="utf-8"))
+
+    # 1. before == after, exactly what a resumed migration used to record.
+    bad = {**good, "before_commit": good["after_commit"]}
+    rec_p.write_text(json.dumps(bad, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    rb = mig(fx, "--rollback", str(v), "--yes")
+    check("item 12: rollback REFUSES a receipt whose before and after are the same commit",
+          rb.returncode == EXIT_DENY, f"rc={rb.returncode} {(rb.stdout + rb.stderr)[:250]}")
+    check("item 12: ...and says so rather than reporting a rollback",
+          "same commit" in (rb.stderr + rb.stdout) and "rolled back" not in rb.stdout,
+          (rb.stderr + rb.stdout)[:250])
+    check("item 12: ...and the receipt SURVIVES, so the pre-migration commit is still recoverable",
+          rec_p.is_file())
+    check("item 12: ...and nothing was restored", not (v / "bin").exists())
+
+    # 2. A receipt aimed at a commit that is not the migration's parent, so the diff is empty. The
+    #    gates below it all pass; only an explicit "0 paths is not a rollback" refusal catches it.
+    #    The two commits DIFFER but their trees do not, so `head == after_commit` holds, the diff is
+    #    empty so nothing is "outside the allowlist", and `checkout-index` is handed no paths.
+    vm.git(v, "commit", "-q", "--allow-empty", "-m", "an empty commit on top of the migration")
+    tip = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+    empty = {**good, "before_commit": good["after_commit"], "after_commit": tip}
+    rec_p.write_text(json.dumps(empty, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    rb2 = mig(fx, "--rollback", str(v), "--yes")
+    check("item 12: rollback REFUSES when the computed restore set is EMPTY",
+          rb2.returncode == EXIT_DENY and "0 engine path(s)" in (rb2.stderr + rb2.stdout),
+          f"rc={rb2.returncode} {(rb2.stderr + rb2.stdout)[:300]}")
+    check("item 12: ...and that receipt survives too", rec_p.is_file())
+
+
 def case_rollback_refuses_staged_changes(tmp: Path) -> None:
     """THE HAZARD `_clean_tree_gate` EXISTS FOR, UNGUARDED IN REVERSE (review r1, I2).
 
@@ -1743,6 +1880,54 @@ def case_divergence_when_the_ref_carries_no_manifest(tmp: Path) -> None:
           (v2 / "bin" / "lib" / "vaultroot.py").is_file())
 
 
+def case_rollback_refuses_a_provisional_receipt(tmp: Path) -> None:
+    """THE RECEIPT B2 ADDED, ASKED THE ONE QUESTION IT EXISTS TO ANSWER.
+
+    The provisional receipt lands BEFORE the launcher is repointed, so between that write and the
+    commit there is a window where a receipt exists and describes no migration. An operator who kills
+    the run inside that window and reaches for `--rollback` must not be told "no receipt" (the old
+    behaviour, which lost the launcher target) and must not be handed a rollback of a migration that
+    never happened. The receipt's whole reason to exist is the launcher target, so the refusal has to
+    HAND THAT BACK and the receipt has to SURVIVE."""
+    fx = vm.phase1_vault(tmp, "provisional")
+    v, root = fx["vault"], fx["root"]
+    bindir = fx["base"] / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    link = bindir / "plainkeep"
+    link.symlink_to(v / "plainkeep")
+    pristine = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+
+    r = mig(fx, "--migrate", str(v), "--yes", bindir=bindir, PLAINKEEP_MIGRATE_KILL_AT="symlink")
+    check("B2: fixture — the run died just after the launcher was repointed",
+          r.returncode in (-9, 137), f"rc={r.returncode} {r.stderr[:200]}")
+    rec_p = root / "migrations" / f"{fx['vault_id']}.json"
+    check("B2: a PROVISIONAL receipt is on disk before the step it describes", rec_p.is_file())
+    if not rec_p.is_file():
+        return
+    rec = json.loads(rec_p.read_text(encoding="utf-8"))
+    check("B2: ...recording the pre-migration commit and no after_commit",
+          rec.get("before_commit") == pristine and not rec.get("after_commit"),
+          f"before={str(rec.get('before_commit'))[:10]} after={rec.get('after_commit')}")
+    check("B2: fixture — nothing was removed, and the launcher really was repointed",
+          (v / "bin").is_dir() and link.is_symlink() and os.readlink(link) != str(v / "plainkeep"),
+          f"bin={(v / 'bin').is_dir()} link={os.readlink(link) if link.is_symlink() else None}")
+
+    rb = mig(fx, "--rollback", str(v), "--yes", bindir=bindir)
+    check("B2: --rollback REFUSES a provisional receipt rather than 'rolling back' nothing",
+          rb.returncode == EXIT_DENY and "PROVISIONAL" in (rb.stderr + rb.stdout),
+          f"rc={rb.returncode} {(rb.stderr + rb.stdout)[:300]}")
+    check("B2: ...and hands back the launcher target, which is the one fact git cannot reconstruct",
+          str(v / "plainkeep") in (rb.stderr + rb.stdout), (rb.stderr + rb.stdout)[:400])
+    check("B2: ...and the receipt SURVIVES the refusal", rec_p.is_file())
+    check("B2: ...and HEAD never moved",
+          vm.git(v, "rev-parse", "HEAD").stdout.strip() == pristine)
+
+    # And the migration is still finishable — the refusal is a refusal, not a dead end.
+    r2 = mig(fx, "--migrate", str(v), "--yes", bindir=bindir)
+    check("B2: ...and the interrupted migration still re-runs to completion",
+          r2.returncode == EXIT_OK, f"rc={r2.returncode} {(r2.stderr or r2.stdout)[:300]}")
+
+
 def case_no_force_anywhere(_tmp: Path) -> None:
     """There is no `--force`, and no other spelling of one. Asked of the parse tree and the CLI.
 
@@ -1821,6 +2006,10 @@ CASES = (
     ("item 12: second run is a no-op", case_second_run_is_a_noop),
     ("item 12: rollback", case_rollback),
     ("item 12: rollback refuses work on top", case_rollback_refuses_work_on_top),
+    ("items 11+12: rollback AFTER an interrupted migration",
+     case_rollback_after_an_interrupted_migration),
+    ("item 12: rollback refuses a degenerate receipt",
+     case_rollback_refuses_a_receipt_that_restores_nothing),
     ("item 12: rollback refuses staged changes", case_rollback_refuses_staged_changes),
     ("item 6: the allowlist gate", case_allowlist_gate_aborts_on_an_unexpected_path),
     ("no --force anywhere", case_no_force_anywhere),
@@ -1829,6 +2018,8 @@ CASES = (
      case_divergence_is_scoped_to_what_the_ref_actually_synced),
     ("item 3: divergence when the ref carries no manifest",
      case_divergence_when_the_ref_carries_no_manifest),
+    ("item 12: rollback refuses a provisional receipt",
+     case_rollback_refuses_a_provisional_receipt),
     ("item 11: fault injection matrix", case_kill_matrix),
     ("item 11: unknown boundary refuses", case_unknown_kill_stage_refuses),
     ("environment independence", case_suite_is_environment_independent),

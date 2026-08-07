@@ -163,10 +163,10 @@ KILL_STAGES = (
     "activated",            # `current` points at the new pair; the vault still has its own copy
     "proved",               # the scrubbed-shell proof passed; nothing has been removed
     "schedules",            # plists regenerated and exercised
-    "symlink",              # the stale launcher has been repointed
+    "symlink",              # the provisional receipt is on disk and the stale launcher is repointed
     "tree-written",         # HEAD carries the migration commit; the working tree still has the files
-    "worktree-pruned",      # the files are gone; the receipt is not written yet
-    "receipt",              # the receipt exists; the post-verification has not run
+    "worktree-pruned",      # the files are gone; the receipt is still PROVISIONAL (no after_commit)
+    "receipt",              # the complete receipt exists; the post-verification has not run
 )
 
 
@@ -1066,6 +1066,84 @@ def _divergence(vault: Path, ref: str) -> dict:
 
 
 # --- migrate --------------------------------------------------------------------------------------------
+def _before_commit(vault: Path, pre: dict) -> str:
+    """The commit a ROLLBACK has to return this vault to, which is not always `pre["head"]`.
+
+    On a pristine run it is exactly HEAD. On a RESUME it is not, and getting that wrong was silent:
+    the killed run had already moved HEAD onto the migration commit, so `preflight()` recorded that
+    commit as `head` and the receipt claimed `before_commit == after_commit`. `rollback()` then
+    diffed a commit against itself, got an empty path set, passed every gate vacuously, restored
+    NOTHING, printed success, and deleted the receipt — the only record of the pre-migration commit
+    and of where the launcher used to point. After that there was no rollback at all, on any
+    interrupted migration.
+
+    The true answer is the migration commit's parent, and it is safe to ask for: `state()` returns
+    `resume` only when HEAD carries this module's trailer, so HEAD is a migration commit and it has
+    one."""
+    if pre["state"] != "resume":
+        return pre["head"]
+    return _git_out(vault, "rev-parse", "HEAD^")
+
+
+def _launcher_route_for_receipt(fresh: dict, prior: dict | None) -> dict:
+    """The launcher route a rollback needs, which is the one the FIRST run of this migration saw.
+
+    A resumed run re-reads `<bin>/plainkeep` and finds it already pointing at the installed pair, so
+    its own `launcher_route()` reports `into_vault: False` and carries no old target. Overwriting the
+    receipt with that erases the one fact in it that git cannot reconstruct — where the operator's
+    launcher used to point — and `git revert` does not put a symlink back."""
+    old = (prior or {}).get("launcher_route") or {}
+    if fresh.get("old_target") or fresh.get("into_vault"):
+        return fresh
+    if old.get("old_target") or old.get("into_vault"):
+        return old
+    return fresh
+
+
+def _finalize_interrupted_receipt(vault: Path, vault_id: str) -> dict | None:
+    """Complete a provisional receipt whose run was killed AFTER the removal and before it finished.
+
+    A kill at `worktree-pruned` leaves a vault that is fully and correctly migrated, so `state()`
+    answers `migrated` and the re-run takes the CLI's no-op branch — which does not run `_apply` and
+    never wrote a receipt. Before the provisional receipt existed that combination left an operator
+    with a migrated vault, no rollback at all, and no record of where their launcher used to point.
+    The record is now already on disk from before the removal; this fills in the one field only the
+    completed removal can supply.
+
+    It REFUSES to complete a receipt it cannot tie to this HEAD: HEAD must be a migration commit and
+    its parent must be the `before_commit` the provisional recorded. A receipt that aimed a rollback
+    at the wrong commit would be worse than the absent one it replaces.
+
+    `removed` is DERIVED FROM THE COMMIT rather than left empty, and that is not cosmetic. It is the
+    number `rollback()`'s empty-restore refusal compares against — the check that turns "restored 0
+    paths" into a refusal instead of a success — so a recovered receipt claiming zero removals would
+    hand that check a vacuous comparison of 0 against 0 on the very path B1 was about. The commit's
+    own deletions are the exact set `_prune_worktree` removed, because the prune is driven from the
+    verified diff of this commit.
+
+    `pruned_dirs` stays empty: emptied directories leave no record in git, so a recovered receipt
+    cannot reconstruct them. Nothing reads the field — `checkout-index` recreates directories as it
+    restores the files — so an empty list is the honest answer rather than a guessed one."""
+    rec = read_receipt(vault_id)
+    if rec is None or rec.get("after_commit"):
+        return rec
+    head = _git_out(vault, "rev-parse", "HEAD")
+    if not _is_migration_commit(vault, head):
+        return rec
+    parent = _git(vault, "rev-parse", "HEAD^", check=False)
+    if parent.returncode != 0 or parent.stdout.strip() != rec.get("before_commit"):
+        return rec
+    raw = _git_out(vault, "diff-tree", "-r", "--no-commit-id", "--name-status", "-z",
+                   rec["before_commit"], head)
+    fields = [f for f in raw.split("\0") if f]
+    removed = [fields[i + 1] for i in range(0, len(fields) - 1, 2) if fields[i] == "D"]
+    rec.update({"after_commit": head, "status": "recovered", "removed": removed,
+                "pruned_dirs": rec.get("pruned_dirs") or [],
+                "recovered_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+    write_receipt(rec)
+    return rec
+
+
 def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = None) -> dict:
     """The whole sequence. Read the module docstring for the ordering and why it is the ordering.
 
@@ -1095,6 +1173,7 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
         if pre["state"] == "pristine":
             _clean_tree_gate(vault)
             _divergence(vault, _engine_ref(vault))
+        before_commit = _before_commit(vault, pre)
         _kill_hook("preflight-done")
 
         src = Path(pre["engine_source"])
@@ -1108,7 +1187,27 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
         sched = regenerate_schedules(vault, launcher, engine)
         _kill_hook("schedules")
 
-        route = repoint_launcher(vault, launcher_route(vault))
+        # THE RECOVERY RECORD, WRITTEN BEFORE THE STEP IT DESCRIBES. Two facts a rollback needs
+        # cannot be recovered from the repository once this run stops answering: the pre-migration
+        # commit, and where `<bin>/plainkeep` pointed before it was repointed. Writing the receipt
+        # only at the end meant a SIGKILL at `worktree-pruned` — one boundary the kill matrix calls
+        # safe — left a fully migrated vault with no receipt, and the re-run took the no-op branch
+        # and never wrote one either. Rollback was then permanently unavailable and the old symlink
+        # target was gone.
+        #
+        # So a provisional receipt lands here, BEFORE `repoint_launcher`, carrying the route as it
+        # stands. `os.replace` makes the repoint itself atomic, so there is no instant at which the
+        # launcher has moved and the receipt does not say where from.
+        planned = launcher_route(vault)
+        prior = read_receipt(vault_id)
+        write_receipt({"schema": SCHEMA, "vault": str(vault), "vault_id": vault_id,
+                       "branch": pre["branch"], "before_commit": before_commit,
+                       "after_commit": None, "status": "in-progress",
+                       "engine": prov,
+                       "launcher_route": _launcher_route_for_receipt(planned, prior),
+                       "resumed": pre["state"] == "resume",
+                       "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")})
+        route = _launcher_route_for_receipt(repoint_launcher(vault, planned), prior)
         _kill_hook("symlink")
 
         # THE HASHES THE CONTRACT IS ABOUT (acceptance item 13), taken here rather than at the top:
@@ -1117,7 +1216,7 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
         # the claim — no exception list, no attributable-difference clause, nothing tolerated.
         before = protected_manifest(vault)
 
-        result = _apply(vault, pre, scratch)
+        result = _apply(vault, pre, scratch, before_commit)
 
         after = protected_manifest(vault)
         delta = manifest_diff(before, after)
@@ -1126,7 +1225,7 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
                 "THE REMOVAL CHANGED PROTECTED CONTENT — this must be impossible and it happened:\n"
                 f"  modified: {delta['modified'][:10]}\n  removed:  {delta['removed'][:10]}\n"
                 f"  added:    {delta['added'][:10]}\n"
-                f"restore with: git -C {vault} reset --hard {pre['head']}",
+                f"restore with: git -C {vault} reset --hard {before_commit}",
                 code=output.EXIT_DENY)
 
         left = enginetree.engine_paths_in(vault)
@@ -1135,7 +1234,7 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
                              code=output.EXIT_DENY)
 
         doc = {"schema": SCHEMA, "vault": str(vault), "vault_id": vault_id,
-               "branch": pre["branch"], "before_commit": pre["head"],
+               "branch": pre["branch"], "before_commit": before_commit, "status": "complete",
                "after_commit": result.get("commit"), "removed": result.get("removed", []),
                "pruned_dirs": result.get("pruned_dirs", []), "engine": prov,
                "launcher_route": route, "schedules": sched, "proof": proof,
@@ -1161,7 +1260,7 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
         shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _apply(vault: Path, pre: dict, scratch: Path) -> dict:
+def _apply(vault: Path, pre: dict, scratch: Path, before: str) -> dict:
     """The mutation, and the only part of a migration that touches the vault's own directory.
 
     Four steps, in this order, each of which leaves a state the next run can finish from:
@@ -1172,30 +1271,33 @@ def _apply(vault: Path, pre: dict, scratch: Path) -> dict:
 
     No git command in this sequence writes to the working tree. `read-tree` without `-u` rewrites
     `.git/index` only; the deletions are `os.remove` calls driven from the VERIFIED diff, not from
-    the allowlist — the allowlist is what the diff was checked against, one step further back."""
+    the allowlist — the allowlist is what the diff was checked against, one step further back.
+
+    `before` is the pre-migration commit as `_before_commit` derived it, passed in rather than read
+    off `pre["head"]`, so the commit this verifies against and the commit the receipt aims a rollback
+    at are one value with one derivation. They used to be two, and on a resumed run they disagreed."""
     if pre["state"] == "resume":
         # A killed run already moved HEAD. Re-verify what it did rather than trusting the trailer:
         # the commit's own diff against its parent must still be an allowlisted pure deletion.
         head = _git_out(vault, "rev-parse", "HEAD")
-        parent = _git_out(vault, "rev-parse", "HEAD^")
-        verified = verify_candidate(vault, parent, head,
-                                    _tracked_under_allowlist(vault, parent))
+        verified = verify_candidate(vault, before, head,
+                                    _tracked_under_allowlist(vault, before))
         _git(vault, "read-tree", head)
         removed = _prune_worktree(vault, verified)
         return {"commit": head, "removed": removed,
                 "pruned_dirs": _prune_empty_dirs(vault, verified)}
 
     tree, expected = build_candidate(vault, scratch)
-    verified = verify_candidate(vault, pre["head"], tree, expected)
+    verified = verify_candidate(vault, before, tree, expected)
     msg = (f"plainkeep: migrate off the vault-local engine\n\n"
            f"Removes {len(verified)} engine path(s) the installed engine now provides. Verified as a\n"
            f"pure deletion against an exact allowlist before checkout; no protected path is touched.\n\n"
            f"{TRAILER}: {SCHEMA}\n")
-    commit = _git_out(vault, "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", pre["head"],
+    commit = _git_out(vault, "-c", "commit.gpgsign=false", "commit-tree", tree, "-p", before,
                       "-m", msg, env=_commit_env(vault))
     # CAS: the old value is passed, so a HEAD that moved underneath this run makes the update FAIL
     # rather than silently discarding whatever moved it.
-    _git(vault, "update-ref", pre["branch"], commit, pre["head"])
+    _git(vault, "update-ref", pre["branch"], commit, before)
     _kill_hook("tree-written")
     _git(vault, "read-tree", commit)
     removed = _prune_worktree(vault, verified)
@@ -1254,6 +1356,17 @@ def rollback(vault, *, yes: bool = False) -> dict:
                          code=output.EXIT_NOT_FOUND,
                          hint="if the migration commit is in the history, revert it yourself:\n"
                               f"    git -C {vault} revert <commit>")
+    if not rec.get("after_commit"):
+        # A PROVISIONAL receipt: the run that wrote it was interrupted before it removed anything.
+        # There is no commit to undo, and saying so is the honest answer — the alternative is the
+        # "HEAD is X, not the migration commit None" that this branch used to produce.
+        rt = rec.get("launcher_route") or {}
+        raise VaultError(
+            "this vault's migration receipt is PROVISIONAL — the run that wrote it was interrupted "
+            "before it removed anything, so there is no migration commit to roll back",
+            code=output.EXIT_DENY,
+            hint="re-run the migration to finish it. If the launcher was already repointed, it "
+                 f"belongs at:\n    {rt.get('path')} -> {rt.get('old_target') or rt.get('target')}")
     head = _git_out(vault, "rev-parse", "HEAD")
     if head != rec.get("after_commit"):
         raise VaultError(
@@ -1263,6 +1376,19 @@ def rollback(vault, *, yes: bool = False) -> dict:
                  f"    git -C {vault} revert {str(rec.get('after_commit'))[:12]}")
     branch = rec["branch"]
     before = rec["before_commit"]
+    if not before or before == rec.get("after_commit"):
+        # A RECEIPT THAT CANNOT DESCRIBE A MIGRATION, and the reason this refusal exists rather than
+        # a comment: when `before_commit == after_commit` every gate below passes VACUOUSLY. The
+        # diff is empty, so nothing is "not an allowlisted addition"; `update-ref` sets the branch to
+        # itself; zero paths are checked out; the protected manifest is trivially unchanged. The
+        # command then reported success, restored nothing, and deleted the receipt.
+        raise VaultError(
+            f"refusing to roll back: the receipt names the same commit before and after "
+            f"({str(before)[:12]}), which cannot describe a migration — it gives no state to return "
+            "to, and rolling 'back' to it would restore nothing while deleting the receipt",
+            code=output.EXIT_DENY,
+            hint="the migration commit is still in the history; undo it yourself:\n"
+                 f"    git -C {vault} revert {head[:12]}")
 
     # THE STAGED-CHANGE REFUSAL, IN THE DIRECTION IT WAS MISSING. `_clean_tree_gate` refuses any
     # staged change on the forward path because `read-tree` rewrites `.git/index` wholesale and
@@ -1282,6 +1408,18 @@ def rollback(vault, *, yes: bool = False) -> dict:
         raise VaultError("refusing to roll back: restoring would change more than the allowlist —\n  "
                          + "\n  ".join(f"{s} {p}" for s, p in bad[:20]), code=output.EXIT_DENY)
     paths_ = [p for _, p in entries]
+    if not paths_:
+        # "Restored 0 paths" is never a correct rollback of a migration that removed 122. An empty
+        # set means the receipt does not describe the state on disk, and the only safe thing to do
+        # with a receipt that cannot be trusted is to refuse and KEEP it.
+        raise VaultError(
+            f"refusing to roll back: restoring {head[:12]} -> {before[:12]} would put back 0 engine "
+            f"path(s), but this receipt records a migration that removed "
+            f"{len(rec.get('removed') or [])}",
+            code=output.EXIT_DENY,
+            hint="the receipt does not match this repository's history. It is left in place at\n"
+                 f"    {receipt_path(marker['id'])}\n"
+                 "so you can read the pre-migration commit and the old launcher target out of it.")
 
     protected_before = protected_manifest(vault)
     _git(vault, "update-ref", branch, before, head)
@@ -1295,13 +1433,18 @@ def rollback(vault, *, yes: bool = False) -> dict:
 
     route = rec.get("launcher_route") or {}
     restored = False
-    if route.get("repointed") and route.get("old_target"):
+    # `old_target` is what a COMPLETED repoint recorded. `target` + `into_vault` is what the
+    # provisional receipt recorded BEFORE the repoint, and it is the same fact — the launcher pointed
+    # into this vault and the migration is what moved it. Accepting both is what makes the record
+    # useful after an interruption, which is the only time it matters.
+    old_target = route.get("old_target") or (route.get("target") if route.get("into_vault") else None)
+    if old_target:
         link = Path(route["path"])
-        if link.is_symlink():
+        if link.is_symlink() and os.readlink(link) != old_target:
             tmp = link.with_name(f".plainkeep.rollback.{os.getpid()}")
             if tmp.exists() or tmp.is_symlink():
                 tmp.unlink()
-            tmp.symlink_to(route["old_target"])
+            tmp.symlink_to(old_target)
             os.replace(tmp, link)
             restored = True
     receipt_path(marker["id"]).unlink(missing_ok=True)
@@ -1359,6 +1502,9 @@ def _render_preflight(d: dict) -> None:
 def _render_migrate(d: dict) -> None:
     if d.get("result") == "no-op":
         print(f"{d['vault']} is already migrated — nothing to do")
+        if d.get("receipt_completed"):
+            print("  a migration receipt left provisional by an interrupted run was completed; "
+                  "rollback is available again")
         return
     print(f"migrated {d['vault']}")
     print(f"  engine        {d['engine']['version']}"
@@ -1440,8 +1586,14 @@ def main(argv: list[str]) -> int:
                 engine = enginetree.versions_dir() / prov["version"]
                 proof = prove(Path(pre["vault"]), pre["vault_id"],
                               enginetree.current_link() / "plainkeep", engine, write=False)
+                # A kill at `worktree-pruned` reaches this branch with a PROVISIONAL receipt: the
+                # vault is fully migrated but the run that did it never finished. Complete the
+                # record here or the operator has a migrated vault and no rollback at all.
+                rec = _finalize_interrupted_receipt(Path(pre["vault"]), pre["vault_id"])
                 return _emit({"schema": SCHEMA, "vault": pre["vault"], "result": "no-op",
-                              "engine": prov, "proof": proof}, opts, _render_migrate)
+                              "engine": prov, "proof": proof,
+                              "receipt_completed": bool(rec and rec.get("status") == "recovered")},
+                             opts, _render_migrate)
             return _emit(migrate(rest[0], yes="--yes" in opts,
                                  engine_source=_flag(opts, "--engine-source"),
                                  pre=pre if "--yes" in opts else None),

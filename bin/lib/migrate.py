@@ -983,24 +983,72 @@ def _engine_ref(vault: Path) -> str:
     return raw
 
 
-def _divergence(vault: Path, ref: str) -> list[str]:
+def _synced_by_ref(vault: Path, ref: str) -> tuple[list[str], list[str]]:
+    """Split the divergence allowlist into what `script/update` SYNCED from `ref`, and what it did not.
+
+    `_divergence` refuses on any difference between the recorded ref and HEAD over the engine
+    allowlist. That is only sound for the paths `script/update` actually checked out of that ref, and
+    what it checks out is `script/engine.txt` AS IT STOOD IN THAT COMMIT — a list that has
+    demonstrably drifted from the removal allowlist. `templates/verb` is the recorded case: owned by
+    `enginetree` and absent from `engine.txt` until Phase 2 Task 2, so a vault whose last sync
+    predates that carries a copy laid down by `script/setup` which will not match the ref's, reports
+    `M`, and refuses the migration by NAMING A PATH THE OPERATOR NEVER TOUCHED. Same class as the
+    `.plainkeep-engine-ref` bug `b373028` fixed, one layer out: comparing against a base that was
+    never the source of the thing being compared.
+
+    So the pathspec is intersected with the ref's OWN manifest. The remainder is REPORTED rather than
+    silently dropped — an unsynced engine path can still carry a local edit, and an operator whose
+    migration is about to delete it is owed the sentence "this was not compared" rather than a
+    check that quietly narrowed itself."""
+    all_ = [*DIVERGENCE_TREES, *DIVERGENCE_FILES]
+    r = _git(vault, "show", f"{ref}:script/engine.txt", check=False)
+    if r.returncode != 0:
+        # The ref carries no manifest at all (a vault synced before `engine.txt` existed). Compare
+        # everything: that is the pre-existing behaviour and it is the conservative direction — a
+        # false refusal hands the operator a patch they can read, a skipped comparison hands them
+        # nothing.
+        return all_, []
+    listed = [ln.strip() for ln in r.stdout.splitlines()]
+    listed = [ln for ln in listed if ln and not ln.startswith("#")]
+
+    def covered(p: str) -> bool:
+        # Either direction of containment: `engine.txt` says `frontends` where the ownership manifest
+        # says `frontends/raycast`, and both spellings mean that path was synced from this ref.
+        return any(p == e or p.startswith(e + "/") or e.startswith(p + "/") for e in listed)
+
+    compared = [p for p in all_ if covered(p)]
+    if not compared:
+        raise VaultError(
+            f".plainkeep-engine-ref names {ref[:8]}, whose script/engine.txt lists none of the "
+            f"engine paths this vault carries — it cannot be the commit this engine was synced from",
+            code=output.EXIT_DENY,
+            hint="record the ref this vault actually synced from (`script/update` writes it), or "
+                 "fetch the commit it names")
+    return compared, [p for p in all_ if not covered(p)]
+
+
+def _divergence(vault: Path, ref: str) -> dict:
     """ACCEPTANCE ITEM 3. Every added, modified, deleted or type-changed engine path between the
     recorded ref and HEAD. Any divergence REFUSES and emits a recoverable patch.
 
     The hazard is specific and it is the one the panel named: an agent's local edits to `bin/**`
     inside a real vault. After migration they are dead code — the installed engine is what runs — and
     after removal they are invisible. So they are not merged, not warned about and not carried: the
-    migration stops, writes the patch OUTSIDE the vault, and names it."""
-    raw = _git_out(vault, "diff", "--name-status", "-z", ref, "HEAD", "--",
-                   *DIVERGENCE_TREES, *DIVERGENCE_FILES)
+    migration stops, writes the patch OUTSIDE the vault, and names it.
+
+    Scoped to the paths that ref actually synced — see `_synced_by_ref` for why comparing the rest is
+    a refusal the operator cannot act on. Returns both halves so preflight can report what was left
+    out of the comparison."""
+    compared, unsynced = _synced_by_ref(vault, ref)
+    raw = _git_out(vault, "diff", "--name-status", "-z", ref, "HEAD", "--", *compared)
     fields = [f for f in raw.split("\0") if f]
     entries = [f"{fields[i]} {fields[i + 1]}" for i in range(0, len(fields) - 1, 2)]
     if not entries:
-        return []
+        return {"compared": compared, "unsynced": unsynced, "entries": []}
     d = receipts_dir()
     d.mkdir(parents=True, exist_ok=True)
     patch = d / f"{vaultreg.read_marker(vault)['id']}.divergence.patch"
-    body = _git(vault, "diff", ref, "HEAD", "--", *DIVERGENCE_TREES, *DIVERGENCE_FILES).stdout
+    body = _git(vault, "diff", ref, "HEAD", "--", *compared).stdout
     patch.write_text(body, encoding="utf-8")
     raise VaultError(
         f"this vault's engine copy has DIVERGED from the recorded sync ref {ref[:8]} in "
@@ -1270,6 +1318,10 @@ def _render_preflight(d: dict) -> None:
     print(f"state      {d['state']}")
     if d.get("engine_ref"):
         print(f"sync ref   {d['engine_ref'][:12]}  (no divergence)")
+        unsynced = (d.get("divergence") or {}).get("unsynced") or []
+        if unsynced:
+            print(f"           {len(unsynced)} engine path(s) that ref never synced, NOT compared: "
+                  + ", ".join(unsynced))
     if d.get("engine_version"):
         print(f"engine     {d['engine_version']}  from {d['engine_source']}")
     rm = d.get("would_remove") or []

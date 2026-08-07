@@ -1471,6 +1471,137 @@ def case_allowlist_gate_aborts_on_an_unexpected_path(tmp: Path) -> None:
           a.get("ok") is True and a.get("n", 0) > 50, str(a)[:250])
 
 
+def case_divergence_is_scoped_to_what_the_ref_actually_synced(tmp: Path) -> None:
+    """REVIEW r1, I3. The divergence gate assumed every removal-allowlist path was synced by the ref.
+
+    `script/update` checks out `script/engine.txt` AS IT STOOD IN THE RECORDED COMMIT, and that list
+    has drifted from the removal allowlist: `templates/verb` was owned by `enginetree` and absent
+    from `engine.txt` until Phase 2 Task 2. A vault whose last sync predates that carries a
+    `templates/verb` laid down by `script/setup`, which will not match the ref's copy — so the gate
+    reported `M` and refused the migration, NAMING A PATH THE OPERATOR NEVER TOUCHED.
+
+    The stock fixture cannot see this by construction (`vaultmig.phase1_vault` builds the upstream
+    commit and the vault's engine copy from one `git add -A` of the same bytes, so `diff(ref, HEAD)`
+    over engine paths is empty for every clean fixture). So this cell builds the drift explicitly:
+    a ref whose `engine.txt` does not list `templates/verb`, and whose `templates/verb` therefore
+    differs from the vault's.
+
+    It asserts BOTH directions, because narrowing a gate is only correct if the gate still fires:
+    the unsynced path is reported and not refused, and a real local edit to a path the ref DID sync
+    is still refused with exit 5."""
+    fx = vm.phase1_vault(tmp, "unsynced")
+    v = fx["vault"]
+
+    # 1. The vault's own `engine.txt` stops listing `templates/verb` — this is the vault as it was
+    #    when it last synced, and `script/update` therefore never refreshed that tree from the ref.
+    et = v / "script" / "engine.txt"
+    et.write_text("".join(ln for ln in et.read_text(encoding="utf-8").splitlines(keepends=True)
+                          if ln.strip() != "templates/verb"), encoding="utf-8")
+    vm.git(v, "add", "script/engine.txt")
+    vm.git(v, "commit", "-q", "-m", "the engine.txt this vault last synced with")
+    synced_from = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+
+    # 2. THE REF: the same tree with a different `templates/verb`. Built on a side branch so the
+    #    vault's own history is untouched, exactly as a real fetched upstream would be.
+    scaffold = next((p for p in sorted((v / "templates" / "verb").rglob("*")) if p.is_file()), None)
+    check("I3: fixture — the vault carries a templates/verb scaffold", scaffold is not None)
+    if scaffold is None:
+        return
+    rel = str(scaffold.relative_to(v))
+    vm.git(v, "checkout", "-q", "-b", "upstream-old")
+    scaffold.write_text("# the upstream copy, which this vault never synced\n"
+                        + scaffold.read_text(encoding="utf-8"), encoding="utf-8")
+    vm.git(v, "add", rel)
+    vm.git(v, "commit", "-q", "-m", "upstream: a templates/verb this vault never received")
+    old_ref = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+    vm.git(v, "checkout", "-q", "main")
+    (v / ".plainkeep-engine-ref").write_text(old_ref + "\n", encoding="utf-8")
+    vm.git(v, "add", ".plainkeep-engine-ref")
+    vm.git(v, "commit", "-q", "-m", "record the sync ref")
+
+    diff = vm.git(v, "diff", "--name-only", old_ref, "HEAD", "--", "templates/verb").stdout.split()
+    check("I3: fixture — templates/verb really differs between the ref and the vault",
+          diff == [rel], f"{diff} (synced_from={synced_from[:8]})")
+
+    r, doc = mig_json(fx, "--preflight", str(v))
+    check("I3: preflight does NOT refuse over a path the recorded ref never synced",
+          r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:400]}")
+    unsynced = (doc.get("divergence") or {}).get("unsynced") or []
+    check("I3: ...and REPORTS it as not compared rather than silently narrowing the check",
+          "templates/verb" in unsynced, str(doc.get("divergence"))[:300])
+    compared = (doc.get("divergence") or {}).get("compared") or []
+    check("I3: ...while the paths the ref DID sync are still compared",
+          "bin" in compared and "script" in compared, str(compared)[:250])
+
+    # THE GATE STILL FIRES. A committed local edit to a path the ref synced must still refuse, or
+    # this narrowing would have turned item 3 off.
+    vm.diverge(v)
+    r2 = mig(fx, "--preflight", str(v))
+    check("I3: a local edit to a path the ref DID sync is still REFUSED",
+          r2.returncode == EXIT_DENY and "DIVERGED" in (r2.stderr + r2.stdout),
+          f"rc={r2.returncode} {(r2.stderr + r2.stdout)[:300]}")
+    check("I3: ...and it names the edited path",
+          "bin/lib/vaultroot.py" in (r2.stderr + r2.stdout), (r2.stderr + r2.stdout)[:300])
+
+
+def case_divergence_when_the_ref_carries_no_manifest(tmp: Path) -> None:
+    """THE TWO BRANCHES OF `_synced_by_ref` THAT ARE NOT THE HAPPY PATH.
+
+    Narrowing a gate is only safe if every way the narrowing can go wrong is a refusal. Two ways:
+
+      * **The ref has no `script/engine.txt` at all** — a vault synced before the manifest existed.
+        There is nothing to intersect with, so the comparison must fall back to the FULL allowlist.
+        Falling back to "compare nothing" would silently turn item 3 off for exactly the oldest
+        vaults, which are the ones most likely to carry drift.
+      * **The ref's manifest lists none of the engine paths this vault carries.** That ref cannot be
+        the commit this engine was synced from, so the honest answer is a refusal rather than a
+        comparison over the empty set — which would pass vacuously and report "no divergence"."""
+    # 1. NO MANIFEST IN THE REF -> compare everything, and still catch a real local edit.
+    fx = vm.phase1_vault(tmp, "no-manifest")
+    v = fx["vault"]
+    vm.git(v, "checkout", "-q", "-b", "upstream-premanifest")
+    vm.git(v, "rm", "-q", "script/engine.txt")
+    vm.git(v, "commit", "-q", "-m", "upstream as it stood before engine.txt existed")
+    old_ref = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+    vm.git(v, "checkout", "-q", "main")
+    (v / ".plainkeep-engine-ref").write_text(old_ref + "\n", encoding="utf-8")
+    vm.git(v, "add", ".plainkeep-engine-ref")
+    vm.git(v, "commit", "-q", "-m", "record a sync ref that predates the manifest")
+    show = vm.git(v, "cat-file", "-t", old_ref).stdout.strip()
+    check("I3: fixture — the recorded ref exists and carries no script/engine.txt",
+          show == "commit" and not vm.git(v, "ls-tree", "--name-only", old_ref, "script/engine.txt",
+                                          ).stdout.strip(), show)
+
+    vm.diverge(v)
+    r = mig(fx, "--preflight", str(v))
+    check("I3: a ref with NO manifest falls back to comparing the whole allowlist, not none of it",
+          r.returncode == EXIT_DENY and "DIVERGED" in (r.stderr + r.stdout),
+          f"rc={r.returncode} {(r.stderr + r.stdout)[:300]}")
+    check("I3: ...and it still names the edited path",
+          "bin/lib/vaultroot.py" in (r.stderr + r.stdout), (r.stderr + r.stdout)[:300])
+    vm.wipe(fx["base"])
+
+    # 2. A MANIFEST THAT COVERS NOTHING -> refuse, rather than compare the empty set and pass.
+    fx2 = vm.phase1_vault(tmp, "empty-manifest")
+    v2 = fx2["vault"]
+    vm.git(v2, "checkout", "-q", "-b", "upstream-unrelated")
+    (v2 / "script" / "engine.txt").write_text("# nothing this vault carries\ndocs/design\n",
+                                              encoding="utf-8")
+    vm.git(v2, "add", "script/engine.txt")
+    vm.git(v2, "commit", "-q", "-m", "upstream whose manifest lists none of the engine paths")
+    ref2 = vm.git(v2, "rev-parse", "HEAD").stdout.strip()
+    vm.git(v2, "checkout", "-q", "main")
+    (v2 / ".plainkeep-engine-ref").write_text(ref2 + "\n", encoding="utf-8")
+    vm.git(v2, "add", ".plainkeep-engine-ref")
+    vm.git(v2, "commit", "-q", "-m", "record it")
+    r2 = mig(fx2, "--preflight", str(v2))
+    check("I3: a ref whose manifest covers NO engine path is REFUSED, not compared vacuously",
+          r2.returncode == EXIT_DENY and "none of the" in (r2.stderr + r2.stdout),
+          f"rc={r2.returncode} {(r2.stderr + r2.stdout)[:300]}")
+    check("I3: ...and nothing was removed by that refusal",
+          (v2 / "bin" / "lib" / "vaultroot.py").is_file())
+
+
 def case_no_force_anywhere(_tmp: Path) -> None:
     """There is no `--force`, and no other spelling of one. Asked of the parse tree and the CLI.
 
@@ -1551,6 +1682,10 @@ CASES = (
     ("item 12: rollback refuses work on top", case_rollback_refuses_work_on_top),
     ("item 6: the allowlist gate", case_allowlist_gate_aborts_on_an_unexpected_path),
     ("no --force anywhere", case_no_force_anywhere),
+    ("item 3: divergence is scoped to the ref's manifest",
+     case_divergence_is_scoped_to_what_the_ref_actually_synced),
+    ("item 3: divergence when the ref carries no manifest",
+     case_divergence_when_the_ref_carries_no_manifest),
     ("item 11: fault injection matrix", case_kill_matrix),
     ("item 11: unknown boundary refuses", case_unknown_kill_stage_refuses),
     ("environment independence", case_suite_is_environment_independent),

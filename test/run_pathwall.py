@@ -314,6 +314,36 @@ EXEMPT: dict[str, dict[str, str]] = {
         'vaultreg.marker_path(target).parent.mkdir(parents=True, exist_ok=True)':
             "the new vault's .plainkeep/ directory",
     },
+    # MIGRATION (Phase 2 Task 6). FOUR write sites, and every one of them is OUTSIDE the vault being
+    # migrated — which is not a coincidence to be checked line by line but the module's stated design
+    # constraint: `migrate.py` never opens a path inside a vault for writing at all, and
+    # `test/run_migrate.py`'s AST ratchet enforces that per function against the parse tree (it taints
+    # every name derived from a function's `vault` argument and flags a write primitive applied to
+    # one). So these four are the module's ENTIRE write surface, and they land under
+    # `enginetree.install_root() / "migrations"` — the receipt and the divergence patch.
+    #
+    # Both live outside the vault ON PURPOSE and the reasons are different. The RECEIPT is what
+    # rollback reads: a receipt inside the vault would be removed by the very migration it records,
+    # and would then be missing exactly when it is needed. The DIVERGENCE PATCH is emitted while
+    # REFUSING to migrate — writing an operator's recoverable diff into the tree it says it will not
+    # touch would contradict the refusal. `install_root()` is derived from the engine root alone,
+    # never from an argument, and `vaultroot.validate()` refuses any data root overlapping it, so
+    # neither can resolve under `~/files/**/in/`. Same class as the installer and provisioner above.
+    #
+    # LOOSE KEY, in the sense the enginetree block flags: `d.mkdir(...)` is not distinctive text. It
+    # covers two sites today, `write_receipt()` and `_divergence()`, and both are the same directory.
+    "bin/lib/migrate.py": {
+        'd.mkdir(parents=True, exist_ok=True)':
+            "`<install-root>/migrations/` — the receipt directory (write_receipt) and the divergence "
+            "patch directory (_divergence), which are the same directory outside every vault",
+        'tmp.write_text(json.dumps(doc, indent=2, sort_keys=True) + "\\n", encoding="utf-8")':
+            "the migration receipt, to a pid-unique temp name and renamed over — rollback's only "
+            "record, so it cannot live in the tree the migration removes files from",
+        'patch.write_text(body, encoding="utf-8")':
+            "the recoverable patch for a DIVERGED engine copy, written while refusing to migrate — "
+            "acceptance item 3 requires the refusal to emit it, and it cannot be emitted into the "
+            "vault the same call is declining to touch",
+    },
     "bin/repo/run.py": {
         'dest.parent.mkdir(parents=True, exist_ok=True)': "~/work fleet clone + adopt destination",
         'shutil.move(str(src), str(dest))': "~/work fleet adopt: moves an existing repo into the fleet",
@@ -429,6 +459,35 @@ PINNED_DELETES: dict[str, set[str]] = {
     # resolve under `~/files/**/in/` for the same reason the rest of init cannot: the target is
     # validated disjoint and unmarked before anything is written.
     "bin/vault/run.py": {"target.rmdir()"},
+    # MIGRATION (Phase 2 Task 6). This is the ONE module on this list whose removals are aimed INSIDE
+    # a directory holding a person's notes, so it is the one that needs reading rather than
+    # classifying, and it splits in two.
+    #
+    # The first two lines ARE the migration — `_remove_engine_path` deletes a file and
+    # `_remove_empty_dir` removes a directory the deletions emptied. Neither takes a path a caller
+    # chose. Both refuse anything not in `_VERIFIED`, the set `verify_candidate()` produces from a
+    # `git diff-tree` between HEAD and a candidate tree built in a TEMPORARY index, and that tree is
+    # itself refused unless every path in it is inside the engine allowlist (`enginetree`'s ownership
+    # manifest plus `script/` and `.plainkeep-engine-ref`) and every change is a deletion. So the
+    # ratchet's question — can this resolve under `~/files/**/in/`? — is answered no by construction:
+    # `bin/`, `script/`, `templates/verb` and `VERSION` inside a vault are engine code, an originals
+    # tree is not on the allowlist, and there is no `--force` to widen it. `_remove_empty_dir` adds a
+    # second bound on top: it must be an ANCESTOR of a verified deletion, and `os.rmdir` itself
+    # refuses a directory anything is still inside. `test/run_migrate.py` drives both refusals
+    # through the real CLI and mutation-tests the AST ratchet that keeps them the only two.
+    #
+    # The rest are outside every vault, same class as the installer's: two atomic symlink swaps of
+    # `<bin-dir>/plainkeep` (one repointing it off the vault-local shim, one putting it back on
+    # rollback — a single pin covers both, the text is identical), the receipt's own rename, the
+    # scratch `mkdtemp` the candidate tree is built in, and the receipt a rollback deletes because a
+    # vault that is no longer migrated must not read as one.
+    "bin/lib/migrate.py": {"os.remove(p)",
+                           "os.rmdir(vault / rel)",
+                           "tmp.unlink()",
+                           "os.replace(tmp, link)",
+                           "os.replace(tmp, p)",
+                           "shutil.rmtree(scratch, ignore_errors=True)",
+                           'receipt_path(marker["id"]).unlink(missing_ok=True)'},
     # `new verb` scaffolds through a `.pk-scaffolding-<verb>.<pid>` staging leaf and renames it into
     # place, so that a scaffold which fails halfway (it did — the engine seal made every copied file
     # read-only, and `_fill` could not substitute) leaves nothing behind instead of an unwritable verb

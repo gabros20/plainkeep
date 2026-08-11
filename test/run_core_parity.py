@@ -1383,8 +1383,14 @@ def _no_repo_read_unreadable_source(binary: str, tmps: list[Path], vault: Path) 
 # modules, which Task 1a/1b/1c grew (vaultreg, vaultroot, wall) and Task 2 grew again
 # (enginetree). Task 3 adds `pluginenv` — 25. The numbers below are what the tree HAS, not what the
 # plan remembered.
+#
+# Phase 2 Task 6 adds `migrate.py` — 27. It sits under `bin/lib/`, so `enginetree`'s ownership
+# manifest carries it into the installed tree, and this count is what proves the installer really
+# did. That matters more for this module than most: `bin/**` is inside migration's own removal
+# allowlist, so a vault's copy of `migrate.py` is one of the files a migration deletes. The installed
+# copy is the one that outlives the operation.
 EXPECTED_ENGINE_VERBS = 35
-EXPECTED_ENGINE_LIB_MODULES = 26
+EXPECTED_ENGINE_LIB_MODULES = 27
 
 
 def _installed_manifest_checks(tmps: list[Path]) -> None:

@@ -389,18 +389,46 @@ def protected_manifest(vault: Path) -> dict:
 
     Symlinks are recorded by TARGET and never followed — following them would hash the same bytes
     twice and would leave the migration's strongest evidence dependent on what a link points at."""
-    files: dict[str, str] = {}
+    files = {rel: _digest_entry(vault / rel) for rel in _protected_paths(vault)}
+    return {"schema": SCHEMA, "files": files, "count": len(files)}
+
+
+def _protected_paths(vault: Path) -> list[str]:
+    """Every protected path in the vault. ONE walk, and both callers read it.
+
+    EVERY SYMLINK IS AN ENTRY, whatever it points at. `os.walk(followlinks=False)` decides which list
+    a symlink lands in by `is_dir()`, which FOLLOWS it — so a symlink to a directory is enumerated in
+    `dirnames` while its target resolves and in `filenames` once it does not. A manifest built from
+    `filenames` alone therefore let the same path enter and leave it based on nothing but whether its
+    target was currently reachable, which is wrong twice over:
+
+      * an intact `.claude/skills -> ../skills` is protected content that was NEVER hashed, in either
+        direction, so "no protected content changed" had a hole in it the shape of every committed
+        agent adapter on a real vault;
+      * breaking one reported it as `added` and repairing one as `removed`, which is how a correct
+        rollback came to exit 5 AFTER restoring all 109 paths, skipping the launcher restore and the
+        receipt deletion it had not got to yet.
+
+    A symlink's content is its target string. That is what `_digest_entry` hashes, it is what git
+    stores in a mode-120000 blob, and it does not change when the thing at the other end does."""
+    out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(vault, followlinks=False):
         rel_dir = os.path.relpath(dirpath, vault)
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
         dirnames[:] = sorted(d for d in dirnames
                              if not _skip(f"{rel_dir}/{d}" if rel_dir else d))
+        # An entry, not a directory to descend. Pruned by SLICE ASSIGNMENT rather than `.remove()`:
+        # `dirnames` is derived from `os.walk(vault, …)` and therefore vault-tainted, and `remove` is
+        # a write primitive — the AST ratchet would read `dirnames.remove(d)` as a removal inside a
+        # vault and be right to, on the evidence available to it.
+        links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+        dirnames[:] = [d for d in dirnames if d not in links]
+        out.extend(f"{rel_dir}/{d}" if rel_dir else d for d in links)
         for fn in sorted(filenames):
             rel = f"{rel_dir}/{fn}" if rel_dir else fn
-            if _skip(rel):
-                continue
-            files[rel] = _digest_entry(vault / rel)
-    return {"schema": SCHEMA, "files": files, "count": len(files)}
+            if not _skip(rel):
+                out.append(rel)
+    return out
 
 
 def _skip(rel: str) -> bool:
@@ -428,6 +456,40 @@ def manifest_diff(before: dict, after: dict) -> dict:
 
 
 # --- provisioning ------------------------------------------------------------------------------------
+# The modules a PHASE 2 engine has to carry. A tree without them installs as an engine that can
+# neither update itself nor migrate anything, and both are module CLIs the operator is told to run by
+# name, so their absence is not something the next command discovers gracefully.
+PHASE2_MODULES = ("bin/lib/enginetree.py", "bin/lib/migrate.py")
+
+
+def _check_engine_source(src: Path, *, defaulted: bool) -> None:
+    """Refuse a source tree that is not a Phase 2 engine.
+
+    `engine_source` DEFAULTS TO THE VAULT, which is right — a Phase 1 vault's own copy is the engine
+    that has been running it — and is a live hazard exactly once: when that copy predates Phase 2.
+    The clone canary hit the benign half of it. `provision()` found the vault's `4.0.0-dev` already
+    installed, verified it and REUSED it, so the vault's pre-Phase-2 code was never installed. That
+    is the right outcome reached by a version-string collision: on a machine where `4.0.0-dev` is not
+    already present, the same default would have installed the engine FROM the vault's own copy, and
+    that copy carries neither `enginetree.py` nor `migrate.py`.
+
+    Checked on the CONTENT of the resolved source, never on whether it happens to be the vault: a
+    vault whose engine copy IS Phase 2 is a perfectly good source and is what every fixture uses. The
+    refusal names `--engine-source` because pointing at a real checkout is the fix, and it is also
+    what the canary report tells the live run to do regardless."""
+    missing = [m for m in PHASE2_MODULES if not (src / m).is_file()]
+    if not missing:
+        return
+    raise VaultError(
+        f"the engine source {src} is not a Phase 2 engine — it does not carry "
+        + ", ".join(missing) + ("\n  (no --engine-source was given, so the source DEFAULTS to the "
+                                "vault, whose engine copy predates Phase 2)" if defaulted else ""),
+        code=output.EXIT_DENY,
+        hint="installing it would produce an engine that can neither update itself nor migrate a "
+             "vault. Point the migration at a real checkout:\n"
+             "    --engine-source <path to a plainkeep checkout>")
+
+
 def provision(source: Path) -> dict:
     """Install and activate the engine pair from `source`, retaining whatever pair is active now.
 
@@ -506,7 +568,24 @@ def _run_probe(launcher: Path, vault: Path, args: list[str], mode: str,
                           capture_output=True, text=True, timeout=timeout)
 
 
-def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bool = True) -> dict:
+def _clip(text: str, limit: int = 1600) -> str:
+    """Clip a probe's output KEEPING BOTH ENDS.
+
+    A head-only clip is not neutral about what it drops, and this one dropped the answer. `doctor`
+    prints its `FAIL` lines LAST, so 1200 characters of its output is sixteen `ok` lines and not one
+    failing line — the migration reported a doctor failure and then hid which one, to the person who
+    had to act on it. The head carries the command's framing, the tail carries its verdict, and the
+    elision says how much is missing rather than trailing off."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text or "(no output)"
+    head = limit // 3
+    tail = limit - head
+    return (text[:head] + f"\n  … {len(text) - head - tail} character(s) elided …\n" + text[-tail:])
+
+
+def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bool = True,
+          done: dict | None = None) -> dict:
     """PROVE-BEFORE-REMOVE. The installed binary must, from a subprocess carrying no `PLAINKEEP_HOME`
     and with `$PWD` inside the vault: discover THIS vault by id, pass `doctor`, answer a read verb,
     and complete one guardrail-gated write. In every dispatcher mode the pair supports.
@@ -522,12 +601,20 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
     the post-removal re-proof both perform it, because a dry run proves the argument parser works and
     nothing about whether a byte can land.
 
-    Raises on the first failure, with the probe's own stderr, having removed nothing."""
+    `done` IS WHAT MAKES THE REFUSAL TRUE. This function runs at three moments — before the removal,
+    after it, and on the second run of a finished migration — and every one of them used to fail with
+    the FIRST one's sentence: "prove-before-remove FAILED … nothing was removed", hinted with "the
+    vault still carries its own engine copy". On the two later calls both halves are false, and they
+    were measured being told to an operator whose 109 engine paths were already gone and whose
+    receipt already said `complete`. So `done` carries the true state and the true recovery down from
+    the caller that knows them; `None` means this really is prove-before-remove.
+
+    Raises on the first failure, with the probe's own output, having removed nothing."""
     modes = dispatcher_modes(engine)
     report: dict = {"modes": list(modes), "probes": [], "wrote": []}
     for mode in modes:
         r = _run_probe(launcher, vault, ["vault", "status", "--json"], mode)
-        _probe_ok(r, f"vault status ({mode})", vault)
+        _probe_ok(r, f"vault status ({mode})", vault, done)
         doc = _payload(r.stdout, f"vault status --json ({mode})")
         selected = doc.get("id") or doc.get("vault_id")
 
@@ -554,11 +641,11 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
                                  "selected_by": how})
 
         r = _run_probe(launcher, vault, ["doctor"], mode)
-        _probe_ok(r, f"doctor ({mode})", vault)
+        _probe_ok(r, f"doctor ({mode})", vault, done)
         report["probes"].append({"mode": mode, "probe": "doctor", "rc": r.returncode})
 
         r = _run_probe(launcher, vault, ["status", "--json"], mode)          # the read verb
-        _probe_ok(r, f"status ({mode})", vault)
+        _probe_ok(r, f"status ({mode})", vault, done)
         report["probes"].append({"mode": mode, "probe": "status", "rc": r.returncode})
 
         # The guardrail-gated write. It is a REAL write through the product's own safe-write path,
@@ -571,7 +658,7 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
             continue
         stamp = f"plainkeep migration canary {time.strftime('%Y-%m-%dT%H:%M:%S')} ({mode})"
         r = _run_probe(launcher, vault, ["capture", stamp, "--json"], mode)
-        _probe_ok(r, f"capture ({mode})", vault)
+        _probe_ok(r, f"capture ({mode})", vault, done)
         wrote = _payload(r.stdout, f"capture --json ({mode})")
         path = wrote.get("path") or wrote.get("wrote") or ""
         if path and not (vault / path).exists() and not Path(path).exists():
@@ -599,14 +686,27 @@ def _payload(raw: str, what: str) -> dict:
     return data if isinstance(data, dict) else doc
 
 
-def _probe_ok(r: subprocess.CompletedProcess, what: str, vault: Path) -> None:
-    if r.returncode != 0:
+def _probe_ok(r: subprocess.CompletedProcess, what: str, vault: Path,
+              done: dict | None = None) -> None:
+    """Refuse on a failed probe, SAYING WHICH OF THE THREE PROOFS THIS IS.
+
+    `done` is `{"summary", "hint"}` from a caller that knows the vault is already migrated (see
+    `prove`). Its absence is not a default so much as the pre-removal case: nothing has been removed,
+    the vault still has its engine copy, and re-running after a fix is exactly the right advice."""
+    if r.returncode == 0:
+        return
+    body = _clip(r.stderr or r.stdout)
+    if done is None:
         raise VaultError(
             f"prove-before-remove FAILED at `{what}` (exit {r.returncode}) — nothing was removed:\n"
-            + (r.stderr.strip() or r.stdout.strip() or "(no output)")[:1200],
+            + body,
             code=output.EXIT_DENY,
             hint=f"the vault at {vault} still carries its own engine copy; fix the failure above "
                  "and re-run the migration")
+    raise VaultError(
+        f"{done['summary']} — and the RE-PROOF then failed at `{what}` (exit {r.returncode}):\n"
+        + body,
+        code=output.EXIT_DENY, hint=done["hint"])
 
 
 # --- schedules --------------------------------------------------------------------------------------
@@ -638,23 +738,133 @@ def _sanitized_env(plist_env: dict) -> dict:
     return env
 
 
+EXEC_FAILED = (126, 127)     # the shell's "found but not executable" / "not found"
+
+
+def _sanitized_run(argv: list[str], penv: dict, plist_name: str,
+                   timeout: int = 300) -> subprocess.CompletedProcess:
+    """Run `argv` exactly as launchd would, and turn an EXEC failure into a refusal.
+
+    `subprocess.run` raises `OSError` for a program that is missing or not executable, while a
+    wrapper script that fails to exec its own target reports 127/126 instead. Both mean the same
+    thing — this schedule cannot run at 2am — and both are the failure the whole step exists to
+    catch, so they are one refusal rather than an exception and a number."""
+    try:
+        r = subprocess.run(argv, env=_sanitized_env(penv), cwd="/", capture_output=True, text=True,
+                           timeout=timeout)
+    except OSError as e:
+        raise VaultError(
+            f"the regenerated schedule {plist_name} names a program that COULD NOT BE RUN: "
+            f"{argv[0]} ({e.strerror}) — nothing has been removed", code=output.EXIT_DENY,
+            hint="a launchd agent wakes with no PATH worth the name; the plist must name an "
+                 "absolute, executable launcher")
+    if r.returncode in EXEC_FAILED:
+        raise VaultError(
+            f"the regenerated schedule {plist_name} names a program that COULD NOT BE RUN: "
+            f"{argv[0]} (exit {r.returncode}) — nothing has been removed:\n"
+            + _clip(r.stderr or r.stdout), code=output.EXIT_DENY)
+    if r.returncode < 0:
+        # Killed by a signal. The one non-zero exit that no verb can mean as a verdict about the
+        # vault, so it is the one this step is still entitled to read as a broken schedule.
+        raise VaultError(
+            f"the regenerated schedule {plist_name} DIED ON SIGNAL {-r.returncode} in a sanitized "
+            "launchd environment — nothing has been removed:\n" + _clip(r.stderr or r.stdout),
+            code=output.EXIT_DENY)
+    return r
+
+
+def _routing_probe(vault: Path, plist_name: str, program: Path, penv: dict,
+                   launcher: Path) -> dict:
+    """THE GATE. Does this schedule run the INSTALLED launcher, and does it operate THIS vault?
+
+    It replaced "the rendered argv must exit 0", which conflated two unrelated things. A schedule's
+    verb reports a VERDICT ABOUT THE VAULT in its exit code — the real vault schedules
+    `backup_check` -> `plainkeep backup`, whose bare form is a commit/push nag that exits 1 whenever
+    the tree is dirty or unpushed. `prove()` runs BEFORE this step by design and its guardrail-gated
+    canary writes a note, so the tree is GUARANTEED dirty here and that job is GUARANTEED to exit 1.
+    The migration refused, every time, and each retry added another canary note: it did not converge,
+    structurally.
+
+    And the exit code cannot be rescued by classifying it, because the product's exit space does not
+    separate a verdict from a failure: `output.EXIT_UNEXPECTED` IS 1, so "restic failed" and "your
+    notes are not pushed" are the same number. Interpreting it would be guessing.
+
+    So the two questions the step exists for are asked DIRECTLY, and mostly of the ARTEFACT rather
+    than of a subprocess. A plist bakes both facts absolutely — `bin/job/run.py:_plist` renders
+    `enginetree.stable_launcher()` as the program and the validated vault as `PLAINKEEP_HOME`,
+    precisely so that a scheduled job depends on neither discovery nor `PATH` — so reading them back
+    off the rendered file is not a weaker check than running something, it is the check:
+
+      1. the program IS the stable launcher of the pair this migration installed (`current`, not a
+         pinned version, and not anything else);
+      2. `PLAINKEEP_HOME` is baked, and it is THIS vault;
+      3. the launcher is on disk and executable, so the 2am ENOENT cannot happen.
+
+    A VERB PROBE WAS TRIED AND REJECTED, and the reason belongs here because it is a property of the
+    environment rather than of this module: in a sanitized launchd environment `PATH` is
+    `/usr/bin:/bin:/usr/sbin:/sbin`, so the launcher resolves `python3` to macOS's system 3.9 — and
+    `plainkeep vault status` does not parse under it. Gating the migration on a verb-neutral probe
+    would have replaced F1 with a stricter version of F1.
+
+    Returns the routing facts for the receipt."""
+    if not vaultreg.same_path(str(program), str(launcher)):
+        raise VaultError(
+            f"the regenerated schedule {plist_name} does not name THE INSTALLED LAUNCHER — it names "
+            f"{program} — nothing has been removed", code=output.EXIT_DENY,
+            hint=f"a schedule must run {launcher}, the `current` name that survives the next engine "
+                 "activation. Re-render the schedules (`plainkeep job apply`) and delete any plist "
+                 "that is not this vault's")
+    home = penv.get("PLAINKEEP_HOME")
+    if not home:
+        raise VaultError(
+            f"the regenerated schedule {plist_name} bakes NO PLAINKEEP_HOME — nothing has been "
+            "removed", code=output.EXIT_DENY,
+            hint="a launchd agent wakes with almost no environment and `cwd=/`, so a schedule that "
+                 "does not name its vault absolutely is relying on a discovery that cannot succeed")
+    if not vaultreg.same_path(str(home), str(vault)):
+        raise VaultError(
+            f"the regenerated schedule {plist_name} runs the right program against the WRONG VAULT: "
+            f"it bakes PLAINKEEP_HOME={home}, not {vault} — nothing has been removed",
+            code=output.EXIT_DENY,
+            hint="re-render the schedules from this vault (`plainkeep job apply`) and delete any "
+                 "plist that belongs to another one")
+    if not (os.path.isfile(program) and os.access(program, os.X_OK)):
+        raise VaultError(
+            f"the regenerated schedule {plist_name} names a program that COULD NOT BE RUN: {program} "
+            "is missing or not executable — nothing has been removed", code=output.EXIT_DENY)
+    return {"routed": True, "program": str(program), "home": str(home)}
+
+
 def regenerate_schedules(vault: Path, launcher: Path, engine: Path) -> dict:
-    """Re-render every plist, then RUN each one's exact ProgramArguments in a sanitized environment.
+    """Re-render every plist, prove each one ROUTES, and exercise each one's own argv.
 
-    `--dry-run` is appended to the rendered argv, and the reason is not timidity: the point of the
-    exercise is that the program is FOUND and the vault is SELECTED, which is the whole of the 2am
-    failure — while actually running a user's `consolidate` in the middle of a migration would write
-    into the vault at a moment the migration is about to hash it. The write is not skipped so much as
-    moved: the capture canary above is the real write, at a boundary that declares its footprint.
+    Two questions per plist, and keeping them apart is the whole of F1 (see `_routing_probe`):
 
-    If a verb ever stopped honouring `--dry-run` the manifest comparison would catch it, because the
-    hashes are taken AFTER this step and must be identical across the removal."""
+      * **Does it route?** REFUSED on a program that is not the installed launcher, on a missing or
+        absent `PLAINKEEP_HOME`, on one naming another vault, and on a launcher that is not there or
+        not executable. This is the gate.
+      * **Does its own argv run?** The rendered `ProgramArguments` are still executed with
+        `--dry-run` appended in a sanitized launchd environment, because that is the only thing here
+        that exercises the ARTEFACT AS WRITTEN. Its exit code is RECORDED, not gated on: it is the
+        verb's verdict about the vault, and this module is not entitled to an opinion about it. What
+        IS still refused is a failure to EXEC (126/127, `OSError`) or a death by signal — neither of
+        which any verb can mean as a verdict.
+
+    `--dry-run` is appended for the same reason it always was: actually running a user's
+    `consolidate` in the middle of a migration would write into the vault at the moment the migration
+    is about to hash it. If a verb ever stopped honouring it the manifest comparison would catch it,
+    because the hashes are taken AFTER this step and must be identical across the removal.
+
+    THE HONEST LIMIT: a verb that CRASHES with exit 1 is indistinguishable here from a verb that
+    reports bad news with exit 1, and this step no longer guesses. What stands behind it is
+    `prove()`, which dispatched four real verbs through this same launcher against this same vault
+    two steps earlier and refused if any of them failed."""
     out_dir = vault / "jobs" / "launchd"
     modes = dispatcher_modes(engine)
     r = _run_probe(launcher, vault, ["job", "apply"], modes[0])
     if r.returncode != 0:
         raise VaultError("regenerating the schedules failed — nothing has been removed:\n"
-                         + (r.stderr.strip() or r.stdout.strip())[:1200], code=output.EXIT_DENY)
+                         + _clip(r.stderr or r.stdout), code=output.EXIT_DENY)
     rendered, exercised, stale = [], [], []
     for plist in sorted(out_dir.glob("*.plist")) if out_dir.is_dir() else []:
         with open(plist, "rb") as fh:
@@ -671,16 +881,13 @@ def regenerate_schedules(vault: Path, launcher: Path, engine: Path) -> dict:
         if vaultreg.path_within(vaultreg.canonical(str(program)), vaultreg.canonical(str(vault))):
             stale.append(f"{plist.name} -> {program}")
             continue
-        rr = subprocess.run([*args, "--dry-run"], env=_sanitized_env(penv), cwd="/",
-                            capture_output=True, text=True, timeout=300)
-        exercised.append({"plist": plist.name, "rc": rr.returncode,
-                          "program": str(program), "home": penv.get("PLAINKEEP_HOME")})
-        if rr.returncode != 0:
-            raise VaultError(
-                f"the regenerated schedule {plist.name} does not run in a sanitized launchd "
-                f"environment (exit {rr.returncode}) — nothing has been removed:\n"
-                + (rr.stderr.strip() or rr.stdout.strip() or "(no output)")[:1200],
-                code=output.EXIT_DENY)
+        routing = _routing_probe(vault, plist.name, program, penv, launcher)
+        rr = _sanitized_run([*args, "--dry-run"], penv, plist.name)
+        # `nonzero`, not `verdict`. It was `verdict`, which read as "this schedule is fine" while
+        # meaning `rc != 0` — a field name that inverts its own sense in the one record an operator
+        # reads to find out what happened.
+        exercised.append({"plist": plist.name, "rc": rr.returncode, "nonzero": rr.returncode != 0,
+                          **routing})
     if stale:
         raise VaultError("regenerated schedules still point INSIDE the vault:\n  " + "\n  ".join(stale),
                          code=output.EXIT_DENY,
@@ -812,6 +1019,95 @@ def _refuse_unrepresentable(paths_: list[str]) -> None:
                          "index-info deletion form", code=output.EXIT_DENY)
 
 
+def _would_prune_dirs(vault: Path, removed: list[str]) -> list[str]:
+    """Which directories `_prune_empty_dirs` WOULD remove, predicted without removing anything.
+
+    Read-only, and deliberately the same shape as the real prune: the ANCESTOR CLOSURE of the
+    deletions, deepest-first, a directory counting as emptied when every entry it currently holds is
+    either a deletion or a directory this walk has already emptied. Deepest-first is what makes the
+    second clause work — `bin/` is only empty after `bin/lib/` and `bin/verb/` have gone — and it is
+    the same ordering, for the same reason, that `_prune_empty_dirs`' docstring records paying for."""
+    gone = set(removed)
+    pruned: list[str] = []
+    cands: set[str] = set()
+    for r in removed:
+        p = Path(r).parent
+        while str(p) != ".":
+            cands.add(str(p))
+            p = p.parent
+    for d in sorted(cands, key=lambda d: -d.count("/")):
+        p = vault / d
+        if p.is_symlink() or not p.is_dir():
+            continue
+        try:
+            entries = {f"{d}/{e}" for e in os.listdir(p)}
+        except OSError:
+            continue
+        if entries <= gone:
+            gone.add(d)
+            pruned.append(d)
+    return sorted(pruned)
+
+
+def _refuse_dangling_symlinks(vault: Path, removed: list[str]) -> list[str]:
+    """REFUSE, BEFORE ANYTHING IS REMOVED, a protected symlink the migration would break.
+
+    The real vault carries two committed, protected, user-owned symlinks — `.claude/skills` and
+    `.codex/skills`, both `-> ../skills` — into a `skills/` whose only entry is the allowlisted
+    `skills/operate-plainkeep`. The removal empties it, the prune takes the directory, and both links
+    dangle. Nothing in the allowlist logic accounted for protected paths that point INTO removed
+    ones, so the only thing that noticed was the protected-hash comparison, which runs AFTER `_apply`
+    — 109 paths gone, the migration commit made — and which described the outcome as
+    `added: ['.claude/skills', '.codex/skills']`: the manifest artefact of F2(a), not the cause and
+    not the fix.
+
+    WHY THIS REFUSES RATHER THAN REPAIRS. Those links are the operator's. They are committed, they
+    are protected content, and a migration that silently repointed one would be doing the exact thing
+    this module's design constraint says is impossible within its action space — and would do it to a
+    file it cannot even see is wrong, since a link pointing somewhere else may be entirely deliberate.
+    So the migration stops and hands over the two end-states that ARE legitimate, both of which
+    `doctor` accepts: point the adapter at the installed engine's skills tree (which is where
+    `operate-plainkeep` lives once the engine is out of the vault), or drop the adapter.
+
+    Scoped to a PRISTINE run. On a resume the removal has already happened and the links may already
+    be broken; refusing there would stop the one command that finishes the job, and `rollback` is
+    what puts the target back.
+
+    Returns the empty list when nothing would break, so a caller can state that it asked."""
+    gone = set(removed) | set(_would_prune_dirs(vault, removed))
+    broken: list[str] = []
+    for rel in _protected_paths(vault):
+        link = vault / rel
+        if not link.is_symlink():
+            continue
+        target = os.readlink(link)
+        # LEXICAL resolution, not `Path.resolve()`: what git records is the target STRING, and the
+        # question is which vault path it names — not what that path happens to resolve to right now,
+        # which is the thing about to change. Built from `vault`, which `preflight` has already
+        # canonicalised, so `path_within`'s "both sides canonical" precondition holds by construction
+        # for the in-vault case its string comparison answers.
+        abs_target = os.path.normpath(os.path.join(os.path.dirname(str(link)), target))
+        if not vaultreg.path_within(abs_target, str(vault)) or abs_target == str(vault):
+            continue                      # outside the vault; this removal cannot reach it
+        t = os.path.relpath(abs_target, str(vault)).replace(os.sep, "/")
+        parts = t.split("/")
+        if any("/".join(parts[:i]) in gone for i in range(1, len(parts) + 1)):
+            broken.append(f"{rel} -> {target}   (resolves to {t}, which this migration removes)")
+    if broken:
+        raise VaultError(
+            f"refusing to migrate {vault}: {len(broken)} protected symlink(s) point INTO paths this "
+            "migration removes, and it would leave them DANGLING — nothing has been removed:\n  "
+            + "\n  ".join(broken[:20]),
+            code=output.EXIT_DENY,
+            hint="these links are yours — migration never rewrites protected content, so repair "
+                 "them and re-run. Either point the adapter at the installed engine, which is where "
+                 "the skill lives once the engine is out of the vault:\n"
+                 f"    ln -sfn {enginetree.current_link() / 'skills'} <vault>/<the link above>\n"
+                 "or drop the adapter (`git rm --cached <link> && rm <link>`). `plainkeep doctor` "
+                 "accepts both.")
+    return broken
+
+
 def _clean_tree_gate(vault: Path, *, op: str = "migration") -> list[str]:
     """ACCEPTANCE ITEM 2's clean-tree requirement, scoped to what a migration can actually harm.
 
@@ -920,6 +1216,22 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
         doc.update({"would_remove": [], "protected_files": None, "candidate_tree": None,
                     "verdict": "already migrated — nothing to remove"})
         return doc
+    if st == "pristine" or engine_source is not None:
+        # THE NARROWING IS ABOUT THE DEFAULTED SOURCE, NOT ABOUT THE STATE. A `resume` vault is
+        # mid-removal, so its own copy — which is what `engine_source` DEFAULTS to — may already be
+        # missing `bin/lib/migrate.py` through nothing but the interruption. Refusing on that would
+        # make a half-pruned vault permanently unfinishable: "a gate that a correct partial run
+        # cannot get past is not a safety property, it is a trap" (`_clean_tree_gate`, which paid for
+        # the same lesson). An EXPLICITLY supplied source cannot create that trap — dropping the flag
+        # is always available — so it is checked in every state.
+        #
+        # This condition used to be `st == "pristine"` alone, justified by the claim that a resume
+        # could not be describing a real hazard because `provision()` would reuse the already-active
+        # pair rather than install from this source. Review r1 measured that false: reuse is keyed on
+        # the VERSION STRING — the exact collision this check exists to stop trusting — so a resume
+        # vault plus `--engine-source <tree with a different VERSION and no migrate.py>` installed
+        # and ACTIVATED it at exit 0. The claim is gone rather than reworded.
+        _check_engine_source(src, defaulted=engine_source is None)
 
     if st == "pristine":
         doc["dirty_but_harmless"] = _clean_tree_gate(vault)
@@ -948,7 +1260,9 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
         if st == "pristine":
             tree, expected = build_candidate(vault, scratch)
             verify_candidate(vault, doc["head"], tree, expected)
-            doc.update({"candidate_tree": tree, "would_remove": expected})
+            doc.update({"candidate_tree": tree, "would_remove": expected,
+                        "would_prune_dirs": _would_prune_dirs(vault, expected)})
+            _refuse_dangling_symlinks(vault, expected)
         else:
             doc.update({"candidate_tree": None, "would_remove": [],
                         "would_prune_worktree": _worktree_residue(vault)})
@@ -1218,6 +1532,10 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
         if pre["state"] == "pristine":
             _clean_tree_gate(vault)
             _divergence(vault, _engine_ref(vault))
+            # RE-DERIVED, like the two above and for the same reason: `pre` is a keyword argument on
+            # a public function and is not allowed to be a `--force`. The removal set is read from
+            # git here rather than out of `pre["would_remove"]`, so a hand-built doc cannot shrink it.
+            _refuse_dangling_symlinks(vault, _tracked_under_allowlist(vault))
         before_commit = _before_commit(vault, pre)
         _kill_hook("preflight-done")
 
@@ -1286,13 +1604,29 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
                "protected_files": before["count"], "canary_writes": proof["wrote"],
                "resumed": pre["state"] == "resume",
                "migrated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
-        write_receipt(doc)
+        rec_path = write_receipt(doc)
         _kill_hook("receipt")
 
         # PROVE AGAIN, after the removal. The first proof said the installed pair can operate this
         # vault; this one says it still can with the vault's own copy gone — which is the sentence an
         # operator actually cares about and is not implied by the first.
-        doc["proof_after"] = prove(vault, vault_id, launcher, engine)
+        #
+        # AND IF IT FAILS, THE REFUSAL DESCRIBES THE VAULT AS IT NOW IS. Everything above this line
+        # has happened: the paths are gone, the commit is made, the receipt on disk says `complete`.
+        # A failure here is a failure of the re-proof, not of the migration, and the pre-removal
+        # text — "nothing was removed", "the vault still carries its own engine copy" — is false in
+        # both halves at this point. Re-running is not the recovery either: `state()` answers
+        # `migrated`, so a re-run is a no-op that cannot change anything the operator needs changed.
+        doc["proof_after"] = prove(
+            vault, vault_id, launcher, engine,
+            done={"summary": (f"the migration of {vault} COMPLETED — {len(doc['removed'])} engine "
+                              f"path(s) removed in commit {str(doc['after_commit'])[:12]}, receipt "
+                              f"at {rec_path}"),
+                  "hint": ("this vault IS migrated and its receipt is complete, so there is nothing "
+                           "left to remove and starting the migration again cannot change that. Fix "
+                           "the failure above and re-check with `plainkeep doctor`. To put this "
+                           "vault's engine copy back instead:\n"
+                           f"    python3 {Path(__file__).resolve()} --rollback {vault} --yes")})
         # Every note this migration wrote, in one field. The post-removal proof performs the same
         # guardrail-gated capture the pre-removal one does, and a `canary_writes` that listed only
         # the first half would under-report the migration's own footprint in the receipt an operator
@@ -1602,7 +1936,18 @@ def _render_migrate(d: dict) -> None:
           + (f", previous {d['engine']['previous']} retained" if d["engine"]["previous"] else ""))
     print(f"  removed       {len(d['removed'])} engine path(s) in commit {str(d['after_commit'])[:12]}")
     print(f"  protected     {d['protected_files']} file(s), byte-identical across the removal")
-    print(f"  schedules     {len(d['schedules']['rendered'])} plist(s) regenerated and exercised")
+    # THE NON-ZERO EXERCISES ARE SAID OUT LOUD. `regenerate_schedules` deliberately stopped gating on
+    # a job verb's exit code (F1: the code is a verdict about the vault and the exit space cannot
+    # separate one from a failure) — but not gating on it is not a reason to stop REPORTING it. A
+    # schedule naming a verb that does not exist exits 4, is correctly not refused, and used to leave
+    # the operator reading "2 plist(s) regenerated and exercised" with nothing to act on. The signal
+    # belongs here; the blocker does not come back.
+    sched = d["schedules"]
+    hot = [e for e in sched.get("exercised") or [] if e.get("nonzero")]
+    print(f"  schedules     {len(sched['rendered'])} plist(s) regenerated and exercised"
+          + (f", {len(hot)} exited NON-ZERO — recorded, not gated: "
+             + ", ".join(f"{e['plist']} rc {e['rc']}" for e in hot[:3])
+             + (f" and {len(hot) - 3} more" if len(hot) > 3 else "") if hot else ""))
     r = d["launcher_route"]
     print(f"  launcher      {r['path']} -> "
           + (f"{r.get('new_target')} (repointed from {r.get('old_target')})" if r.get("repointed")
@@ -1663,6 +2008,7 @@ def main(argv: list[str]) -> int:
                 # active rather than to invent a source and fail inside `read_version`.
                 src = _flag(opts, "--engine-source")
                 if src:
+                    _check_engine_source(Path(src), defaulted=False)
                     prov = provision(Path(src))
                 else:
                     act = enginetree.active_engine()
@@ -1674,8 +2020,21 @@ def main(argv: list[str]) -> int:
                                  f"    python3 {enginetree.__file__} --install <source-checkout>")
                     prov = {"version": act.name, "previous": None, "reused": True, "path": str(act)}
                 engine = enginetree.versions_dir() / prov["version"]
+                # The same truth requirement as the post-removal re-proof, on the other path that
+                # reached prove-before-remove's sentence with it false: this vault was migrated,
+                # possibly minutes ago, and telling its owner that "nothing was removed" and that it
+                # "still carries its own engine copy" is the class of message this module's own
+                # design notes forbid.
                 proof = prove(Path(pre["vault"]), pre["vault_id"],
-                              enginetree.current_link() / "plainkeep", engine, write=False)
+                              enginetree.current_link() / "plainkeep", engine, write=False,
+                              done={"summary": f"{pre['vault']} is already migrated — this run is "
+                                               "the second-run no-op, which RE-PROVES that the "
+                                               "installed engine still operates the vault",
+                                    "hint": ("nothing is left to remove, so this is a failed health "
+                                             "check and not a failed migration. Fix the failure "
+                                             "above and re-check with `plainkeep doctor`; the "
+                                             "vault's engine copy can be restored with "
+                                             "`--rollback` while its receipt exists.")})
                 # A kill at `worktree-pruned` reaches this branch with a PROVISIONAL receipt: the
                 # vault is fully migrated but the run that did it never finished. Complete the
                 # record here or the operator has a migrated vault and no rollback at all.

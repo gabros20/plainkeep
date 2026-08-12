@@ -97,6 +97,18 @@ def sha_tree(root: Path, *, skip=(".git",)) -> dict[str, str]:
         rel_dir = os.path.relpath(dp, root)
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
         dn[:] = sorted(d for d in dn if not (f"{rel_dir}/{d}" if rel_dir else d).startswith(skip))
+        # A SYMLINK TO A DIRECTORY IS ENUMERATED IN `dn`, NOT IN `fn`, and this walker used to hash
+        # only `fn` — so it shared the exact blindness F2 found in `migrate.protected_manifest`: an
+        # intact `.claude/skills -> ../skills` was invisible, and the same path became visible the
+        # moment its target stopped resolving. An oracle with the same hole as the thing it is
+        # auditing cannot audit it, so dir-symlinks are recorded here by target and not descended.
+        for d in list(dn):
+            rel = f"{rel_dir}/{d}" if rel_dir else d
+            p = Path(dp) / d
+            if p.is_symlink():
+                dn.remove(d)
+                if not rel.startswith(skip):
+                    out[rel] = "symlink:" + os.readlink(p)
         for f in sorted(fn):
             rel = f"{rel_dir}/{f}" if rel_dir else f
             if rel.startswith(skip):
@@ -2248,6 +2260,477 @@ def case_suite_is_environment_independent(_tmp: Path) -> None:
 
 
 # ==================================================================================================
+# J. The clone-canary blockers (F1/F2/F3) — real-vault shapes no fixture modelled
+#
+# Every cell below was demonstrated RED at 3f69024 (Phase 2 complete) before the fix that makes it
+# green; `.orchestrate/task-p2-6b-report.md` records the measured red output per cell. They are here
+# rather than in the sections above because they are one wave and each is a shape the canary found on
+# `gabros20/ops` that `phase1_vault` had no reason to produce.
+# ==================================================================================================
+_PROBE_SRC = '''\
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location("pkmigrate", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(json.dumps(mod.protected_manifest(pathlib.Path(sys.argv[2]))))
+'''
+
+
+def product_manifest(tmp: Path, vault: Path) -> dict[str, str]:
+    """`migrate.protected_manifest(vault)["files"]`, taken IN A SUBPROCESS.
+
+    Every other cell in this file drives the module's real CLI, per ADR-019 D1, and the behavioural
+    half of F2 is `case_migration_refuses_to_dangle_a_protected_symlink` below. What cannot be asked
+    of the CLI is whether `protected_manifest()` gives an INTACT dir-symlink and a DANGLING one the
+    same entry — the product only ever compares two manifests it took itself, so a manifest blind in
+    both directions agrees with itself and reports nothing at all. That has to be read off the
+    function.
+
+    A subprocess rather than an import because `migrate.py` puts `bin/` on `sys.path` and imports
+    `lib.enginetree`, while this suite already owns the name `lib` (it is `test/lib`). One `lib` per
+    interpreter; two interpreters, no shadowing."""
+    script = tmp / "manifest_probe.py"
+    script.write_text(_PROBE_SRC, encoding="utf-8")
+    r = subprocess.run([PY, str(script), str(MIGRATE), str(vault)], capture_output=True, text=True,
+                       env=vm._clean_env(PLAINKEEP_ENGINE_HOME=tmp / "no-root",
+                                         PLAINKEEP_CONFIG_HOME=tmp / "no-cfg"))
+    if r.returncode != 0:
+        raise RuntimeError(f"manifest probe failed:\n{r.stderr[-800:]}")
+    return json.loads(r.stdout)["files"]
+
+
+def case_a_health_signal_verb_does_not_block_the_migration(tmp: Path) -> None:
+    """F1. A job whose verb's EXIT CODE IS A VERDICT must not make the migration unrunnable.
+
+    The real vault schedules `backup_check` -> `plainkeep backup`, which exits 1 whenever the tree is
+    dirty or unpushed. `prove()`'s own canary `capture` guarantees a dirty tree before the schedules
+    are exercised, so a check that demanded rc 0 refused every migration of that vault forever and
+    each retry made the condition it failed on worse. It does not converge, structurally.
+
+    What the step exists to prove is ROUTING — that the rendered plist runs the INSTALLED launcher
+    and selects the right vault in a sanitized launchd environment — and routing is now asked
+    directly instead of being inferred from a verb's opinion of the vault."""
+    fx = vm.phase1_vault(tmp, "health")
+    v, root = fx["vault"], fx["root"]
+    vm.add_health_signal_job(v)
+
+    # The fixture's premise, measured rather than assumed: the verb really does exit non-zero, and it
+    # does so while reaching THIS vault.
+    nag = vm.dispatch(fx["launcher"], v, root, fx["cfg"], "backup")
+    check("F1: fixture — the scheduled verb exits non-zero as a HEALTH VERDICT",
+          nag.returncode != 0, f"rc={nag.returncode} {(nag.stdout + nag.stderr)[:200]}")
+
+    # Driven WITHOUT `--json`, because the operator-facing summary is half of what this cell is now
+    # about; the receipt is read back afterwards through the product's own `--print receipt`.
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("F1: the migration COMPLETES with a health-signal job scheduled",
+          r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:700]}")
+    if r.returncode != EXIT_OK:
+        return
+    rp = mig(fx, "--print", "receipt", str(v))
+    doc = json.loads(rp.stdout) if rp.returncode == EXIT_OK else {}
+
+    # The migration does not gate on the verb's exit code — and it does not go quiet about it either.
+    check("F1: the summary SAYS a schedule exited non-zero, rather than only the receipt knowing",
+          "NON-ZERO" in r.stdout and "backup_check" in r.stdout and "not gated" in r.stdout,
+          [ln for ln in r.stdout.splitlines() if "schedules" in ln])
+
+    ex = (doc.get("schedules") or {}).get("exercised") or []
+    bc = next((e for e in ex if "backup_check" in str(e.get("plist"))), None)
+    check("F1: the health-signal schedule was exercised, not skipped", bc is not None, str(ex))
+    if bc is None:
+        return
+    check("F1: ...its ROUTING was proved — the installed launcher, against THIS vault",
+          bc.get("routed") is True
+          and bc.get("program") == str(root / "engine" / "current" / "plainkeep")
+          and os.path.realpath(str(bc.get("home"))) == os.path.realpath(v), str(bc))
+    check("F1: ...and the verb's own non-zero exit is RECORDED as a verdict, not a refusal",
+          bc.get("rc") not in (None, 0) and bc.get("nonzero") is True, str(bc))
+    check("F1: ...under a field name that means what it says",
+          "verdict" not in bc and (fc := next((e for e in ex if e.get("rc") == 0), None)) is not None
+          and fc.get("nonzero") is False, str(ex))
+    check("F1: every schedule was routing-proved", bool(ex)
+          and all(e.get("routed") is True for e in ex), str(ex))
+
+    # And it CONVERGES: the second run is still a no-op rather than a fresh refusal.
+    r2 = mig(fx, "--migrate", str(v), "--yes")
+    check("F1: the second run of a health-signal vault is still a no-op", r2.returncode == EXIT_OK,
+          f"rc={r2.returncode} {r2.stderr[:400]}")
+
+
+def case_a_broken_schedule_still_refuses(tmp: Path) -> None:
+    """F1's other half. Loosening the exit-code gate must not loosen the ROUTING gate.
+
+    Three genuinely broken schedules, each refused BEFORE anything is removed: a program that is not
+    there, a plist that selects a DIFFERENT vault, and a program that is not executable. The second
+    one is why this fixture builds a second vault — pointing a plist at a non-vault directory would
+    test a crash, not a misroute."""
+    fx = vm.phase1_vault(tmp, "broken")
+    v = fx["vault"]
+    other = vm.second_vault(fx)
+    plist_dir = v / "jobs" / "launchd"
+
+    def refuses(label: str, plist: Path, must_say: tuple[str, ...]) -> None:
+        r = mig(fx, "--migrate", str(v), "--yes")
+        check(f"F1: {label} — the migration REFUSES", r.returncode == EXIT_DENY,
+              f"rc={r.returncode} {r.stderr[:400]}")
+        check(f"F1: {label} — ...naming what is wrong",
+              all(s in r.stderr for s in must_say), r.stderr[:400])
+        check(f"F1: {label} — ...with NOTHING removed",
+              (v / "bin").is_dir() and (v / "VERSION").is_file())
+        plist.unlink(missing_ok=True)
+
+    p = vm.plant_plist(v, "zz-gone", tmp / "no-such-dir" / "plainkeep", v)
+    refuses("a program that is not there", p, ("zz-gone", "INSTALLED LAUNCHER"))
+
+    p = vm.plant_plist(v, "zz-misrouted", fx["launcher"], other["vault"])
+    refuses("a plist that selects a DIFFERENT vault", p,
+            ("zz-misrouted", "WRONG VAULT", str(other["vault"])))
+
+    p = vm.plant_plist(v, "zz-nohome", fx["launcher"], v)
+    import plistlib
+    with open(p, "rb") as fh:
+        d = plistlib.load(fh)
+    d["EnvironmentVariables"] = {}
+    with open(p, "wb") as fh:
+        plistlib.dump(d, fh)
+    refuses("a plist that bakes no vault at all", p, ("zz-nohome", "NO PLAINKEEP_HOME"))
+
+    # The launcher is the right name but the file behind it cannot be executed — the 2am ENOENT in
+    # the one shape the "is it the installed launcher" check cannot see.
+    fake_root = fx["base"] / "fake-engine" / "engine" / "current"
+    fake_root.mkdir(parents=True, exist_ok=True)
+    (fake_root / "plainkeep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (fake_root / "plainkeep").chmod(0o644)
+    p = vm.plant_plist(v, "zz-notexec", fake_root / "plainkeep", v)
+    refuses("a launcher that is not executable", p, ("zz-notexec", "INSTALLED LAUNCHER"))
+
+    check("F1: after three refusals the vault is still fully pristine",
+          not list(plist_dir.glob("*zz-*")) and (v / "script").is_dir())
+
+
+def case_protected_manifest_covers_symlinks_to_directories(tmp: Path) -> None:
+    """F2(a). A symlink must be hashed BY TARGET whether or not that target resolves.
+
+    `os.walk(followlinks=False)` enumerates an INTACT symlink-to-a-directory in `dirnames` and a
+    DANGLING one in `filenames`. A manifest that hashes only `filenames` therefore lets the same path
+    enter and leave it based purely on whether its target currently resolves — which is both a hole
+    (the link is protected content that is never hashed while it works) and a false alarm (it appears
+    as `added` the moment a migration breaks it, and as `removed` the moment a rollback repairs it).
+
+    RED at 3f69024: `.claude/skills` absent from the intact manifest, present in the dangling one."""
+    fx = vm.phase1_vault(tmp, "manifest")
+    v = fx["vault"]
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")
+
+    intact = product_manifest(tmp, v)
+    check("F2: an INTACT symlink-to-a-directory is in the protected manifest",
+          ".claude/skills" in intact, f"{len(intact)} files, link absent")
+    check("F2: ...recorded by TARGET, never by content",
+          str(intact.get(".claude/skills", "")).startswith("symlink:"),
+          str(intact.get(".claude/skills")))
+
+    # Break it exactly the way a migration does, and ask the same question again.
+    shutil.rmtree(v / "skills")
+    dangling = product_manifest(tmp, v)
+    check("F2: a DANGLING symlink is still in the manifest", ".claude/skills" in dangling)
+    check("F2: ...with the SAME entry — a broken target is not a content change",
+          dangling.get(".claude/skills") == intact.get(".claude/skills"),
+          f"{intact.get('.claude/skills')} -> {dangling.get('.claude/skills')}")
+    # The set math `manifest_diff` does, done here so the oracle is not the thing under test.
+    appeared = sorted(set(dangling) - set(intact))
+    vanished = sorted(set(intact) - set(dangling))
+    check("F2: breaking the target produces NO added/removed manifest artefact",
+          ".claude/skills" not in appeared and ".claude/skills" not in vanished,
+          f"appeared={appeared[:4]} vanished={vanished[:4]}")
+    check("F2: ...which is the mirror image rollback tripped on, in the other direction too",
+          ".claude/skills" not in sorted(set(intact) - set(dangling)),
+          f"vanished={vanished[:4]}")
+
+
+def case_migration_refuses_to_dangle_a_protected_symlink(tmp: Path) -> None:
+    """F2(b). A protected symlink whose target would not survive the removal is a PREFLIGHT refusal.
+
+    The real vault's `.claude/skills -> ../skills` and `.codex/skills -> ../skills` point into a
+    `skills/` whose only entry (`skills/operate-plainkeep`) is allowlisted; the removal empties it and
+    `_prune_empty_dirs` takes the directory, so both committed, protected, user-owned symlinks dangle.
+    At 3f69024 that was caught only AFTER `_apply` — 109 paths gone, migration commit made — and
+    reported as `added: ['.claude/skills', '.codex/skills']`, which names neither the cause nor the
+    fix.
+
+    A control symlink into a SURVIVING tree is in the same fixture, because a refusal that fired on
+    every dir-symlink would be indistinguishable from this one on the evidence of a refusal alone."""
+    fx = vm.phase1_vault(tmp, "dangle")
+    v, root = fx["vault"], fx["root"]
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")     # -> pruned away
+    vm.add_committed_dir_symlink(v, ".codex/notes", "../wiki")         # -> survives (the control)
+    head = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+
+    r, pre = mig_json(fx, "--preflight", str(v))
+    check("F2: PREFLIGHT refuses — before anything is provisioned or removed",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stderr[:400]}")
+    check("F2: ...naming the symlink AND the target it would lose",
+          ".claude/skills" in r.stderr and "skills" in r.stderr, r.stderr[:400])
+    check("F2: ...and NOT naming the symlink whose target survives",
+          ".codex/notes" not in r.stderr, r.stderr[:400])
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("F2: the migration refuses too", r.returncode == EXIT_DENY,
+          f"rc={r.returncode} {r.stderr[:400]}")
+    check("F2: NOTHING was removed — the refusal is before `_apply`, not after it",
+          (v / "bin").is_dir() and (v / "script").is_dir() and (v / "VERSION").is_file()
+          and (v / "skills" / "operate-plainkeep").is_dir())
+    check("F2: ...HEAD never moved", vm.git(v, "rev-parse", "HEAD").stdout.strip() == head)
+    check("F2: ...and no receipt was written",
+          not (root / "migrations" / f"{fx['vault_id']}.json").exists())
+    check("F2: both adapter symlinks still resolve",
+          (v / ".claude" / "skills" / "operate-plainkeep").is_dir()
+          and (v / ".codex" / "notes").is_dir())
+
+    # Rollback has nothing to undo, and says so — rather than the rc 5 the mirror-image manifest
+    # artefact produced at 3f69024 AFTER a correct restore.
+    r = mig(fx, "--rollback", str(v), "--yes")
+    check("F2: rollback reports NO RECEIPT rather than failing over a manifest artefact",
+          r.returncode == EXIT_NOT_FOUND, f"rc={r.returncode} {r.stderr[:300]}")
+
+
+def case_a_repointed_adapter_migrates_and_survives(tmp: Path) -> None:
+    """F2's END STATE, and the one the refusal's hint names. The operator owns those links.
+
+    Un-dangling them silently is not on the table — a migration that rewrote a committed, protected,
+    user-owned symlink would be doing the one thing this module promises it cannot. So the refusal
+    hands over two legitimate repairs and this cell drives the first of them end to end: point the
+    adapter at the installed engine's `skills/`, which is where `operate-plainkeep` lives after
+    Phase 2 Task 2 anyway. `doctor` must then be GREEN on the migrated vault (F3(i))."""
+    fx = vm.phase1_vault(tmp, "repointed")
+    v, root, cfg = fx["vault"], fx["root"], fx["cfg"]
+    engine_skills = root / "engine" / "current" / "skills"
+    vm.add_committed_dir_symlink(v, ".claude/skills", os.path.relpath(engine_skills, v / ".claude"))
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("F2: a vault whose adapter points at the ENGINE migrates cleanly",
+          r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:700]}")
+    if r.returncode != EXIT_OK:
+        return
+    check("F2: ...the adapter still resolves after the removal",
+          (v / ".claude" / "skills" / "operate-plainkeep" / "SKILL.md").is_file())
+
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor EXITS 0 on the migrated vault", d.returncode == EXIT_OK,
+          f"rc={d.returncode} " + "\n".join(ln for ln in (d.stdout + d.stderr).splitlines()
+                                            if "FAIL" in ln)[:400])
+    check("F3: ...and reports no failing adapter check",
+          "BROKEN" not in d.stdout and "does not provide" not in d.stdout,
+          "\n".join(ln for ln in d.stdout.splitlines() if "FAIL" in ln)[:400])
+
+
+def case_doctor_is_still_strict_on_a_vault_that_never_migrated(tmp: Path) -> None:
+    """F3(i)'s other direction. Relaxing the adapter check must not make it vacuous.
+
+    The rule is unchanged in substance and only generalised in WHERE the skill may come from: an
+    adapter symlink must resolve to a directory that PROVIDES `operate-plainkeep`. A Phase 1 vault
+    satisfies it through its own `skills/`; a migrated one through the engine's. A symlink that
+    provides neither is broken in both worlds and still FAILS."""
+    fx = vm.phase1_vault(tmp, "strict")
+    v, root, cfg = fx["vault"], fx["root"], fx["cfg"]
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")
+
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor is GREEN on a pre-migration vault whose adapter resolves",
+          d.returncode == EXIT_OK, f"rc={d.returncode} "
+          + "\n".join(ln for ln in d.stdout.splitlines() if "FAIL" in ln)[:300])
+
+    # The same adapter, pointed at a directory that does not provide the skill.
+    (v / "empty-skills").mkdir()
+    (v / ".claude" / "skills").unlink()
+    (v / ".claude" / "skills").symlink_to("../empty-skills")
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor FAILS on an adapter that resolves but provides no skill",
+          d.returncode != EXIT_OK, f"rc={d.returncode}")
+
+    (v / ".claude" / "skills").unlink()
+    (v / ".claude" / "skills").symlink_to("../nowhere-at-all")
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor FAILS on a BROKEN adapter symlink", d.returncode != EXIT_OK,
+          f"rc={d.returncode}")
+
+
+def case_the_post_removal_reproof_tells_the_truth(tmp: Path) -> None:
+    """F3(ii)+(iii). When the post-removal re-proof fails, the refusal must state the TRUE state.
+
+    The fixture is the canary's variant 3: a committed `.claude/skills -> ../skills` plus a
+    `skills/.gitkeep`, so the target directory SURVIVES the removal (F2's preflight refusal correctly
+    does not fire) while no longer providing the skill. The migration therefore completes — receipt
+    `complete`, `after_commit` set, engine copy gone — and its own post-removal re-proof then fails on
+    `doctor`. That is the exact state at which 3f69024 printed `prove-before-remove FAILED … nothing
+    was removed` and `the vault … still carries its own engine copy`: both false, both the class of
+    sentence this module's own design notes forbid.
+
+    (iii) is the same failure one layer down: the probe output was clipped to its first 1200
+    characters and `doctor` prints its fails LAST, so an operator saw sixteen `ok` lines and not one
+    failing line."""
+    fx = vm.phase1_vault(tmp, "reproof")
+    v, root = fx["vault"], fx["root"]
+    (v / "skills" / ".gitkeep").write_text("", encoding="utf-8")
+    vm.git(v, "add", "skills/.gitkeep")
+    vm.git(v, "commit", "-q", "-m", "keep skills/ alive across the migration")
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    err = r.stderr
+    check("F3: the run fails (the re-proof really did fail)", r.returncode != EXIT_OK, f"rc={r.returncode}")
+
+    rec_path = root / "migrations" / f"{fx['vault_id']}.json"
+    rec = json.loads(rec_path.read_text(encoding="utf-8")) if rec_path.is_file() else {}
+    check("F3: fixture — the migration really DID complete", rec.get("status") == "complete"
+          and bool(rec.get("after_commit")) and not (v / "bin").exists(),
+          f"status={rec.get('status')} after_commit={bool(rec.get('after_commit'))}")
+
+    check("F3: the refusal does NOT claim nothing was removed",
+          "nothing was removed" not in err, err[:500])
+    check("F3: ...nor that the vault still carries its own engine copy",
+          "still carries its own engine copy" not in err, err[:500])
+    check("F3: ...it says the removal HAPPENED and names the commit and the receipt",
+          str(rec.get("after_commit", "x"))[:12] in err and str(rec_path) in err
+          and str(len(rec.get("removed") or [])) in err, err[:800])
+    check("F3: ...and points at the recovery that is actually available",
+          "--rollback" in err and "re-run the migration" not in err, err[:800])
+    check("F3: the FAILING probe lines survive the clip — the operator sees the failure",
+          "FAIL" in err and ".claude/skills" in err,
+          f"{len(err)} chars, no failing line: " + err[-500:])
+
+
+def case_a_reproof_on_a_migrated_vault_tells_the_truth(tmp: Path) -> None:
+    """F3(ii) on the OTHER path that used the same false sentence: the second run.
+
+    `--migrate --yes` on an already-migrated vault re-proves without writing (acceptance item 12).
+    When that proof fails, the same `prove-before-remove FAILED … nothing was removed … still carries
+    its own engine copy` came out of a vault that had been migrated minutes earlier."""
+    fx = vm.phase1_vault(tmp, "reproof2")
+    v = fx["vault"]
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("F3: fixture — the vault migrated cleanly first", r.returncode == EXIT_OK, r.stderr[:400])
+    if r.returncode != EXIT_OK:
+        return
+
+    # Break something `doctor` fails on, AFTER the migration, so the re-proof has a real failure.
+    (v / ".claude").mkdir(parents=True, exist_ok=True)
+    (v / ".claude" / "skills").symlink_to("../nowhere-at-all")
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    err = r.stderr
+    check("F3: the re-run reports the failure", r.returncode != EXIT_OK, f"rc={r.returncode}")
+    check("F3: the second-run refusal does not claim nothing was removed",
+          "nothing was removed" not in err, err[:500])
+    check("F3: ...nor that a migrated vault still carries its own engine copy",
+          "still carries its own engine copy" not in err, err[:500])
+    check("F3: ...it says the vault IS migrated", "already migrated" in err or "is migrated" in err,
+          err[:500])
+    check("F3: ...and the failing probe line is visible",
+          "FAIL" in err and ".claude/skills" in err, err[-500:])
+
+
+def case_a_pre_phase2_engine_source_refuses(tmp: Path) -> None:
+    """The live-run hazard the canary named: `engine_source` defaults to the VAULT.
+
+    On the canary machine `provision()` found `4.0.0-dev` already installed and REUSED it, so the
+    vault's pre-Phase-2 copy was never installed as the engine. That is the right outcome reached by
+    a version-string collision. On a machine where that version is not already installed, the same
+    default would install the engine FROM the vault's own copy — a tree that carries no
+    `enginetree.py` and no `migrate.py`, i.e. an engine that cannot update or migrate anything.
+
+    So the source is CHECKED rather than assumed: if the tree that would be installed does not carry
+    the Phase 2 module CLIs, migration refuses and names `--engine-source`. A vault whose copy IS
+    Phase 2 (every other cell in this file) is unaffected, which is why the check is on the CONTENT
+    of the source and not on whether it happens to be the vault."""
+    fx = vm.phase1_vault(tmp, "stalesrc")
+    v = fx["vault"]
+
+    r, pre = mig_json(fx, "--preflight", str(v))
+    check("engine_source: with no flag it resolves to THE VAULT ITSELF — the hazard, measured",
+          r.returncode == EXIT_OK and os.path.realpath(pre.get("engine_source", ""))
+          == os.path.realpath(v), f"rc={r.returncode} {pre.get('engine_source')}")
+
+    # A pre-Phase-2 engine source: a real checkout with the two Phase 2 module CLIs taken out. This
+    # is the shape the vault's own copy has on a machine that has not run `script/update` since
+    # before Phase 2, and installing from it would produce an engine that can neither update nor
+    # migrate anything. It is built OUTSIDE the vault because deleting those files inside the vault
+    # is a committed engine edit, which `_divergence` refuses first and for a different reason.
+    stale = fx["base"] / "pre-phase2-checkout"
+    shutil.copytree(REPO, stale, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".venv", "test"))
+    (stale / "bin" / "lib" / "migrate.py").unlink()
+
+    r = mig(fx, "--preflight", str(v), "--engine-source", str(stale))
+    check("engine_source: a source with no Phase 2 module CLIs REFUSES",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stderr[:400]}")
+    check("engine_source: ...naming the missing module and the flag that fixes it",
+          "migrate.py" in r.stderr and "--engine-source" in r.stderr, r.stderr[:500])
+
+    r = mig(fx, "--preflight", str(v), "--engine-source", str(REPO))
+    check("engine_source: ...and an explicit, real source is accepted",
+          r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:400]}")
+
+
+def case_an_explicit_engine_source_is_checked_on_a_resume(tmp: Path) -> None:
+    """NEW-2 (review r1). The source check was scoped to a PRISTINE run, and that was reachable.
+
+    The narrowing exists for the DEFAULTED source: a `resume` vault is mid-removal, so its own copy
+    — which is what `engine_source` defaults to — may be missing `bin/lib/migrate.py` through nothing
+    but the interruption, and refusing there would make a half-pruned vault unfinishable. It was
+    justified with a second claim as well: that a resume could not be a real hazard because
+    `provision()` would reuse the already-active pair. Review r1 measured that false. Reuse is keyed
+    on the VERSION STRING — the exact collision this check exists to stop trusting — so a source with
+    a different `VERSION` and no `migrate.py` was INSTALLED AND ACTIVATED at exit 0, on the one path
+    the canary report tells the live run to use ("pass `--engine-source <repo checkout>`
+    explicitly").
+
+    An explicitly supplied source cannot create the convergence trap — dropping the flag is always
+    available — so it is checked in every state, and the last cell here pins that the defaulted
+    resume still converges."""
+    fx = vm.phase1_vault(tmp, "resumesrc")
+    v, root = fx["vault"], fx["root"]
+
+    r = mig(fx, "--migrate", str(v), "--yes", PLAINKEEP_MIGRATE_KILL_AT="tree-written")
+    check("NEW-2: fixture — the run died at `tree-written`", r.returncode in (-9, 137),
+          f"rc={r.returncode} {r.stderr[:300]}")
+    _, pre = mig_json(fx, "--preflight", str(v))
+    check("NEW-2: fixture — the vault is in `resume`", pre.get("state") == "resume",
+          str(pre.get("state")))
+
+    # A source that is a real engine tree in every respect except the one that matters, and whose
+    # VERSION does NOT collide with the installed pair — so `provision()` would install it rather
+    # than reuse anything. Only `migrate.py` is removed: with BOTH modules gone `enginetree.install`
+    # refuses on its own, which would mask this check behind another module's defence.
+    stale = fx["base"] / "no-migrate-engine"
+    shutil.copytree(REPO, stale, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".venv", "test"))
+    (stale / "bin" / "lib" / "migrate.py").unlink()
+    (stale / "VERSION").write_text("9.9.9-nomigrate\n", encoding="utf-8")
+
+    r = mig(fx, "--preflight", str(v), "--engine-source", str(stale))
+    check("NEW-2: an EXPLICIT source is checked on a resume too", r.returncode == EXIT_DENY,
+          f"rc={r.returncode} {r.stderr[:300]}")
+    check("NEW-2: ...naming the missing module and the flag",
+          "migrate.py" in r.stderr and "--engine-source" in r.stderr, r.stderr[:400])
+
+    r = mig(fx, "--migrate", str(v), "--yes", "--engine-source", str(stale))
+    check("NEW-2: ...and the migration refuses rather than installing it",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stderr[:300]}")
+    check("NEW-2: the Phase-1 engine was NEVER installed",
+          not (root / "engine" / "9.9.9-nomigrate").exists(),
+          str(sorted(p.name for p in (root / "engine").iterdir())))
+    check("NEW-2: ...and `current` still carries a migrate-capable engine",
+          (root / "engine" / "current" / "bin" / "lib" / "migrate.py").is_file())
+
+    # The convergence property the narrowing exists for, pinned: the DEFAULTED source on a resume is
+    # still not checked, so a half-pruned vault can always be finished.
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("NEW-2: the defaulted source on a resume still CONVERGES", r.returncode == EXIT_OK,
+          f"rc={r.returncode} {r.stderr[:400]}")
+
+
+# ==================================================================================================
 # Runner
 # ==================================================================================================
 CASES = (
@@ -2288,6 +2771,21 @@ CASES = (
     ("item 11: fault injection matrix", case_kill_matrix),
     ("item 11: unknown boundary refuses", case_unknown_kill_stage_refuses),
     ("environment independence", case_suite_is_environment_independent),
+    # J. the clone-canary blockers
+    ("F1: a health-signal verb does not block", case_a_health_signal_verb_does_not_block_the_migration),
+    ("F1: a broken schedule still refuses", case_a_broken_schedule_still_refuses),
+    ("F2: the manifest covers dir-symlinks", case_protected_manifest_covers_symlinks_to_directories),
+    ("F2: dangling a protected symlink refuses at preflight",
+     case_migration_refuses_to_dangle_a_protected_symlink),
+    ("F2: a repointed adapter migrates and survives", case_a_repointed_adapter_migrates_and_survives),
+    ("F3: doctor stays strict on a pre-migration vault",
+     case_doctor_is_still_strict_on_a_vault_that_never_migrated),
+    ("F3: the post-removal re-proof tells the truth", case_the_post_removal_reproof_tells_the_truth),
+    ("F3: a re-proof on a migrated vault tells the truth",
+     case_a_reproof_on_a_migrated_vault_tells_the_truth),
+    ("engine_source: a pre-phase-2 source refuses", case_a_pre_phase2_engine_source_refuses),
+    ("engine_source: an explicit source is checked on a resume too",
+     case_an_explicit_engine_source_is_checked_on_a_resume),
 )
 
 

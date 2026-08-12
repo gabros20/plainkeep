@@ -677,23 +677,130 @@ def _sanitized_env(plist_env: dict) -> dict:
 EXEC_FAILED = (126, 127)     # the shell's "found but not executable" / "not found"
 
 
+def _sanitized_run(argv: list[str], penv: dict, plist_name: str,
+                   timeout: int = 300) -> subprocess.CompletedProcess:
+    """Run `argv` exactly as launchd would, and turn an EXEC failure into a refusal.
+
+    `subprocess.run` raises `OSError` for a program that is missing or not executable, while a
+    wrapper script that fails to exec its own target reports 127/126 instead. Both mean the same
+    thing — this schedule cannot run at 2am — and both are the failure the whole step exists to
+    catch, so they are one refusal rather than an exception and a number."""
+    try:
+        r = subprocess.run(argv, env=_sanitized_env(penv), cwd="/", capture_output=True, text=True,
+                           timeout=timeout)
+    except OSError as e:
+        raise VaultError(
+            f"the regenerated schedule {plist_name} names a program that COULD NOT BE RUN: "
+            f"{argv[0]} ({e.strerror}) — nothing has been removed", code=output.EXIT_DENY,
+            hint="a launchd agent wakes with no PATH worth the name; the plist must name an "
+                 "absolute, executable launcher")
+    if r.returncode in EXEC_FAILED:
+        raise VaultError(
+            f"the regenerated schedule {plist_name} names a program that COULD NOT BE RUN: "
+            f"{argv[0]} (exit {r.returncode}) — nothing has been removed:\n"
+            + _clip(r.stderr or r.stdout), code=output.EXIT_DENY)
+    if r.returncode < 0:
+        # Killed by a signal. The one non-zero exit that no verb can mean as a verdict about the
+        # vault, so it is the one this step is still entitled to read as a broken schedule.
+        raise VaultError(
+            f"the regenerated schedule {plist_name} DIED ON SIGNAL {-r.returncode} in a sanitized "
+            "launchd environment — nothing has been removed:\n" + _clip(r.stderr or r.stdout),
+            code=output.EXIT_DENY)
+    return r
+
+
+def _routing_probe(vault: Path, plist_name: str, program: Path, penv: dict,
+                   launcher: Path) -> dict:
+    """THE GATE. Does this schedule run the INSTALLED launcher, and does it operate THIS vault?
+
+    It replaced "the rendered argv must exit 0", which conflated two unrelated things. A schedule's
+    verb reports a VERDICT ABOUT THE VAULT in its exit code — the real vault schedules
+    `backup_check` -> `plainkeep backup`, whose bare form is a commit/push nag that exits 1 whenever
+    the tree is dirty or unpushed. `prove()` runs BEFORE this step by design and its guardrail-gated
+    canary writes a note, so the tree is GUARANTEED dirty here and that job is GUARANTEED to exit 1.
+    The migration refused, every time, and each retry added another canary note: it did not converge,
+    structurally.
+
+    And the exit code cannot be rescued by classifying it, because the product's exit space does not
+    separate a verdict from a failure: `output.EXIT_UNEXPECTED` IS 1, so "restic failed" and "your
+    notes are not pushed" are the same number. Interpreting it would be guessing.
+
+    So the two questions the step exists for are asked DIRECTLY, and mostly of the ARTEFACT rather
+    than of a subprocess. A plist bakes both facts absolutely — `bin/job/run.py:_plist` renders
+    `enginetree.stable_launcher()` as the program and the validated vault as `PLAINKEEP_HOME`,
+    precisely so that a scheduled job depends on neither discovery nor `PATH` — so reading them back
+    off the rendered file is not a weaker check than running something, it is the check:
+
+      1. the program IS the stable launcher of the pair this migration installed (`current`, not a
+         pinned version, and not anything else);
+      2. `PLAINKEEP_HOME` is baked, and it is THIS vault;
+      3. the launcher is on disk and executable, so the 2am ENOENT cannot happen.
+
+    A VERB PROBE WAS TRIED AND REJECTED, and the reason belongs here because it is a property of the
+    environment rather than of this module: in a sanitized launchd environment `PATH` is
+    `/usr/bin:/bin:/usr/sbin:/sbin`, so the launcher resolves `python3` to macOS's system 3.9 — and
+    `plainkeep vault status` does not parse under it. Gating the migration on a verb-neutral probe
+    would have replaced F1 with a stricter version of F1.
+
+    Returns the routing facts for the receipt."""
+    if not vaultreg.same_path(str(program), str(launcher)):
+        raise VaultError(
+            f"the regenerated schedule {plist_name} does not name THE INSTALLED LAUNCHER — it names "
+            f"{program} — nothing has been removed", code=output.EXIT_DENY,
+            hint=f"a schedule must run {launcher}, the `current` name that survives the next engine "
+                 "activation. Re-render the schedules (`plainkeep job apply`) and delete any plist "
+                 "that is not this vault's")
+    home = penv.get("PLAINKEEP_HOME")
+    if not home:
+        raise VaultError(
+            f"the regenerated schedule {plist_name} bakes NO PLAINKEEP_HOME — nothing has been "
+            "removed", code=output.EXIT_DENY,
+            hint="a launchd agent wakes with almost no environment and `cwd=/`, so a schedule that "
+                 "does not name its vault absolutely is relying on a discovery that cannot succeed")
+    if not vaultreg.same_path(str(home), str(vault)):
+        raise VaultError(
+            f"the regenerated schedule {plist_name} runs the right program against the WRONG VAULT: "
+            f"it bakes PLAINKEEP_HOME={home}, not {vault} — nothing has been removed",
+            code=output.EXIT_DENY,
+            hint="re-render the schedules from this vault (`plainkeep job apply`) and delete any "
+                 "plist that belongs to another one")
+    if not (os.path.isfile(program) and os.access(program, os.X_OK)):
+        raise VaultError(
+            f"the regenerated schedule {plist_name} names a program that COULD NOT BE RUN: {program} "
+            "is missing or not executable — nothing has been removed", code=output.EXIT_DENY)
+    return {"routed": True, "program": str(program), "home": str(home)}
+
+
 def regenerate_schedules(vault: Path, launcher: Path, engine: Path) -> dict:
-    """Re-render every plist, then RUN each one's exact ProgramArguments in a sanitized environment.
+    """Re-render every plist, prove each one ROUTES, and exercise each one's own argv.
 
-    `--dry-run` is appended to the rendered argv, and the reason is not timidity: the point of the
-    exercise is that the program is FOUND and the vault is SELECTED, which is the whole of the 2am
-    failure — while actually running a user's `consolidate` in the middle of a migration would write
-    into the vault at a moment the migration is about to hash it. The write is not skipped so much as
-    moved: the capture canary above is the real write, at a boundary that declares its footprint.
+    Two questions per plist, and keeping them apart is the whole of F1 (see `_routing_probe`):
 
-    If a verb ever stopped honouring `--dry-run` the manifest comparison would catch it, because the
-    hashes are taken AFTER this step and must be identical across the removal."""
+      * **Does it route?** REFUSED on a program that is not the installed launcher, on a missing or
+        absent `PLAINKEEP_HOME`, on one naming another vault, and on a launcher that is not there or
+        not executable. This is the gate.
+      * **Does its own argv run?** The rendered `ProgramArguments` are still executed with
+        `--dry-run` appended in a sanitized launchd environment, because that is the only thing here
+        that exercises the ARTEFACT AS WRITTEN. Its exit code is RECORDED, not gated on: it is the
+        verb's verdict about the vault, and this module is not entitled to an opinion about it. What
+        IS still refused is a failure to EXEC (126/127, `OSError`) or a death by signal — neither of
+        which any verb can mean as a verdict.
+
+    `--dry-run` is appended for the same reason it always was: actually running a user's
+    `consolidate` in the middle of a migration would write into the vault at the moment the migration
+    is about to hash it. If a verb ever stopped honouring it the manifest comparison would catch it,
+    because the hashes are taken AFTER this step and must be identical across the removal.
+
+    THE HONEST LIMIT: a verb that CRASHES with exit 1 is indistinguishable here from a verb that
+    reports bad news with exit 1, and this step no longer guesses. What stands behind it is
+    `prove()`, which dispatched four real verbs through this same launcher against this same vault
+    two steps earlier and refused if any of them failed."""
     out_dir = vault / "jobs" / "launchd"
     modes = dispatcher_modes(engine)
     r = _run_probe(launcher, vault, ["job", "apply"], modes[0])
     if r.returncode != 0:
         raise VaultError("regenerating the schedules failed — nothing has been removed:\n"
-                         + (r.stderr.strip() or r.stdout.strip())[:1200], code=output.EXIT_DENY)
+                         + _clip(r.stderr or r.stdout), code=output.EXIT_DENY)
     rendered, exercised, stale = [], [], []
     for plist in sorted(out_dir.glob("*.plist")) if out_dir.is_dir() else []:
         with open(plist, "rb") as fh:
@@ -710,16 +817,10 @@ def regenerate_schedules(vault: Path, launcher: Path, engine: Path) -> dict:
         if vaultreg.path_within(vaultreg.canonical(str(program)), vaultreg.canonical(str(vault))):
             stale.append(f"{plist.name} -> {program}")
             continue
-        rr = subprocess.run([*args, "--dry-run"], env=_sanitized_env(penv), cwd="/",
-                            capture_output=True, text=True, timeout=300)
-        exercised.append({"plist": plist.name, "rc": rr.returncode,
-                          "program": str(program), "home": penv.get("PLAINKEEP_HOME")})
-        if rr.returncode != 0:
-            raise VaultError(
-                f"the regenerated schedule {plist.name} does not run in a sanitized launchd "
-                f"environment (exit {rr.returncode}) — nothing has been removed:\n"
-                + (rr.stderr.strip() or rr.stdout.strip() or "(no output)")[:1200],
-                code=output.EXIT_DENY)
+        routing = _routing_probe(vault, plist.name, program, penv, launcher)
+        rr = _sanitized_run([*args, "--dry-run"], penv, plist.name)
+        exercised.append({"plist": plist.name, "rc": rr.returncode, "verdict": rr.returncode != 0,
+                          **routing})
     if stale:
         raise VaultError("regenerated schedules still point INSIDE the vault:\n  " + "\n  ".join(stale),
                          code=output.EXIT_DENY,

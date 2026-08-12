@@ -190,6 +190,30 @@ def add_job(vault: Path, *, name: str = "fixture-consolidate",
     reg["jobs"][name] = {"command": command, "schedule": {"daily": daily}, "risk": "read"}
     reg_path.write_text(json.dumps(reg, indent=2) + "\n", encoding="utf-8")
     return reg
+
+
+def add_health_signal_job(vault: Path, *, name: str = "backup_check",
+                          command: str = "plainkeep backup", daily: str = "09:00") -> dict:
+    """A scheduled job whose verb's EXIT CODE IS A VERDICT ABOUT THE VAULT, not about the schedule.
+
+    The shape the clone canary found on the real vault and that no fixture modelled: `plainkeep
+    backup` (bare) is `cmd_nag()`, which exits 1 whenever the tree is dirty *or* has unpushed commits.
+    A fixture vault has no upstream, so it is at risk unconditionally — and `prove()`'s own canary
+    `capture` guarantees a dirty tree before the schedules are ever exercised, so this job exits 1 on
+    every migration, forever, while ROUTING PERFECTLY.
+
+    The product's own verb, not a synthetic one, because the collision that makes the exit code
+    uninterpretable is a real property of the exit space: `output.EXIT_UNEXPECTED` IS 1, so "restic
+    failed" and "your notes are not pushed" are the same number.
+
+    Committed, because a registry edit left uncommitted is refused by an earlier gate and would prove
+    the clean-tree check fires rather than anything about schedules."""
+    reg = add_job(vault, name=name, command=command, daily=daily)
+    git(vault, "add", "jobs/registry.json")
+    git(vault, "commit", "-q", "-m", f"schedule {name}: a job whose exit code reports vault health")
+    return reg
+
+
 def add_committed_dir_symlink(vault: Path, link_rel: str, target_rel: str) -> Path:
     """A COMMITTED symlink to a DIRECTORY (git mode 120000) — the shape F2 is about.
 
@@ -208,6 +232,45 @@ def add_committed_dir_symlink(vault: Path, link_rel: str, target_rel: str) -> Pa
     git(vault, "add", link_rel)
     git(vault, "commit", "-q", "-m", f"adapter: {link_rel} -> {target_rel}")
     return p
+
+
+def plant_plist(vault: Path, name: str, program: Path | str, home: Path | str,
+                argv: tuple[str, ...] = ("status",)) -> Path:
+    """Write a rendered plist directly into `jobs/launchd/`, bypassing the registry.
+
+    `job apply` renders the registry's jobs and does NOT prune anything else, and
+    `regenerate_schedules` globs the directory — so this is how a schedule that routes WRONGLY gets
+    in front of the check that is supposed to refuse it. There is no way to make `job apply` render
+    a broken plist, which is the point: the check is about the ARTEFACT on disk."""
+    import plistlib
+    out = vault / "jobs" / "launchd"
+    out.mkdir(parents=True, exist_ok=True)
+    p = out / f"com.plainkeep.{name}.plist"
+    with open(p, "wb") as fh:
+        plistlib.dump({"Label": f"com.plainkeep.{name}",
+                       "ProgramArguments": [str(program), *argv],
+                       "EnvironmentVariables": {"PLAINKEEP_HOME": str(home)},
+                       "StartCalendarInterval": {"Hour": 4, "Minute": 0}}, fh)
+    return p
+
+
+def second_vault(fx: dict, label: str = "other") -> dict:
+    """A SECOND registered vault beside the fixture's, sharing its engine and registry.
+
+    Exists for one question: a schedule that runs the right program and selects the WRONG vault. That
+    is the failure the sanitized exercise is for, and it cannot be posed with one vault — pointing a
+    plist at a non-vault directory tests a crash, not a misroute."""
+    v = fx["base"] / label
+    r = subprocess.run([PY, str(fx["root"] / "engine" / "current" / "bin" / "vault" / "run.py"),
+                        "init", str(v), "--name", label, "--yes"], capture_output=True, text=True,
+                       env=_clean_env(PLAINKEEP_ENGINE_HOME=fx["root"], PLAINKEEP_HOME=v,
+                                      PLAINKEEP_CONFIG_HOME=fx["cfg"]))
+    if r.returncode != 0:
+        raise RuntimeError(f"fixture: second vault init failed:\n{r.stderr or r.stdout}")
+    return {"vault": v,
+            "vault_id": json.loads((v / ".plainkeep" / "vault.json").read_text(encoding="utf-8"))["id"]}
+
+
 def phase1_vault(tmp: Path, label: str, *, notes: int = 3, source: Path | None = None) -> dict:
     """THE FIXTURE. A committed, clean, marked, registered Phase 1 vault with an engine inside it.
 

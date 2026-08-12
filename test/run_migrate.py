@@ -2245,6 +2245,112 @@ def case_suite_is_environment_independent(_tmp: Path) -> None:
     src = inspect.getsource(mig)
     check("hermetic: every migration in this suite redirects PLAINKEEP_BIN_DIR away from ~/.local/bin",
           "PLAINKEEP_BIN_DIR" in src, src[:200])
+
+
+# ==================================================================================================
+# J. The clone-canary blockers (F1/F2/F3) — real-vault shapes no fixture modelled
+#
+# Every cell below was demonstrated RED at 3f69024 (Phase 2 complete) before the fix that makes it
+# green; `.orchestrate/task-p2-6b-report.md` records the measured red output per cell. They are here
+# rather than in the sections above because they are one wave and each is a shape the canary found on
+# `gabros20/ops` that `phase1_vault` had no reason to produce.
+# ==================================================================================================
+def case_a_health_signal_verb_does_not_block_the_migration(tmp: Path) -> None:
+    """F1. A job whose verb's EXIT CODE IS A VERDICT must not make the migration unrunnable.
+
+    The real vault schedules `backup_check` -> `plainkeep backup`, which exits 1 whenever the tree is
+    dirty or unpushed. `prove()`'s own canary `capture` guarantees a dirty tree before the schedules
+    are exercised, so a check that demanded rc 0 refused every migration of that vault forever and
+    each retry made the condition it failed on worse. It does not converge, structurally.
+
+    What the step exists to prove is ROUTING — that the rendered plist runs the INSTALLED launcher
+    and selects the right vault in a sanitized launchd environment — and routing is now asked
+    directly instead of being inferred from a verb's opinion of the vault."""
+    fx = vm.phase1_vault(tmp, "health")
+    v, root = fx["vault"], fx["root"]
+    vm.add_health_signal_job(v)
+
+    # The fixture's premise, measured rather than assumed: the verb really does exit non-zero, and it
+    # does so while reaching THIS vault.
+    nag = vm.dispatch(fx["launcher"], v, root, fx["cfg"], "backup")
+    check("F1: fixture — the scheduled verb exits non-zero as a HEALTH VERDICT",
+          nag.returncode != 0, f"rc={nag.returncode} {(nag.stdout + nag.stderr)[:200]}")
+
+    r, doc = mig_json(fx, "--migrate", str(v), "--yes")
+    check("F1: the migration COMPLETES with a health-signal job scheduled",
+          r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:700]}")
+    if r.returncode != EXIT_OK:
+        return
+
+    ex = (doc.get("schedules") or {}).get("exercised") or []
+    bc = next((e for e in ex if "backup_check" in str(e.get("plist"))), None)
+    check("F1: the health-signal schedule was exercised, not skipped", bc is not None, str(ex))
+    if bc is None:
+        return
+    check("F1: ...its ROUTING was proved — the installed launcher, against THIS vault",
+          bc.get("routed") is True
+          and bc.get("program") == str(root / "engine" / "current" / "plainkeep")
+          and os.path.realpath(str(bc.get("home"))) == os.path.realpath(v), str(bc))
+    check("F1: ...and the verb's own non-zero exit is RECORDED as a verdict, not a refusal",
+          bc.get("rc") not in (None, 0) and bc.get("verdict") is True, str(bc))
+    check("F1: every schedule was routing-proved", bool(ex)
+          and all(e.get("routed") is True for e in ex), str(ex))
+
+    # And it CONVERGES: the second run is still a no-op rather than a fresh refusal.
+    r2 = mig(fx, "--migrate", str(v), "--yes")
+    check("F1: the second run of a health-signal vault is still a no-op", r2.returncode == EXIT_OK,
+          f"rc={r2.returncode} {r2.stderr[:400]}")
+
+
+def case_a_broken_schedule_still_refuses(tmp: Path) -> None:
+    """F1's other half. Loosening the exit-code gate must not loosen the ROUTING gate.
+
+    Three genuinely broken schedules, each refused BEFORE anything is removed: a program that is not
+    there, a plist that selects a DIFFERENT vault, and a program that is not executable. The second
+    one is why this fixture builds a second vault — pointing a plist at a non-vault directory would
+    test a crash, not a misroute."""
+    fx = vm.phase1_vault(tmp, "broken")
+    v = fx["vault"]
+    other = vm.second_vault(fx)
+    plist_dir = v / "jobs" / "launchd"
+
+    def refuses(label: str, plist: Path, must_say: tuple[str, ...]) -> None:
+        r = mig(fx, "--migrate", str(v), "--yes")
+        check(f"F1: {label} — the migration REFUSES", r.returncode == EXIT_DENY,
+              f"rc={r.returncode} {r.stderr[:400]}")
+        check(f"F1: {label} — ...naming what is wrong",
+              all(s in r.stderr for s in must_say), r.stderr[:400])
+        check(f"F1: {label} — ...with NOTHING removed",
+              (v / "bin").is_dir() and (v / "VERSION").is_file())
+        plist.unlink(missing_ok=True)
+
+    p = vm.plant_plist(v, "zz-gone", tmp / "no-such-dir" / "plainkeep", v)
+    refuses("a program that is not there", p, ("zz-gone", "INSTALLED LAUNCHER"))
+
+    p = vm.plant_plist(v, "zz-misrouted", fx["launcher"], other["vault"])
+    refuses("a plist that selects a DIFFERENT vault", p,
+            ("zz-misrouted", "WRONG VAULT", str(other["vault"])))
+
+    p = vm.plant_plist(v, "zz-nohome", fx["launcher"], v)
+    import plistlib
+    with open(p, "rb") as fh:
+        d = plistlib.load(fh)
+    d["EnvironmentVariables"] = {}
+    with open(p, "wb") as fh:
+        plistlib.dump(d, fh)
+    refuses("a plist that bakes no vault at all", p, ("zz-nohome", "NO PLAINKEEP_HOME"))
+
+    # The launcher is the right name but the file behind it cannot be executed — the 2am ENOENT in
+    # the one shape the "is it the installed launcher" check cannot see.
+    fake_root = fx["base"] / "fake-engine" / "engine" / "current"
+    fake_root.mkdir(parents=True, exist_ok=True)
+    (fake_root / "plainkeep").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (fake_root / "plainkeep").chmod(0o644)
+    p = vm.plant_plist(v, "zz-notexec", fake_root / "plainkeep", v)
+    refuses("a launcher that is not executable", p, ("zz-notexec", "INSTALLED LAUNCHER"))
+
+    check("F1: after three refusals the vault is still fully pristine",
+          not list(plist_dir.glob("*zz-*")) and (v / "script").is_dir())
 def case_doctor_is_still_strict_on_a_vault_that_never_migrated(tmp: Path) -> None:
     """F3(i)'s other direction. Relaxing the adapter check must not make it vacuous.
 
@@ -2391,6 +2497,8 @@ CASES = (
     ("item 11: unknown boundary refuses", case_unknown_kill_stage_refuses),
     ("environment independence", case_suite_is_environment_independent),
     # J. the clone-canary blockers
+    ("F1: a health-signal verb does not block", case_a_health_signal_verb_does_not_block_the_migration),
+    ("F1: a broken schedule still refuses", case_a_broken_schedule_still_refuses),
     ("F3: doctor stays strict on a pre-migration vault",
      case_doctor_is_still_strict_on_a_vault_that_never_migrated),
     ("F3: the post-removal re-proof tells the truth", case_the_post_removal_reproof_tells_the_truth),

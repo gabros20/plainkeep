@@ -2616,6 +2616,50 @@ def case_a_reproof_on_a_migrated_vault_tells_the_truth(tmp: Path) -> None:
           err[:500])
     check("F3: ...and the failing probe line is visible",
           "FAIL" in err and ".claude/skills" in err, err[-500:])
+
+
+def case_a_pre_phase2_engine_source_refuses(tmp: Path) -> None:
+    """The live-run hazard the canary named: `engine_source` defaults to the VAULT.
+
+    On the canary machine `provision()` found `4.0.0-dev` already installed and REUSED it, so the
+    vault's pre-Phase-2 copy was never installed as the engine. That is the right outcome reached by
+    a version-string collision. On a machine where that version is not already installed, the same
+    default would install the engine FROM the vault's own copy — a tree that carries no
+    `enginetree.py` and no `migrate.py`, i.e. an engine that cannot update or migrate anything.
+
+    So the source is CHECKED rather than assumed: if the tree that would be installed does not carry
+    the Phase 2 module CLIs, migration refuses and names `--engine-source`. A vault whose copy IS
+    Phase 2 (every other cell in this file) is unaffected, which is why the check is on the CONTENT
+    of the source and not on whether it happens to be the vault."""
+    fx = vm.phase1_vault(tmp, "stalesrc")
+    v = fx["vault"]
+
+    r, pre = mig_json(fx, "--preflight", str(v))
+    check("engine_source: with no flag it resolves to THE VAULT ITSELF — the hazard, measured",
+          r.returncode == EXIT_OK and os.path.realpath(pre.get("engine_source", ""))
+          == os.path.realpath(v), f"rc={r.returncode} {pre.get('engine_source')}")
+
+    # A pre-Phase-2 engine source: a real checkout with the two Phase 2 module CLIs taken out. This
+    # is the shape the vault's own copy has on a machine that has not run `script/update` since
+    # before Phase 2, and installing from it would produce an engine that can neither update nor
+    # migrate anything. It is built OUTSIDE the vault because deleting those files inside the vault
+    # is a committed engine edit, which `_divergence` refuses first and for a different reason.
+    stale = fx["base"] / "pre-phase2-checkout"
+    shutil.copytree(REPO, stale, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".venv", "test"))
+    (stale / "bin" / "lib" / "migrate.py").unlink()
+
+    r = mig(fx, "--preflight", str(v), "--engine-source", str(stale))
+    check("engine_source: a source with no Phase 2 module CLIs REFUSES",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stderr[:400]}")
+    check("engine_source: ...naming the missing module and the flag that fixes it",
+          "migrate.py" in r.stderr and "--engine-source" in r.stderr, r.stderr[:500])
+
+    r = mig(fx, "--preflight", str(v), "--engine-source", str(REPO))
+    check("engine_source: ...and an explicit, real source is accepted",
+          r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:400]}")
+
+
 # ==================================================================================================
 # Runner
 # ==================================================================================================
@@ -2669,6 +2713,7 @@ CASES = (
     ("F3: the post-removal re-proof tells the truth", case_the_post_removal_reproof_tells_the_truth),
     ("F3: a re-proof on a migrated vault tells the truth",
      case_a_reproof_on_a_migrated_vault_tells_the_truth),
+    ("engine_source: a pre-phase-2 source refuses", case_a_pre_phase2_engine_source_refuses),
 )
 
 

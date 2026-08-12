@@ -456,6 +456,40 @@ def manifest_diff(before: dict, after: dict) -> dict:
 
 
 # --- provisioning ------------------------------------------------------------------------------------
+# The modules a PHASE 2 engine has to carry. A tree without them installs as an engine that can
+# neither update itself nor migrate anything, and both are module CLIs the operator is told to run by
+# name, so their absence is not something the next command discovers gracefully.
+PHASE2_MODULES = ("bin/lib/enginetree.py", "bin/lib/migrate.py")
+
+
+def _check_engine_source(src: Path, *, defaulted: bool) -> None:
+    """Refuse a source tree that is not a Phase 2 engine.
+
+    `engine_source` DEFAULTS TO THE VAULT, which is right — a Phase 1 vault's own copy is the engine
+    that has been running it — and is a live hazard exactly once: when that copy predates Phase 2.
+    The clone canary hit the benign half of it. `provision()` found the vault's `4.0.0-dev` already
+    installed, verified it and REUSED it, so the vault's pre-Phase-2 code was never installed. That
+    is the right outcome reached by a version-string collision: on a machine where `4.0.0-dev` is not
+    already present, the same default would have installed the engine FROM the vault's own copy, and
+    that copy carries neither `enginetree.py` nor `migrate.py`.
+
+    Checked on the CONTENT of the resolved source, never on whether it happens to be the vault: a
+    vault whose engine copy IS Phase 2 is a perfectly good source and is what every fixture uses. The
+    refusal names `--engine-source` because pointing at a real checkout is the fix, and it is also
+    what the canary report tells the live run to do regardless."""
+    missing = [m for m in PHASE2_MODULES if not (src / m).is_file()]
+    if not missing:
+        return
+    raise VaultError(
+        f"the engine source {src} is not a Phase 2 engine — it does not carry "
+        + ", ".join(missing) + ("\n  (no --engine-source was given, so the source DEFAULTS to the "
+                                "vault, whose engine copy predates Phase 2)" if defaulted else ""),
+        code=output.EXIT_DENY,
+        hint="installing it would produce an engine that can neither update itself nor migrate a "
+             "vault. Point the migration at a real checkout:\n"
+             "    --engine-source <path to a plainkeep checkout>")
+
+
 def provision(source: Path) -> dict:
     """Install and activate the engine pair from `source`, retaining whatever pair is active now.
 
@@ -1179,6 +1213,17 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
         doc.update({"would_remove": [], "protected_files": None, "candidate_tree": None,
                     "verdict": "already migrated — nothing to remove"})
         return doc
+    if st == "pristine":
+        # PRISTINE ONLY, and that is a convergence property rather than an oversight. A `resume`
+        # vault is mid-removal: `bin/lib/migrate.py` may already be gone from its working tree, and
+        # refusing there would make a half-pruned vault permanently unfinishable — "a gate that a
+        # correct partial run cannot get past is not a safety property, it is a trap"
+        # (`_clean_tree_gate`, which paid for the same lesson). It also could not be describing a
+        # real hazard: `state()` answers `resume` only when HEAD carries the migration commit, which
+        # is made after `provision()`, so the engine is already installed and `provision()` reuses it
+        # rather than installing from this source at all.
+        _check_engine_source(src, defaulted=engine_source is None)
+
     if st == "pristine":
         doc["dirty_but_harmless"] = _clean_tree_gate(vault)
 
@@ -1943,6 +1988,7 @@ def main(argv: list[str]) -> int:
                 # active rather than to invent a source and fail inside `read_version`.
                 src = _flag(opts, "--engine-source")
                 if src:
+                    _check_engine_source(Path(src), defaulted=False)
                     prov = provision(Path(src))
                 else:
                     act = enginetree.active_engine()

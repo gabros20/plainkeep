@@ -97,6 +97,18 @@ def sha_tree(root: Path, *, skip=(".git",)) -> dict[str, str]:
         rel_dir = os.path.relpath(dp, root)
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
         dn[:] = sorted(d for d in dn if not (f"{rel_dir}/{d}" if rel_dir else d).startswith(skip))
+        # A SYMLINK TO A DIRECTORY IS ENUMERATED IN `dn`, NOT IN `fn`, and this walker used to hash
+        # only `fn` — so it shared the exact blindness F2 found in `migrate.protected_manifest`: an
+        # intact `.claude/skills -> ../skills` was invisible, and the same path became visible the
+        # moment its target stopped resolving. An oracle with the same hole as the thing it is
+        # auditing cannot audit it, so dir-symlinks are recorded here by target and not descended.
+        for d in list(dn):
+            rel = f"{rel_dir}/{d}" if rel_dir else d
+            p = Path(dp) / d
+            if p.is_symlink():
+                dn.remove(d)
+                if not rel.startswith(skip):
+                    out[rel] = "symlink:" + os.readlink(p)
         for f in sorted(fn):
             rel = f"{rel_dir}/{f}" if rel_dir else f
             if rel.startswith(skip):
@@ -2255,6 +2267,38 @@ def case_suite_is_environment_independent(_tmp: Path) -> None:
 # rather than in the sections above because they are one wave and each is a shape the canary found on
 # `gabros20/ops` that `phase1_vault` had no reason to produce.
 # ==================================================================================================
+_PROBE_SRC = '''\
+import importlib.util, json, pathlib, sys
+spec = importlib.util.spec_from_file_location("pkmigrate", sys.argv[1])
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+print(json.dumps(mod.protected_manifest(pathlib.Path(sys.argv[2]))))
+'''
+
+
+def product_manifest(tmp: Path, vault: Path) -> dict[str, str]:
+    """`migrate.protected_manifest(vault)["files"]`, taken IN A SUBPROCESS.
+
+    Every other cell in this file drives the module's real CLI, per ADR-019 D1, and the behavioural
+    half of F2 is `case_migration_refuses_to_dangle_a_protected_symlink` below. What cannot be asked
+    of the CLI is whether `protected_manifest()` gives an INTACT dir-symlink and a DANGLING one the
+    same entry — the product only ever compares two manifests it took itself, so a manifest blind in
+    both directions agrees with itself and reports nothing at all. That has to be read off the
+    function.
+
+    A subprocess rather than an import because `migrate.py` puts `bin/` on `sys.path` and imports
+    `lib.enginetree`, while this suite already owns the name `lib` (it is `test/lib`). One `lib` per
+    interpreter; two interpreters, no shadowing."""
+    script = tmp / "manifest_probe.py"
+    script.write_text(_PROBE_SRC, encoding="utf-8")
+    r = subprocess.run([PY, str(script), str(MIGRATE), str(vault)], capture_output=True, text=True,
+                       env=vm._clean_env(PLAINKEEP_ENGINE_HOME=tmp / "no-root",
+                                         PLAINKEEP_CONFIG_HOME=tmp / "no-cfg"))
+    if r.returncode != 0:
+        raise RuntimeError(f"manifest probe failed:\n{r.stderr[-800:]}")
+    return json.loads(r.stdout)["files"]
+
+
 def case_a_health_signal_verb_does_not_block_the_migration(tmp: Path) -> None:
     """F1. A job whose verb's EXIT CODE IS A VERDICT must not make the migration unrunnable.
 
@@ -2351,6 +2395,123 @@ def case_a_broken_schedule_still_refuses(tmp: Path) -> None:
 
     check("F1: after three refusals the vault is still fully pristine",
           not list(plist_dir.glob("*zz-*")) and (v / "script").is_dir())
+
+
+def case_protected_manifest_covers_symlinks_to_directories(tmp: Path) -> None:
+    """F2(a). A symlink must be hashed BY TARGET whether or not that target resolves.
+
+    `os.walk(followlinks=False)` enumerates an INTACT symlink-to-a-directory in `dirnames` and a
+    DANGLING one in `filenames`. A manifest that hashes only `filenames` therefore lets the same path
+    enter and leave it based purely on whether its target currently resolves — which is both a hole
+    (the link is protected content that is never hashed while it works) and a false alarm (it appears
+    as `added` the moment a migration breaks it, and as `removed` the moment a rollback repairs it).
+
+    RED at 3f69024: `.claude/skills` absent from the intact manifest, present in the dangling one."""
+    fx = vm.phase1_vault(tmp, "manifest")
+    v = fx["vault"]
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")
+
+    intact = product_manifest(tmp, v)
+    check("F2: an INTACT symlink-to-a-directory is in the protected manifest",
+          ".claude/skills" in intact, f"{len(intact)} files, link absent")
+    check("F2: ...recorded by TARGET, never by content",
+          str(intact.get(".claude/skills", "")).startswith("symlink:"),
+          str(intact.get(".claude/skills")))
+
+    # Break it exactly the way a migration does, and ask the same question again.
+    shutil.rmtree(v / "skills")
+    dangling = product_manifest(tmp, v)
+    check("F2: a DANGLING symlink is still in the manifest", ".claude/skills" in dangling)
+    check("F2: ...with the SAME entry — a broken target is not a content change",
+          dangling.get(".claude/skills") == intact.get(".claude/skills"),
+          f"{intact.get('.claude/skills')} -> {dangling.get('.claude/skills')}")
+    # The set math `manifest_diff` does, done here so the oracle is not the thing under test.
+    appeared = sorted(set(dangling) - set(intact))
+    vanished = sorted(set(intact) - set(dangling))
+    check("F2: breaking the target produces NO added/removed manifest artefact",
+          ".claude/skills" not in appeared and ".claude/skills" not in vanished,
+          f"appeared={appeared[:4]} vanished={vanished[:4]}")
+    check("F2: ...which is the mirror image rollback tripped on, in the other direction too",
+          ".claude/skills" not in sorted(set(intact) - set(dangling)),
+          f"vanished={vanished[:4]}")
+
+
+def case_migration_refuses_to_dangle_a_protected_symlink(tmp: Path) -> None:
+    """F2(b). A protected symlink whose target would not survive the removal is a PREFLIGHT refusal.
+
+    The real vault's `.claude/skills -> ../skills` and `.codex/skills -> ../skills` point into a
+    `skills/` whose only entry (`skills/operate-plainkeep`) is allowlisted; the removal empties it and
+    `_prune_empty_dirs` takes the directory, so both committed, protected, user-owned symlinks dangle.
+    At 3f69024 that was caught only AFTER `_apply` — 109 paths gone, migration commit made — and
+    reported as `added: ['.claude/skills', '.codex/skills']`, which names neither the cause nor the
+    fix.
+
+    A control symlink into a SURVIVING tree is in the same fixture, because a refusal that fired on
+    every dir-symlink would be indistinguishable from this one on the evidence of a refusal alone."""
+    fx = vm.phase1_vault(tmp, "dangle")
+    v, root = fx["vault"], fx["root"]
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")     # -> pruned away
+    vm.add_committed_dir_symlink(v, ".codex/notes", "../wiki")         # -> survives (the control)
+    head = vm.git(v, "rev-parse", "HEAD").stdout.strip()
+
+    r, pre = mig_json(fx, "--preflight", str(v))
+    check("F2: PREFLIGHT refuses — before anything is provisioned or removed",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stderr[:400]}")
+    check("F2: ...naming the symlink AND the target it would lose",
+          ".claude/skills" in r.stderr and "skills" in r.stderr, r.stderr[:400])
+    check("F2: ...and NOT naming the symlink whose target survives",
+          ".codex/notes" not in r.stderr, r.stderr[:400])
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("F2: the migration refuses too", r.returncode == EXIT_DENY,
+          f"rc={r.returncode} {r.stderr[:400]}")
+    check("F2: NOTHING was removed — the refusal is before `_apply`, not after it",
+          (v / "bin").is_dir() and (v / "script").is_dir() and (v / "VERSION").is_file()
+          and (v / "skills" / "operate-plainkeep").is_dir())
+    check("F2: ...HEAD never moved", vm.git(v, "rev-parse", "HEAD").stdout.strip() == head)
+    check("F2: ...and no receipt was written",
+          not (root / "migrations" / f"{fx['vault_id']}.json").exists())
+    check("F2: both adapter symlinks still resolve",
+          (v / ".claude" / "skills" / "operate-plainkeep").is_dir()
+          and (v / ".codex" / "notes").is_dir())
+
+    # Rollback has nothing to undo, and says so — rather than the rc 5 the mirror-image manifest
+    # artefact produced at 3f69024 AFTER a correct restore.
+    r = mig(fx, "--rollback", str(v), "--yes")
+    check("F2: rollback reports NO RECEIPT rather than failing over a manifest artefact",
+          r.returncode == EXIT_NOT_FOUND, f"rc={r.returncode} {r.stderr[:300]}")
+
+
+def case_a_repointed_adapter_migrates_and_survives(tmp: Path) -> None:
+    """F2's END STATE, and the one the refusal's hint names. The operator owns those links.
+
+    Un-dangling them silently is not on the table — a migration that rewrote a committed, protected,
+    user-owned symlink would be doing the one thing this module promises it cannot. So the refusal
+    hands over two legitimate repairs and this cell drives the first of them end to end: point the
+    adapter at the installed engine's `skills/`, which is where `operate-plainkeep` lives after
+    Phase 2 Task 2 anyway. `doctor` must then be GREEN on the migrated vault (F3(i))."""
+    fx = vm.phase1_vault(tmp, "repointed")
+    v, root, cfg = fx["vault"], fx["root"], fx["cfg"]
+    engine_skills = root / "engine" / "current" / "skills"
+    vm.add_committed_dir_symlink(v, ".claude/skills", os.path.relpath(engine_skills, v / ".claude"))
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("F2: a vault whose adapter points at the ENGINE migrates cleanly",
+          r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:700]}")
+    if r.returncode != EXIT_OK:
+        return
+    check("F2: ...the adapter still resolves after the removal",
+          (v / ".claude" / "skills" / "operate-plainkeep" / "SKILL.md").is_file())
+
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor EXITS 0 on the migrated vault", d.returncode == EXIT_OK,
+          f"rc={d.returncode} " + "\n".join(ln for ln in (d.stdout + d.stderr).splitlines()
+                                            if "FAIL" in ln)[:400])
+    check("F3: ...and reports no failing adapter check",
+          "BROKEN" not in d.stdout and "does not provide" not in d.stdout,
+          "\n".join(ln for ln in d.stdout.splitlines() if "FAIL" in ln)[:400])
+
+
 def case_doctor_is_still_strict_on_a_vault_that_never_migrated(tmp: Path) -> None:
     """F3(i)'s other direction. Relaxing the adapter check must not make it vacuous.
 
@@ -2499,6 +2660,10 @@ CASES = (
     # J. the clone-canary blockers
     ("F1: a health-signal verb does not block", case_a_health_signal_verb_does_not_block_the_migration),
     ("F1: a broken schedule still refuses", case_a_broken_schedule_still_refuses),
+    ("F2: the manifest covers dir-symlinks", case_protected_manifest_covers_symlinks_to_directories),
+    ("F2: dangling a protected symlink refuses at preflight",
+     case_migration_refuses_to_dangle_a_protected_symlink),
+    ("F2: a repointed adapter migrates and survives", case_a_repointed_adapter_migrates_and_survives),
     ("F3: doctor stays strict on a pre-migration vault",
      case_doctor_is_still_strict_on_a_vault_that_never_migrated),
     ("F3: the post-removal re-proof tells the truth", case_the_post_removal_reproof_tells_the_truth),

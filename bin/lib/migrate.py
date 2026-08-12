@@ -389,18 +389,48 @@ def protected_manifest(vault: Path) -> dict:
 
     Symlinks are recorded by TARGET and never followed — following them would hash the same bytes
     twice and would leave the migration's strongest evidence dependent on what a link points at."""
-    files: dict[str, str] = {}
+    files = {rel: _digest_entry(vault / rel) for rel in _protected_paths(vault)}
+    return {"schema": SCHEMA, "files": files, "count": len(files)}
+
+
+def _protected_paths(vault: Path) -> list[str]:
+    """Every protected path in the vault. ONE walk, and both callers read it.
+
+    EVERY SYMLINK IS AN ENTRY, whatever it points at. `os.walk(followlinks=False)` decides which list
+    a symlink lands in by `is_dir()`, which FOLLOWS it — so a symlink to a directory is enumerated in
+    `dirnames` while its target resolves and in `filenames` once it does not. A manifest built from
+    `filenames` alone therefore let the same path enter and leave it based on nothing but whether its
+    target was currently reachable, which is wrong twice over:
+
+      * an intact `.claude/skills -> ../skills` is protected content that was NEVER hashed, in either
+        direction, so "no protected content changed" had a hole in it the shape of every committed
+        agent adapter on a real vault;
+      * breaking one reported it as `added` and repairing one as `removed`, which is how a correct
+        rollback came to exit 5 AFTER restoring all 109 paths, skipping the launcher restore and the
+        receipt deletion it had not got to yet.
+
+    A symlink's content is its target string. That is what `_digest_entry` hashes, it is what git
+    stores in a mode-120000 blob, and it does not change when the thing at the other end does."""
+    out: list[str] = []
     for dirpath, dirnames, filenames in os.walk(vault, followlinks=False):
         rel_dir = os.path.relpath(dirpath, vault)
         rel_dir = "" if rel_dir == "." else rel_dir.replace(os.sep, "/")
         dirnames[:] = sorted(d for d in dirnames
                              if not _skip(f"{rel_dir}/{d}" if rel_dir else d))
+        # An entry, not a directory to descend. Pruned by SLICE ASSIGNMENT rather than `.remove()`:
+        # `dirnames` is derived from `os.walk(vault, …)` and therefore vault-tainted, and `remove` is
+        # a write primitive — the AST ratchet would read `dirnames.remove(d)` as a removal inside a
+        # vault and be right to, on the evidence available to it.
+        links = [d for d in dirnames if os.path.islink(os.path.join(dirpath, d))]
+        dirnames[:] = [d for d in dirnames if d not in links]
+        out.extend(f"{rel_dir}/{d}" if rel_dir else d for d in links)
         for fn in sorted(filenames):
             rel = f"{rel_dir}/{fn}" if rel_dir else fn
-            if _skip(rel):
-                continue
-            files[rel] = _digest_entry(vault / rel)
-    return {"schema": SCHEMA, "files": files, "count": len(files)}
+            if not _skip(rel):
+                out.append(rel)
+    return out
+
+
 def _skip(rel: str) -> bool:
     return _is_unprotected(rel) or is_allowlisted(rel)
 
@@ -950,6 +980,97 @@ def _refuse_unrepresentable(paths_: list[str]) -> None:
     if bad:
         raise VaultError("refusing: an engine path contains a newline and cannot be expressed in the "
                          "index-info deletion form", code=output.EXIT_DENY)
+
+
+def _would_prune_dirs(vault: Path, removed: list[str]) -> list[str]:
+    """Which directories `_prune_empty_dirs` WOULD remove, predicted without removing anything.
+
+    Read-only, and deliberately the same shape as the real prune: the ANCESTOR CLOSURE of the
+    deletions, deepest-first, a directory counting as emptied when every entry it currently holds is
+    either a deletion or a directory this walk has already emptied. Deepest-first is what makes the
+    second clause work — `bin/` is only empty after `bin/lib/` and `bin/verb/` have gone — and it is
+    the same ordering, for the same reason, that `_prune_empty_dirs`' docstring records paying for."""
+    gone = set(removed)
+    pruned: list[str] = []
+    cands: set[str] = set()
+    for r in removed:
+        p = Path(r).parent
+        while str(p) != ".":
+            cands.add(str(p))
+            p = p.parent
+    for d in sorted(cands, key=lambda d: -d.count("/")):
+        p = vault / d
+        if p.is_symlink() or not p.is_dir():
+            continue
+        try:
+            entries = {f"{d}/{e}" for e in os.listdir(p)}
+        except OSError:
+            continue
+        if entries <= gone:
+            gone.add(d)
+            pruned.append(d)
+    return sorted(pruned)
+
+
+def _refuse_dangling_symlinks(vault: Path, removed: list[str]) -> list[str]:
+    """REFUSE, BEFORE ANYTHING IS REMOVED, a protected symlink the migration would break.
+
+    The real vault carries two committed, protected, user-owned symlinks — `.claude/skills` and
+    `.codex/skills`, both `-> ../skills` — into a `skills/` whose only entry is the allowlisted
+    `skills/operate-plainkeep`. The removal empties it, the prune takes the directory, and both links
+    dangle. Nothing in the allowlist logic accounted for protected paths that point INTO removed
+    ones, so the only thing that noticed was the protected-hash comparison, which runs AFTER `_apply`
+    — 109 paths gone, the migration commit made — and which described the outcome as
+    `added: ['.claude/skills', '.codex/skills']`: the manifest artefact of F2(a), not the cause and
+    not the fix.
+
+    WHY THIS REFUSES RATHER THAN REPAIRS. Those links are the operator's. They are committed, they
+    are protected content, and a migration that silently repointed one would be doing the exact thing
+    this module's design constraint says is impossible within its action space — and would do it to a
+    file it cannot even see is wrong, since a link pointing somewhere else may be entirely deliberate.
+    So the migration stops and hands over the two end-states that ARE legitimate, both of which
+    `doctor` accepts: point the adapter at the installed engine's skills tree (which is where
+    `operate-plainkeep` lives once the engine is out of the vault), or drop the adapter.
+
+    Scoped to a PRISTINE run. On a resume the removal has already happened and the links may already
+    be broken; refusing there would stop the one command that finishes the job, and `rollback` is
+    what puts the target back.
+
+    Returns the empty list when nothing would break, so a caller can state that it asked."""
+    gone = set(removed) | set(_would_prune_dirs(vault, removed))
+    broken: list[str] = []
+    for rel in _protected_paths(vault):
+        link = vault / rel
+        if not link.is_symlink():
+            continue
+        target = os.readlink(link)
+        # LEXICAL resolution, not `Path.resolve()`: what git records is the target STRING, and the
+        # question is which vault path it names — not what that path happens to resolve to right now,
+        # which is the thing about to change. Built from `vault`, which `preflight` has already
+        # canonicalised, so `path_within`'s "both sides canonical" precondition holds by construction
+        # for the in-vault case its string comparison answers.
+        abs_target = os.path.normpath(os.path.join(os.path.dirname(str(link)), target))
+        if not vaultreg.path_within(abs_target, str(vault)) or abs_target == str(vault):
+            continue                      # outside the vault; this removal cannot reach it
+        t = os.path.relpath(abs_target, str(vault)).replace(os.sep, "/")
+        parts = t.split("/")
+        if any("/".join(parts[:i]) in gone for i in range(1, len(parts) + 1)):
+            broken.append(f"{rel} -> {target}   (resolves to {t}, which this migration removes)")
+    if broken:
+        raise VaultError(
+            f"refusing to migrate {vault}: {len(broken)} protected symlink(s) point INTO paths this "
+            "migration removes, and it would leave them DANGLING — nothing has been removed:\n  "
+            + "\n  ".join(broken[:20]),
+            code=output.EXIT_DENY,
+            hint="these links are yours — migration never rewrites protected content, so repair "
+                 "them and re-run. Either point the adapter at the installed engine, which is where "
+                 "the skill lives once the engine is out of the vault:\n"
+                 f"    ln -sfn {enginetree.current_link() / 'skills'} <vault>/<the link above>\n"
+                 "or drop the adapter (`git rm --cached <link> && rm <link>`). `plainkeep doctor` "
+                 "accepts both.")
+    return broken
+
+
 def _clean_tree_gate(vault: Path, *, op: str = "migration") -> list[str]:
     """ACCEPTANCE ITEM 2's clean-tree requirement, scoped to what a migration can actually harm.
 
@@ -1085,7 +1206,9 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
         if st == "pristine":
             tree, expected = build_candidate(vault, scratch)
             verify_candidate(vault, doc["head"], tree, expected)
-            doc.update({"candidate_tree": tree, "would_remove": expected})
+            doc.update({"candidate_tree": tree, "would_remove": expected,
+                        "would_prune_dirs": _would_prune_dirs(vault, expected)})
+            _refuse_dangling_symlinks(vault, expected)
         else:
             doc.update({"candidate_tree": None, "would_remove": [],
                         "would_prune_worktree": _worktree_residue(vault)})
@@ -1355,6 +1478,10 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
         if pre["state"] == "pristine":
             _clean_tree_gate(vault)
             _divergence(vault, _engine_ref(vault))
+            # RE-DERIVED, like the two above and for the same reason: `pre` is a keyword argument on
+            # a public function and is not allowed to be a `--force`. The removal set is read from
+            # git here rather than out of `pre["would_remove"]`, so a hand-built doc cannot shrink it.
+            _refuse_dangling_symlinks(vault, _tracked_under_allowlist(vault))
         before_commit = _before_commit(vault, pre)
         _kill_hook("preflight-done")
 

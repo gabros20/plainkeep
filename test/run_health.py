@@ -55,8 +55,12 @@ def main() -> int:
         r = run(h, "doctor")
         check("doctor: well-formed vault has no FAIL", r.returncode == 0 and "FAIL" not in r.stdout, r.stdout)
         check("doctor checks adapters + manifest", "AGENTS.md present" in r.stdout and "plainkeep.json parses" in r.stdout, r.stdout)
+        # The row is worded for what it MEANS rather than for where the skill sits: Phase 2 Task 2
+        # moved `operate-plainkeep` into the engine, and a migrated vault reaches it through an
+        # adapter pointing there instead of at `<vault>/skills`. The assertion is the same one —
+        # this adapter provides the skill — and this fixture still satisfies it the Phase 1 way.
         check("doctor verifies per-agent adapters", ".claude/settings.json parses" in r.stdout
-              and ".codex/skills → skills/ resolves" in r.stdout, r.stdout)
+              and ".codex/skills provides operate-plainkeep" in r.stdout, r.stdout)
         # a broken adapter symlink must FAIL
         (h / ".claude" / "skills").unlink(); os.symlink("../nope", h / ".claude" / "skills")
         rb = run(h, "doctor")

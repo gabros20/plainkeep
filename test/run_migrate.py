@@ -2245,8 +2245,110 @@ def case_suite_is_environment_independent(_tmp: Path) -> None:
     src = inspect.getsource(mig)
     check("hermetic: every migration in this suite redirects PLAINKEEP_BIN_DIR away from ~/.local/bin",
           "PLAINKEEP_BIN_DIR" in src, src[:200])
+def case_doctor_is_still_strict_on_a_vault_that_never_migrated(tmp: Path) -> None:
+    """F3(i)'s other direction. Relaxing the adapter check must not make it vacuous.
+
+    The rule is unchanged in substance and only generalised in WHERE the skill may come from: an
+    adapter symlink must resolve to a directory that PROVIDES `operate-plainkeep`. A Phase 1 vault
+    satisfies it through its own `skills/`; a migrated one through the engine's. A symlink that
+    provides neither is broken in both worlds and still FAILS."""
+    fx = vm.phase1_vault(tmp, "strict")
+    v, root, cfg = fx["vault"], fx["root"], fx["cfg"]
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")
+
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor is GREEN on a pre-migration vault whose adapter resolves",
+          d.returncode == EXIT_OK, f"rc={d.returncode} "
+          + "\n".join(ln for ln in d.stdout.splitlines() if "FAIL" in ln)[:300])
+
+    # The same adapter, pointed at a directory that does not provide the skill.
+    (v / "empty-skills").mkdir()
+    (v / ".claude" / "skills").unlink()
+    (v / ".claude" / "skills").symlink_to("../empty-skills")
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor FAILS on an adapter that resolves but provides no skill",
+          d.returncode != EXIT_OK, f"rc={d.returncode}")
+
+    (v / ".claude" / "skills").unlink()
+    (v / ".claude" / "skills").symlink_to("../nowhere-at-all")
+    d = vm.dispatch(fx["launcher"], v, root, cfg, "doctor", cwd=v)
+    check("F3: doctor FAILS on a BROKEN adapter symlink", d.returncode != EXIT_OK,
+          f"rc={d.returncode}")
 
 
+def case_the_post_removal_reproof_tells_the_truth(tmp: Path) -> None:
+    """F3(ii)+(iii). When the post-removal re-proof fails, the refusal must state the TRUE state.
+
+    The fixture is the canary's variant 3: a committed `.claude/skills -> ../skills` plus a
+    `skills/.gitkeep`, so the target directory SURVIVES the removal (F2's preflight refusal correctly
+    does not fire) while no longer providing the skill. The migration therefore completes — receipt
+    `complete`, `after_commit` set, engine copy gone — and its own post-removal re-proof then fails on
+    `doctor`. That is the exact state at which 3f69024 printed `prove-before-remove FAILED … nothing
+    was removed` and `the vault … still carries its own engine copy`: both false, both the class of
+    sentence this module's own design notes forbid.
+
+    (iii) is the same failure one layer down: the probe output was clipped to its first 1200
+    characters and `doctor` prints its fails LAST, so an operator saw sixteen `ok` lines and not one
+    failing line."""
+    fx = vm.phase1_vault(tmp, "reproof")
+    v, root = fx["vault"], fx["root"]
+    (v / "skills" / ".gitkeep").write_text("", encoding="utf-8")
+    vm.git(v, "add", "skills/.gitkeep")
+    vm.git(v, "commit", "-q", "-m", "keep skills/ alive across the migration")
+    vm.add_committed_dir_symlink(v, ".claude/skills", "../skills")
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    err = r.stderr
+    check("F3: the run fails (the re-proof really did fail)", r.returncode != EXIT_OK, f"rc={r.returncode}")
+
+    rec_path = root / "migrations" / f"{fx['vault_id']}.json"
+    rec = json.loads(rec_path.read_text(encoding="utf-8")) if rec_path.is_file() else {}
+    check("F3: fixture — the migration really DID complete", rec.get("status") == "complete"
+          and bool(rec.get("after_commit")) and not (v / "bin").exists(),
+          f"status={rec.get('status')} after_commit={bool(rec.get('after_commit'))}")
+
+    check("F3: the refusal does NOT claim nothing was removed",
+          "nothing was removed" not in err, err[:500])
+    check("F3: ...nor that the vault still carries its own engine copy",
+          "still carries its own engine copy" not in err, err[:500])
+    check("F3: ...it says the removal HAPPENED and names the commit and the receipt",
+          str(rec.get("after_commit", "x"))[:12] in err and str(rec_path) in err
+          and str(len(rec.get("removed") or [])) in err, err[:800])
+    check("F3: ...and points at the recovery that is actually available",
+          "--rollback" in err and "re-run the migration" not in err, err[:800])
+    check("F3: the FAILING probe lines survive the clip — the operator sees the failure",
+          "FAIL" in err and ".claude/skills" in err,
+          f"{len(err)} chars, no failing line: " + err[-500:])
+
+
+def case_a_reproof_on_a_migrated_vault_tells_the_truth(tmp: Path) -> None:
+    """F3(ii) on the OTHER path that used the same false sentence: the second run.
+
+    `--migrate --yes` on an already-migrated vault re-proves without writing (acceptance item 12).
+    When that proof fails, the same `prove-before-remove FAILED … nothing was removed … still carries
+    its own engine copy` came out of a vault that had been migrated minutes earlier."""
+    fx = vm.phase1_vault(tmp, "reproof2")
+    v = fx["vault"]
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("F3: fixture — the vault migrated cleanly first", r.returncode == EXIT_OK, r.stderr[:400])
+    if r.returncode != EXIT_OK:
+        return
+
+    # Break something `doctor` fails on, AFTER the migration, so the re-proof has a real failure.
+    (v / ".claude").mkdir(parents=True, exist_ok=True)
+    (v / ".claude" / "skills").symlink_to("../nowhere-at-all")
+
+    r = mig(fx, "--migrate", str(v), "--yes")
+    err = r.stderr
+    check("F3: the re-run reports the failure", r.returncode != EXIT_OK, f"rc={r.returncode}")
+    check("F3: the second-run refusal does not claim nothing was removed",
+          "nothing was removed" not in err, err[:500])
+    check("F3: ...nor that a migrated vault still carries its own engine copy",
+          "still carries its own engine copy" not in err, err[:500])
+    check("F3: ...it says the vault IS migrated", "already migrated" in err or "is migrated" in err,
+          err[:500])
+    check("F3: ...and the failing probe line is visible",
+          "FAIL" in err and ".claude/skills" in err, err[-500:])
 # ==================================================================================================
 # Runner
 # ==================================================================================================
@@ -2288,6 +2390,12 @@ CASES = (
     ("item 11: fault injection matrix", case_kill_matrix),
     ("item 11: unknown boundary refuses", case_unknown_kill_stage_refuses),
     ("environment independence", case_suite_is_environment_independent),
+    # J. the clone-canary blockers
+    ("F3: doctor stays strict on a pre-migration vault",
+     case_doctor_is_still_strict_on_a_vault_that_never_migrated),
+    ("F3: the post-removal re-proof tells the truth", case_the_post_removal_reproof_tells_the_truth),
+    ("F3: a re-proof on a migrated vault tells the truth",
+     case_a_reproof_on_a_migrated_vault_tells_the_truth),
 )
 
 

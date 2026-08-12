@@ -190,8 +190,24 @@ def add_job(vault: Path, *, name: str = "fixture-consolidate",
     reg["jobs"][name] = {"command": command, "schedule": {"daily": daily}, "risk": "read"}
     reg_path.write_text(json.dumps(reg, indent=2) + "\n", encoding="utf-8")
     return reg
+def add_committed_dir_symlink(vault: Path, link_rel: str, target_rel: str) -> Path:
+    """A COMMITTED symlink to a DIRECTORY (git mode 120000) — the shape F2 is about.
 
+    `os.walk(followlinks=False)` enumerates an intact one in `dirnames` and a dangling one in
+    `filenames`, so the same path enters and leaves a manifest that walks the filesystem based only
+    on whether its target currently resolves. The real vault carries two of these
+    (`.claude/skills -> ../skills`, `.codex/skills -> ../skills`); a fixture that only ever made
+    symlinks to FILES could not see either half of that.
 
+    `target_rel` is relative to the LINK's directory, exactly as git stores it."""
+    p = vault / link_rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    if p.is_symlink() or p.exists():
+        p.unlink()
+    p.symlink_to(target_rel)
+    git(vault, "add", link_rel)
+    git(vault, "commit", "-q", "-m", f"adapter: {link_rel} -> {target_rel}")
+    return p
 def phase1_vault(tmp: Path, label: str, *, notes: int = 3, source: Path | None = None) -> dict:
     """THE FIXTURE. A committed, clean, marked, registered Phase 1 vault with an engine inside it.
 

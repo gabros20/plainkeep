@@ -113,6 +113,40 @@ def _fm_churn(path: Path) -> str:
     return ""
 
 
+def _adapter_skills(label: str, link: Path) -> None:
+    """An agent adapter's `skills` entry. THE RULE IS "IT PROVIDES THE SKILL", not "it points here".
+
+    This asked whether `<adapter>/skills/operate-plainkeep` existed, which through Phase 1 was the
+    same question: the vault owned `skills/operate-plainkeep`, so `.claude/skills -> ../skills` was
+    the only shape there was. Phase 2 Task 2 moved the skill into the ENGINE (`paths.SKILLS` — it
+    documents the tool, not the notes), and migration removes the vault's copy. The old assertion
+    therefore failed FOREVER on every correctly migrated vault carrying those adapters — and because
+    `migrate.prove()` requires `doctor` to exit 0, it turned a completed migration into a rc-5
+    failure and broke acceptance item 12's second-run no-op along with it.
+
+    Generalising WHERE the skill may come from changes no pre-migration verdict — a Phase 1 vault
+    satisfies it through its own `skills/`, exactly as before — and makes the migrated verdict
+    correct. It is not a relaxation: an adapter that dangles, or that resolves to a directory
+    providing nothing, still FAILS in both worlds, because in both worlds an agent reading it gets
+    no skill. What changed is that a working adapter is no longer required to point at a directory
+    the migration is supposed to remove."""
+    if not (link.is_symlink() or link.exists()):
+        warn(f"{label} absent — agents read the skill from the engine ({paths.SKILLS})")
+        return
+    if (link / "operate-plainkeep").exists():
+        ok(f"{label} provides operate-plainkeep")
+        return
+    # The SAME PREDICATE as before — `operate-plainkeep` is reachable through the adapter — and not a
+    # stricter one. Whether that directory carries its `SKILL.md` is already its own row above, read
+    # off `paths.SKILLS`; asking for it again here would be a new requirement smuggled in under a
+    # relocation, and it is not what this row is about.
+    where = f" -> {os.readlink(link)}" if link.is_symlink() else ""
+    what = "is BROKEN" if link.is_symlink() and not link.exists() else \
+        "does not provide operate-plainkeep"
+    fail(f"{label} {what}{where} — point it at the engine's skills tree ({paths.SKILLS}) "
+         "or remove the adapter")
+
+
 def main(argv):
     _, argv = output.parse_argv(argv)
     init = "--init" in argv
@@ -423,8 +457,7 @@ def main(argv):
     cdx_cfg, cdx_sk = paths.PLAINKEEP_HOME / ".codex" / "config.toml", paths.PLAINKEEP_HOME / ".codex" / "skills"
     if cdx_cfg.exists() or cdx_sk.is_symlink() or cdx_sk.exists():
         (ok if cdx_cfg.exists() else warn)(".codex/config.toml" + ("" if cdx_cfg.exists() else " MISSING"))
-        (ok if (cdx_sk / "operate-plainkeep").exists() else fail)(".codex/skills → skills/ resolves"
-            if (cdx_sk / "operate-plainkeep").exists() else ".codex/skills symlink is BROKEN")
+        _adapter_skills(".codex/skills", cdx_sk)
     else:
         warn(".codex/ adapter not set up (Codex & Grok read AGENTS.md natively regardless)")
     cl_set, cl_sk = paths.PLAINKEEP_HOME / ".claude" / "settings.json", paths.PLAINKEEP_HOME / ".claude" / "skills"
@@ -435,8 +468,7 @@ def main(argv):
             warn(".claude/settings.json MISSING")
         except Exception as e:
             fail(f".claude/settings.json is INVALID json: {e}")
-        (ok if (cl_sk / "operate-plainkeep").exists() else fail)(".claude/skills → skills/ resolves"
-            if (cl_sk / "operate-plainkeep").exists() else ".claude/skills symlink is BROKEN")
+        _adapter_skills(".claude/skills", cl_sk)
     else:
         warn(".claude/ adapter not set up (add it to lock Claude Code to the plainkeep surface)")
 

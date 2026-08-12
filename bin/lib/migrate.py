@@ -401,8 +401,6 @@ def protected_manifest(vault: Path) -> dict:
                 continue
             files[rel] = _digest_entry(vault / rel)
     return {"schema": SCHEMA, "files": files, "count": len(files)}
-
-
 def _skip(rel: str) -> bool:
     return _is_unprotected(rel) or is_allowlisted(rel)
 
@@ -506,7 +504,24 @@ def _run_probe(launcher: Path, vault: Path, args: list[str], mode: str,
                           capture_output=True, text=True, timeout=timeout)
 
 
-def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bool = True) -> dict:
+def _clip(text: str, limit: int = 1600) -> str:
+    """Clip a probe's output KEEPING BOTH ENDS.
+
+    A head-only clip is not neutral about what it drops, and this one dropped the answer. `doctor`
+    prints its `FAIL` lines LAST, so 1200 characters of its output is sixteen `ok` lines and not one
+    failing line — the migration reported a doctor failure and then hid which one, to the person who
+    had to act on it. The head carries the command's framing, the tail carries its verdict, and the
+    elision says how much is missing rather than trailing off."""
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text or "(no output)"
+    head = limit // 3
+    tail = limit - head
+    return (text[:head] + f"\n  … {len(text) - head - tail} character(s) elided …\n" + text[-tail:])
+
+
+def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bool = True,
+          done: dict | None = None) -> dict:
     """PROVE-BEFORE-REMOVE. The installed binary must, from a subprocess carrying no `PLAINKEEP_HOME`
     and with `$PWD` inside the vault: discover THIS vault by id, pass `doctor`, answer a read verb,
     and complete one guardrail-gated write. In every dispatcher mode the pair supports.
@@ -522,12 +537,20 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
     the post-removal re-proof both perform it, because a dry run proves the argument parser works and
     nothing about whether a byte can land.
 
-    Raises on the first failure, with the probe's own stderr, having removed nothing."""
+    `done` IS WHAT MAKES THE REFUSAL TRUE. This function runs at three moments — before the removal,
+    after it, and on the second run of a finished migration — and every one of them used to fail with
+    the FIRST one's sentence: "prove-before-remove FAILED … nothing was removed", hinted with "the
+    vault still carries its own engine copy". On the two later calls both halves are false, and they
+    were measured being told to an operator whose 109 engine paths were already gone and whose
+    receipt already said `complete`. So `done` carries the true state and the true recovery down from
+    the caller that knows them; `None` means this really is prove-before-remove.
+
+    Raises on the first failure, with the probe's own output, having removed nothing."""
     modes = dispatcher_modes(engine)
     report: dict = {"modes": list(modes), "probes": [], "wrote": []}
     for mode in modes:
         r = _run_probe(launcher, vault, ["vault", "status", "--json"], mode)
-        _probe_ok(r, f"vault status ({mode})", vault)
+        _probe_ok(r, f"vault status ({mode})", vault, done)
         doc = _payload(r.stdout, f"vault status --json ({mode})")
         selected = doc.get("id") or doc.get("vault_id")
 
@@ -554,11 +577,11 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
                                  "selected_by": how})
 
         r = _run_probe(launcher, vault, ["doctor"], mode)
-        _probe_ok(r, f"doctor ({mode})", vault)
+        _probe_ok(r, f"doctor ({mode})", vault, done)
         report["probes"].append({"mode": mode, "probe": "doctor", "rc": r.returncode})
 
         r = _run_probe(launcher, vault, ["status", "--json"], mode)          # the read verb
-        _probe_ok(r, f"status ({mode})", vault)
+        _probe_ok(r, f"status ({mode})", vault, done)
         report["probes"].append({"mode": mode, "probe": "status", "rc": r.returncode})
 
         # The guardrail-gated write. It is a REAL write through the product's own safe-write path,
@@ -571,7 +594,7 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
             continue
         stamp = f"plainkeep migration canary {time.strftime('%Y-%m-%dT%H:%M:%S')} ({mode})"
         r = _run_probe(launcher, vault, ["capture", stamp, "--json"], mode)
-        _probe_ok(r, f"capture ({mode})", vault)
+        _probe_ok(r, f"capture ({mode})", vault, done)
         wrote = _payload(r.stdout, f"capture --json ({mode})")
         path = wrote.get("path") or wrote.get("wrote") or ""
         if path and not (vault / path).exists() and not Path(path).exists():
@@ -599,14 +622,27 @@ def _payload(raw: str, what: str) -> dict:
     return data if isinstance(data, dict) else doc
 
 
-def _probe_ok(r: subprocess.CompletedProcess, what: str, vault: Path) -> None:
-    if r.returncode != 0:
+def _probe_ok(r: subprocess.CompletedProcess, what: str, vault: Path,
+              done: dict | None = None) -> None:
+    """Refuse on a failed probe, SAYING WHICH OF THE THREE PROOFS THIS IS.
+
+    `done` is `{"summary", "hint"}` from a caller that knows the vault is already migrated (see
+    `prove`). Its absence is not a default so much as the pre-removal case: nothing has been removed,
+    the vault still has its engine copy, and re-running after a fix is exactly the right advice."""
+    if r.returncode == 0:
+        return
+    body = _clip(r.stderr or r.stdout)
+    if done is None:
         raise VaultError(
             f"prove-before-remove FAILED at `{what}` (exit {r.returncode}) — nothing was removed:\n"
-            + (r.stderr.strip() or r.stdout.strip() or "(no output)")[:1200],
+            + body,
             code=output.EXIT_DENY,
             hint=f"the vault at {vault} still carries its own engine copy; fix the failure above "
                  "and re-run the migration")
+    raise VaultError(
+        f"{done['summary']} — and the RE-PROOF then failed at `{what}` (exit {r.returncode}):\n"
+        + body,
+        code=output.EXIT_DENY, hint=done["hint"])
 
 
 # --- schedules --------------------------------------------------------------------------------------
@@ -636,6 +672,9 @@ def _sanitized_env(plist_env: dict) -> dict:
             env[k] = os.environ[k]
     env.update({str(k): str(v) for k, v in plist_env.items()})
     return env
+
+
+EXEC_FAILED = (126, 127)     # the shell's "found but not executable" / "not found"
 
 
 def regenerate_schedules(vault: Path, launcher: Path, engine: Path) -> dict:
@@ -810,8 +849,6 @@ def _refuse_unrepresentable(paths_: list[str]) -> None:
     if bad:
         raise VaultError("refusing: an engine path contains a newline and cannot be expressed in the "
                          "index-info deletion form", code=output.EXIT_DENY)
-
-
 def _clean_tree_gate(vault: Path, *, op: str = "migration") -> list[str]:
     """ACCEPTANCE ITEM 2's clean-tree requirement, scoped to what a migration can actually harm.
 
@@ -920,7 +957,6 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
         doc.update({"would_remove": [], "protected_files": None, "candidate_tree": None,
                     "verdict": "already migrated — nothing to remove"})
         return doc
-
     if st == "pristine":
         doc["dirty_but_harmless"] = _clean_tree_gate(vault)
 
@@ -1286,13 +1322,29 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
                "protected_files": before["count"], "canary_writes": proof["wrote"],
                "resumed": pre["state"] == "resume",
                "migrated_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
-        write_receipt(doc)
+        rec_path = write_receipt(doc)
         _kill_hook("receipt")
 
         # PROVE AGAIN, after the removal. The first proof said the installed pair can operate this
         # vault; this one says it still can with the vault's own copy gone — which is the sentence an
         # operator actually cares about and is not implied by the first.
-        doc["proof_after"] = prove(vault, vault_id, launcher, engine)
+        #
+        # AND IF IT FAILS, THE REFUSAL DESCRIBES THE VAULT AS IT NOW IS. Everything above this line
+        # has happened: the paths are gone, the commit is made, the receipt on disk says `complete`.
+        # A failure here is a failure of the re-proof, not of the migration, and the pre-removal
+        # text — "nothing was removed", "the vault still carries its own engine copy" — is false in
+        # both halves at this point. Re-running is not the recovery either: `state()` answers
+        # `migrated`, so a re-run is a no-op that cannot change anything the operator needs changed.
+        doc["proof_after"] = prove(
+            vault, vault_id, launcher, engine,
+            done={"summary": (f"the migration of {vault} COMPLETED — {len(doc['removed'])} engine "
+                              f"path(s) removed in commit {str(doc['after_commit'])[:12]}, receipt "
+                              f"at {rec_path}"),
+                  "hint": ("this vault IS migrated and its receipt is complete, so there is nothing "
+                           "left to remove and starting the migration again cannot change that. Fix "
+                           "the failure above and re-check with `plainkeep doctor`. To put this "
+                           "vault's engine copy back instead:\n"
+                           f"    python3 {Path(__file__).resolve()} --rollback {vault} --yes")})
         # Every note this migration wrote, in one field. The post-removal proof performs the same
         # guardrail-gated capture the pre-removal one does, and a `canary_writes` that listed only
         # the first half would under-report the migration's own footprint in the receipt an operator
@@ -1674,8 +1726,21 @@ def main(argv: list[str]) -> int:
                                  f"    python3 {enginetree.__file__} --install <source-checkout>")
                     prov = {"version": act.name, "previous": None, "reused": True, "path": str(act)}
                 engine = enginetree.versions_dir() / prov["version"]
+                # The same truth requirement as the post-removal re-proof, on the other path that
+                # reached prove-before-remove's sentence with it false: this vault was migrated,
+                # possibly minutes ago, and telling its owner that "nothing was removed" and that it
+                # "still carries its own engine copy" is the class of message this module's own
+                # design notes forbid.
                 proof = prove(Path(pre["vault"]), pre["vault_id"],
-                              enginetree.current_link() / "plainkeep", engine, write=False)
+                              enginetree.current_link() / "plainkeep", engine, write=False,
+                              done={"summary": f"{pre['vault']} is already migrated — this run is "
+                                               "the second-run no-op, which RE-PROVES that the "
+                                               "installed engine still operates the vault",
+                                    "hint": ("nothing is left to remove, so this is a failed health "
+                                             "check and not a failed migration. Fix the failure "
+                                             "above and re-check with `plainkeep doctor`; the "
+                                             "vault's engine copy can be restored with "
+                                             "`--rollback` while its receipt exists.")})
                 # A kill at `worktree-pruned` reaches this branch with a PROVISIONAL receipt: the
                 # vault is fully migrated but the run that did it never finished. Complete the
                 # record here or the operator has a migrated vault and no rollback at all.

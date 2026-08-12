@@ -883,7 +883,10 @@ def regenerate_schedules(vault: Path, launcher: Path, engine: Path) -> dict:
             continue
         routing = _routing_probe(vault, plist.name, program, penv, launcher)
         rr = _sanitized_run([*args, "--dry-run"], penv, plist.name)
-        exercised.append({"plist": plist.name, "rc": rr.returncode, "verdict": rr.returncode != 0,
+        # `nonzero`, not `verdict`. It was `verdict`, which read as "this schedule is fine" while
+        # meaning `rc != 0` — a field name that inverts its own sense in the one record an operator
+        # reads to find out what happened.
+        exercised.append({"plist": plist.name, "rc": rr.returncode, "nonzero": rr.returncode != 0,
                           **routing})
     if stale:
         raise VaultError("regenerated schedules still point INSIDE the vault:\n  " + "\n  ".join(stale),
@@ -1213,15 +1216,21 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
         doc.update({"would_remove": [], "protected_files": None, "candidate_tree": None,
                     "verdict": "already migrated — nothing to remove"})
         return doc
-    if st == "pristine":
-        # PRISTINE ONLY, and that is a convergence property rather than an oversight. A `resume`
-        # vault is mid-removal: `bin/lib/migrate.py` may already be gone from its working tree, and
-        # refusing there would make a half-pruned vault permanently unfinishable — "a gate that a
-        # correct partial run cannot get past is not a safety property, it is a trap"
-        # (`_clean_tree_gate`, which paid for the same lesson). It also could not be describing a
-        # real hazard: `state()` answers `resume` only when HEAD carries the migration commit, which
-        # is made after `provision()`, so the engine is already installed and `provision()` reuses it
-        # rather than installing from this source at all.
+    if st == "pristine" or engine_source is not None:
+        # THE NARROWING IS ABOUT THE DEFAULTED SOURCE, NOT ABOUT THE STATE. A `resume` vault is
+        # mid-removal, so its own copy — which is what `engine_source` DEFAULTS to — may already be
+        # missing `bin/lib/migrate.py` through nothing but the interruption. Refusing on that would
+        # make a half-pruned vault permanently unfinishable: "a gate that a correct partial run
+        # cannot get past is not a safety property, it is a trap" (`_clean_tree_gate`, which paid for
+        # the same lesson). An EXPLICITLY supplied source cannot create that trap — dropping the flag
+        # is always available — so it is checked in every state.
+        #
+        # This condition used to be `st == "pristine"` alone, justified by the claim that a resume
+        # could not be describing a real hazard because `provision()` would reuse the already-active
+        # pair rather than install from this source. Review r1 measured that false: reuse is keyed on
+        # the VERSION STRING — the exact collision this check exists to stop trusting — so a resume
+        # vault plus `--engine-source <tree with a different VERSION and no migrate.py>` installed
+        # and ACTIVATED it at exit 0. The claim is gone rather than reworded.
         _check_engine_source(src, defaulted=engine_source is None)
 
     if st == "pristine":
@@ -1927,7 +1936,18 @@ def _render_migrate(d: dict) -> None:
           + (f", previous {d['engine']['previous']} retained" if d["engine"]["previous"] else ""))
     print(f"  removed       {len(d['removed'])} engine path(s) in commit {str(d['after_commit'])[:12]}")
     print(f"  protected     {d['protected_files']} file(s), byte-identical across the removal")
-    print(f"  schedules     {len(d['schedules']['rendered'])} plist(s) regenerated and exercised")
+    # THE NON-ZERO EXERCISES ARE SAID OUT LOUD. `regenerate_schedules` deliberately stopped gating on
+    # a job verb's exit code (F1: the code is a verdict about the vault and the exit space cannot
+    # separate one from a failure) — but not gating on it is not a reason to stop REPORTING it. A
+    # schedule naming a verb that does not exist exits 4, is correctly not refused, and used to leave
+    # the operator reading "2 plist(s) regenerated and exercised" with nothing to act on. The signal
+    # belongs here; the blocker does not come back.
+    sched = d["schedules"]
+    hot = [e for e in sched.get("exercised") or [] if e.get("nonzero")]
+    print(f"  schedules     {len(sched['rendered'])} plist(s) regenerated and exercised"
+          + (f", {len(hot)} exited NON-ZERO — recorded, not gated: "
+             + ", ".join(f"{e['plist']} rc {e['rc']}" for e in hot[:3])
+             + (f" and {len(hot) - 3} more" if len(hot) > 3 else "") if hot else ""))
     r = d["launcher_route"]
     print(f"  launcher      {r['path']} -> "
           + (f"{r.get('new_target')} (repointed from {r.get('old_target')})" if r.get("repointed")

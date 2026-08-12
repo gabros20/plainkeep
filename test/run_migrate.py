@@ -2320,11 +2320,20 @@ def case_a_health_signal_verb_does_not_block_the_migration(tmp: Path) -> None:
     check("F1: fixture — the scheduled verb exits non-zero as a HEALTH VERDICT",
           nag.returncode != 0, f"rc={nag.returncode} {(nag.stdout + nag.stderr)[:200]}")
 
-    r, doc = mig_json(fx, "--migrate", str(v), "--yes")
+    # Driven WITHOUT `--json`, because the operator-facing summary is half of what this cell is now
+    # about; the receipt is read back afterwards through the product's own `--print receipt`.
+    r = mig(fx, "--migrate", str(v), "--yes")
     check("F1: the migration COMPLETES with a health-signal job scheduled",
           r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:700]}")
     if r.returncode != EXIT_OK:
         return
+    rp = mig(fx, "--print", "receipt", str(v))
+    doc = json.loads(rp.stdout) if rp.returncode == EXIT_OK else {}
+
+    # The migration does not gate on the verb's exit code — and it does not go quiet about it either.
+    check("F1: the summary SAYS a schedule exited non-zero, rather than only the receipt knowing",
+          "NON-ZERO" in r.stdout and "backup_check" in r.stdout and "not gated" in r.stdout,
+          [ln for ln in r.stdout.splitlines() if "schedules" in ln])
 
     ex = (doc.get("schedules") or {}).get("exercised") or []
     bc = next((e for e in ex if "backup_check" in str(e.get("plist"))), None)
@@ -2336,7 +2345,10 @@ def case_a_health_signal_verb_does_not_block_the_migration(tmp: Path) -> None:
           and bc.get("program") == str(root / "engine" / "current" / "plainkeep")
           and os.path.realpath(str(bc.get("home"))) == os.path.realpath(v), str(bc))
     check("F1: ...and the verb's own non-zero exit is RECORDED as a verdict, not a refusal",
-          bc.get("rc") not in (None, 0) and bc.get("verdict") is True, str(bc))
+          bc.get("rc") not in (None, 0) and bc.get("nonzero") is True, str(bc))
+    check("F1: ...under a field name that means what it says",
+          "verdict" not in bc and (fc := next((e for e in ex if e.get("rc") == 0), None)) is not None
+          and fc.get("nonzero") is False, str(ex))
     check("F1: every schedule was routing-proved", bool(ex)
           and all(e.get("routed") is True for e in ex), str(ex))
 
@@ -2660,6 +2672,64 @@ def case_a_pre_phase2_engine_source_refuses(tmp: Path) -> None:
           r.returncode == EXIT_OK, f"rc={r.returncode} {r.stderr[:400]}")
 
 
+def case_an_explicit_engine_source_is_checked_on_a_resume(tmp: Path) -> None:
+    """NEW-2 (review r1). The source check was scoped to a PRISTINE run, and that was reachable.
+
+    The narrowing exists for the DEFAULTED source: a `resume` vault is mid-removal, so its own copy
+    — which is what `engine_source` defaults to — may be missing `bin/lib/migrate.py` through nothing
+    but the interruption, and refusing there would make a half-pruned vault unfinishable. It was
+    justified with a second claim as well: that a resume could not be a real hazard because
+    `provision()` would reuse the already-active pair. Review r1 measured that false. Reuse is keyed
+    on the VERSION STRING — the exact collision this check exists to stop trusting — so a source with
+    a different `VERSION` and no `migrate.py` was INSTALLED AND ACTIVATED at exit 0, on the one path
+    the canary report tells the live run to use ("pass `--engine-source <repo checkout>`
+    explicitly").
+
+    An explicitly supplied source cannot create the convergence trap — dropping the flag is always
+    available — so it is checked in every state, and the last cell here pins that the defaulted
+    resume still converges."""
+    fx = vm.phase1_vault(tmp, "resumesrc")
+    v, root = fx["vault"], fx["root"]
+
+    r = mig(fx, "--migrate", str(v), "--yes", PLAINKEEP_MIGRATE_KILL_AT="tree-written")
+    check("NEW-2: fixture — the run died at `tree-written`", r.returncode in (-9, 137),
+          f"rc={r.returncode} {r.stderr[:300]}")
+    _, pre = mig_json(fx, "--preflight", str(v))
+    check("NEW-2: fixture — the vault is in `resume`", pre.get("state") == "resume",
+          str(pre.get("state")))
+
+    # A source that is a real engine tree in every respect except the one that matters, and whose
+    # VERSION does NOT collide with the installed pair — so `provision()` would install it rather
+    # than reuse anything. Only `migrate.py` is removed: with BOTH modules gone `enginetree.install`
+    # refuses on its own, which would mask this check behind another module's defence.
+    stale = fx["base"] / "no-migrate-engine"
+    shutil.copytree(REPO, stale, symlinks=True,
+                    ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".venv", "test"))
+    (stale / "bin" / "lib" / "migrate.py").unlink()
+    (stale / "VERSION").write_text("9.9.9-nomigrate\n", encoding="utf-8")
+
+    r = mig(fx, "--preflight", str(v), "--engine-source", str(stale))
+    check("NEW-2: an EXPLICIT source is checked on a resume too", r.returncode == EXIT_DENY,
+          f"rc={r.returncode} {r.stderr[:300]}")
+    check("NEW-2: ...naming the missing module and the flag",
+          "migrate.py" in r.stderr and "--engine-source" in r.stderr, r.stderr[:400])
+
+    r = mig(fx, "--migrate", str(v), "--yes", "--engine-source", str(stale))
+    check("NEW-2: ...and the migration refuses rather than installing it",
+          r.returncode == EXIT_DENY, f"rc={r.returncode} {r.stderr[:300]}")
+    check("NEW-2: the Phase-1 engine was NEVER installed",
+          not (root / "engine" / "9.9.9-nomigrate").exists(),
+          str(sorted(p.name for p in (root / "engine").iterdir())))
+    check("NEW-2: ...and `current` still carries a migrate-capable engine",
+          (root / "engine" / "current" / "bin" / "lib" / "migrate.py").is_file())
+
+    # The convergence property the narrowing exists for, pinned: the DEFAULTED source on a resume is
+    # still not checked, so a half-pruned vault can always be finished.
+    r = mig(fx, "--migrate", str(v), "--yes")
+    check("NEW-2: the defaulted source on a resume still CONVERGES", r.returncode == EXIT_OK,
+          f"rc={r.returncode} {r.stderr[:400]}")
+
+
 # ==================================================================================================
 # Runner
 # ==================================================================================================
@@ -2714,6 +2784,8 @@ CASES = (
     ("F3: a re-proof on a migrated vault tells the truth",
      case_a_reproof_on_a_migrated_vault_tells_the_truth),
     ("engine_source: a pre-phase-2 source refuses", case_a_pre_phase2_engine_source_refuses),
+    ("engine_source: an explicit source is checked on a resume too",
+     case_an_explicit_engine_source_is_checked_on_a_resume),
 )
 
 

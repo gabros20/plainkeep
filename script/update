@@ -17,6 +17,22 @@
 # and a rollback is re-activating the previous version.
 set -euo pipefail
 
+# READ THE WHOLE SCRIPT BEFORE RUNNING ANY OF IT.
+#
+# This script refreshes engine paths — and `script/` is an engine path, so it can rewrite ITSELF
+# mid-run. bash executes a script by reading it incrementally from a file offset, so a merge that
+# changes this file's length underneath a running bash resumes at a byte offset in the NEW content
+# and executes whatever lands there. A conflicted self-update did exactly that: the merge wrote
+# `<<<<<<<` markers in, and bash died with `line 122: single: command not found` (exit 127) AFTER
+# the walk had already staged real changes — an incoherent failure at the worst possible moment,
+# and one the operator cannot act on.
+#
+# Wrapping the body in a compound command forces bash to parse through the closing brace — the end
+# of the file — before executing anything, so the rest of the run is served from what was parsed
+# rather than re-read from a file that is now being rewritten. The trailing `exit` guarantees
+# nothing after the brace is ever reached.
+{
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE="upstream"; BRANCH="main"
 while [ $# -gt 0 ]; do
@@ -161,3 +177,6 @@ else
   echo "  plainkeep doctor                          # confirm healthy"
   echo "  git -C '$ROOT' commit -m 'plainkeep: update engine from upstream'"
 fi
+
+}
+exit

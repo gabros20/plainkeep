@@ -1,7 +1,7 @@
 {
   "verb": "share",
   "summary": "capability-URL share: publish a note (or tag collection) as one unguessable link; browser gets HTML, <url>.md is raw markdown for agents",
-  "usage": "plainkeep share <slug> [--expires 7d] [--gist] [--dry-run|--yes] | collection <tag> | list | pull <url> | revoke <id> --yes | init",
+  "usage": "plainkeep share <slug> [--expires 7d] [--gist] [--dry-run|--yes] | collection <tag> | list | pull <url> | revoke <id> --yes | prune [--yes] | init",
   "risk": "safe_write",
   "args": [
     {
@@ -17,7 +17,7 @@
     ".share/",
     "journal/"
   ],
-  "hints": "Share a note or `collection <tag>` as ONE self-contained OPSX bundle (raw markdown + rendered HTML), published PLAINTEXT to a Cloudflare Worker+KV under a 24-char unguessable token (~124 bits) -- no encryption, no key. Secrecy = link secrecy + TTL, same trust model as a secret gist; the worker can technically read published content (accepted tradeoff, see ADR-008). ONE link for everyone: the bare URL renders HTML in a browser; append `.md` (or paste the printed `agents:` line) and any chat/coding agent's fetch tool gets raw wiki markdown -- content negotiation also serves markdown to non-browser Accept headers on the bare URL. `plainkeep share pull <url>` fetches + unpacks the same markdown locally. Legacy encrypted links from the old zero-knowledge model return 410 -- re-publish. Transmitting subactions (share/collection/revoke) self-gate --yes -> EXIT_CONFIRM(3) because a PUT is a transmission; `list` and `pull` are free reads. `--dry-run` renders locally and stops before the PUT. `--gist` = secret gist fallback (same trust model, hosted by GitHub). `plainkeep share init` deploys the worker and provisions the `X-Publish-Token` (`--yes` runs `wrangler deploy` + `wrangler secret put PUBLISH_TOKEN`). Common mistake: expecting it to send the link — output is a DRAFT link, the human sends it.",
+  "hints": "Share a note or `collection <tag>` as ONE self-contained OPSX bundle (raw markdown + rendered HTML), published PLAINTEXT to a Cloudflare Worker+KV under a 24-char unguessable token (~124 bits) -- no encryption, no key. Secrecy = link secrecy + TTL, same trust model as a secret gist; the worker can technically read published content (accepted tradeoff, see ADR-008). ONE link for everyone: the bare URL renders HTML in a browser; append `.md` (or paste the printed `agents:` line) and any chat/coding agent's fetch tool gets raw wiki markdown -- content negotiation also serves markdown to non-browser Accept headers on the bare URL. `plainkeep share pull <url>` fetches + unpacks the same markdown locally. Legacy encrypted links from the old zero-knowledge model return 410 -- re-publish. Transmitting subactions (share/collection/revoke) self-gate --yes -> EXIT_CONFIRM(3) because a PUT is a transmission; `list` and `pull` are free reads. `--dry-run` renders locally and stops before the PUT. `--gist` = secret gist fallback (same trust model, hosted by GitHub). `plainkeep share init` deploys the worker and provisions the `X-Publish-Token` (`--yes` runs `wrangler deploy` + `wrangler secret put PUBLISH_TOKEN`). `plainkeep share prune` drops ledger entries whose share is revoked or past its expiry, and clears the `share:` frontmatter they left on the note; a dry run without `--yes`. Common mistake: expecting it to send the link — output is a DRAFT link, the human sends it.",
   "output": {
     "mode": "rows",
     "fields": {
@@ -79,6 +79,13 @@
       "args": [
         { "name": "id", "type": "string", "required": true, "help": "the share id from `plainkeep share list`" }
       ]
+    },
+    {
+      "name": "prune",
+      "summary": "drop ledger entries for revoked/expired shares; needs --yes to write",
+      "risk": "safe_write",
+      "dry_run": true,
+      "args": []
     },
     {
       "name": "init",

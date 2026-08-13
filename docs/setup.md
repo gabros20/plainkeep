@@ -56,6 +56,12 @@ python3 "$ENG/bin/lib/enginetree.py" --update .      # 2. stage → checksum →
 plainkeep doctor                                     # 3. confirm
 ```
 
+Step 1 re-runs itself once if the update changed `script/engine.txt` (it prints
+`script/engine.txt changed — re-running against the new manifest`). That matters because the
+manifest is an engine path too: a pass reads the list it started with, so a newly ADDED entry could
+otherwise pull the name of a file without the file, and step 2 would then refuse for a missing
+source path that the manifest had only just started requiring.
+
 If step 2 refuses, nothing was activated and you are still on the pair you were running. If step 3
 is unhappy, the rollback is three lines and it is a tested sequence, not advice:
 

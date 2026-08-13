@@ -80,7 +80,14 @@ export default {
 
     // PUT / — publish an OPSX blob.
     if (request.method === "PUT" && path === "") {
-      if (env.PUBLISH_TOKEN && request.headers.get("X-Publish-Token") !== env.PUBLISH_TOKEN) {
+      // FAIL CLOSED. This used to read `if (env.PUBLISH_TOKEN && …)`, so a Worker with no secret
+      // accepted every publish: the `&&` short-circuited and the comparison never ran. A freshly
+      // deployed Worker has no secrets, which made "deployed but not yet configured" an open,
+      // unauthenticated write endpoint. Absence of the secret is now a refusal, not a bypass.
+      if (!env.PUBLISH_TOKEN) {
+        return json({ error: "worker has no PUBLISH_TOKEN", hint: "run: plainkeep share init --yes" }, 503);
+      }
+      if (request.headers.get("X-Publish-Token") !== env.PUBLISH_TOKEN) {
         return json({ error: "publish token required", hint: "run: plainkeep share init" }, 401);
       }
       const ttl = Math.max(60, parseInt(request.headers.get("X-Expire-Seconds") || "604800", 10));

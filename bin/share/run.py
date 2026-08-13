@@ -21,6 +21,7 @@ locally and stops before the PUT. Fallback for the unprovisioned: `--gist` (secr
 """
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -131,8 +132,12 @@ def _revoke_remote(endpoint: str, sid: str, token: str) -> None:
         pass
 
 
-def _stamp_frontmatter(path: Path, url: str) -> None:
-    """Splice/replace a `share:` line in the note's frontmatter (audit trail; sweep reads the ledger)."""
+def _stamp_frontmatter(path: Path, url: str | None) -> None:
+    """Splice/replace the `share:` line in a note's frontmatter; `url=None` removes it.
+
+    Removal is what revoke needs: a note that advertises a URL returning 404 is worse than one
+    advertising nothing, and the stale value is committed like any other content change.
+    """
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except Exception:
@@ -143,8 +148,25 @@ def _stamp_frontmatter(path: Path, url: str) -> None:
     if end is None:
         return
     body = [ln for ln in lines[1:end] if not ln.startswith("share:")]
-    body.append(f"share: {url}")
+    if url is not None:
+        body.append(f"share: {url}")
+    elif len(body) == len(lines[1:end]):
+        return                                   # nothing to strip — leave the file untouched
     vaultio.write_text(path, "\n".join(["---", *body, "---", *lines[end + 1:]]) + "\n", encoding="utf-8")
+
+
+def _unstamp_entry(entry: dict) -> list[str]:
+    """Strip the `share:` field from every note an entry published. Returns the paths cleared."""
+    cleared = []
+    for rel in entry.get("note_paths") or entry.get("notes") or []:
+        p = paths.PLAINKEEP_HOME / rel
+        if not p.is_file():
+            continue
+        before = p.read_text(encoding="utf-8")
+        _stamp_frontmatter(p, None)
+        if p.read_text(encoding="utf-8") != before:
+            cleared.append(rel)
+    return cleared
 
 
 # --------------------------------------------------------------------------- share / collection
@@ -324,9 +346,61 @@ def cmd_revoke(argv):
     entry["revoked"] = True
     entry["revoked_ts"] = int(datetime.now(timezone.utc).timestamp())
     _write_ledger(led)
+    cleared = _unstamp_entry(entry)   # the note must stop advertising a URL that now 404s
     paths.append_journal(f"share revoke {sid}")
-    return output.emit({"id": sid, "revoked": True}, "share",
-                       human=lambda _: f"{GREEN}revoked{RESET} {sid}")
+    return output.emit({"id": sid, "revoked": True, "unstamped": cleared}, "share",
+                       human=lambda _: f"{GREEN}revoked{RESET} {sid}"
+                                       + (f" ({len(cleared)} note(s) unstamped)" if cleared else ""))
+
+
+# --------------------------------------------------------------------------- prune
+
+def cmd_prune(argv):
+    """Drop ledger entries whose share is gone (revoked, or past its expiry).
+
+    The ledger is append-only in practice: `revoke` marks an entry but nothing removes one, and an
+    expired share just stops resolving. `share list` therefore reports links that cannot be fetched,
+    and the entries keep holding an `admin_token` and `key` for blobs that no longer exist.
+    """
+    yes = ("--yes" in argv) or ("-y" in argv)
+    led = _ledger()
+    now = int(datetime.now(timezone.utc).timestamp())
+
+    def dead(s: dict) -> str | None:
+        if s.get("revoked"):
+            return "revoked"
+        exp = s.get("expires_ts")
+        if exp and int(exp) < now:
+            return "expired"
+        return None
+
+    doomed = [(s, dead(s)) for s in led["shares"] if dead(s)]
+    keep = [s for s in led["shares"] if not dead(s)]
+    listing = [{"id": s.get("id"), "reason": why,
+                "notes": s.get("note_paths") or s.get("notes") or []} for s, why in doomed]
+
+    if not doomed:
+        return output.emit({"pruned": 0, "kept": len(keep), "entries": []}, "share",
+                           human=lambda _: f"nothing to prune ({len(keep)} live share(s))")
+    if not yes:
+        # A dry run is a read, so it needs no --yes; the WRITE is what is gated.
+        return output.emit({"pruned": 0, "kept": len(keep), "would_prune": listing}, "share",
+                           human=lambda _: f"would prune {len(doomed)} dead entr(y/ies), keeping "
+                                           f"{len(keep)}:\n  "
+                                           + "\n  ".join(f"{e['id']} — {e['reason']}" for e in listing)
+                                           + "\n(re-run with --yes to write)")
+
+    cleared = []
+    for s, _why in doomed:
+        cleared += _unstamp_entry(s)     # a pruned entry must not leave notes pointing at a dead URL
+    led["shares"] = keep
+    _write_ledger(led)
+    paths.append_journal(f"share prune ({len(doomed)} dead entr(y/ies))")
+    return output.emit({"pruned": len(doomed), "kept": len(keep),
+                        "entries": listing, "unstamped": cleared}, "share",
+                       human=lambda _: f"{GREEN}pruned{RESET} {len(doomed)} dead entr(y/ies), "
+                                       f"{len(keep)} live remain"
+                                       + (f" ({len(cleared)} note(s) unstamped)" if cleared else ""))
 
 
 # --------------------------------------------------------------------------- init
@@ -348,14 +422,80 @@ WRANGLER_TOML = SHARE_DIR / "wrangler.toml"
 WRANGLER_EXAMPLE = WORKER_DIR / "wrangler.toml.example"
 
 
+def _worker_entry() -> Path:
+    """Absolute path to `worker.js`, preferred through the `current` symlink.
+
+    `main` cannot be relative. wrangler resolves it against the CONFIG FILE's directory, not the
+    process cwd — and since Task 2 the config lives in the vault (`.share/`) while `worker.js`
+    ships with the engine, so a relative `main` resolves to `<vault>/.share/worker.js`, which
+    never exists. Pinning through `current` rather than the concrete version keeps a vault's
+    config valid across engine upgrades; it is only used when `current` really does point at the
+    running engine, so a vault pinned to an older engine still gets a correct concrete path.
+    """
+    concrete = (WORKER_DIR / "worker.js").resolve()
+    try:
+        from lib import enginetree
+        via_current = enginetree.current_link() / "bin" / "share" / "worker" / "worker.js"
+        if via_current.resolve() == concrete:
+            return via_current
+    except Exception:
+        pass
+    return concrete
+
+
+_MAIN_RE = re.compile(r'^main\s*=\s*"([^"]*)"', re.M)
+
+
+def _pin_worker_entry(text: str) -> str:
+    """Rewrite `main` to the absolute worker.js when it does not already resolve to a file."""
+    m = _MAIN_RE.search(text)
+    entry = _worker_entry()
+    if m:
+        cur = m.group(1)
+        if cur and (WRANGLER_TOML.parent / cur).exists():
+            return text                      # already resolvable from the config's dir — leave it
+        return text[:m.start()] + f'main = "{entry}"' + text[m.end():]
+    return text.rstrip("\n") + f'\nmain = "{entry}"\n'
+
+
 def _ensure_wrangler_toml() -> None:
     if WRANGLER_TOML.is_file():
+        # Repair configs written before `main` was pinned — otherwise every vault that already
+        # copied the example stays undeployable, and `init` is the only path that could fix it.
+        cur = WRANGLER_TOML.read_text(encoding="utf-8")
+        fixed = _pin_worker_entry(cur)
+        if fixed != cur:
+            vaultio.write_text(WRANGLER_TOML, fixed, encoding="utf-8")
         return
     if not WRANGLER_EXAMPLE.is_file():
         output.fail(output.EXIT_UNEXPECTED, "missing wrangler.toml.example in worker dir",
                     hint=f"reinstall the engine; expected {WRANGLER_EXAMPLE}", verb="share")
     vaultio.mkdir(SHARE_DIR)
-    vaultio.copy2(WRANGLER_EXAMPLE, WRANGLER_TOML)
+    vaultio.write_text(WRANGLER_TOML,
+                       _pin_worker_entry(WRANGLER_EXAMPLE.read_text(encoding="utf-8")),
+                       encoding="utf-8")
+
+
+def _worker_has_publish_token() -> bool:
+    """Whether the DEPLOYED worker actually holds a PUBLISH_TOKEN secret.
+
+    `wrangler secret list --config <toml>` prints a JSON array of {name, type}. Any failure to
+    determine this returns False: re-running `secret put` is idempotent and harmless, whereas a
+    wrong True is what leaves an endpoint unauthenticated.
+    """
+    import subprocess
+    try:
+        r = subprocess.run(["wrangler", "secret", "list", "--config", str(WRANGLER_TOML)],
+                           cwd=str(WORKER_DIR), capture_output=True, text=True, timeout=120)
+        if r.returncode != 0:
+            return False
+        start = r.stdout.find("[")
+        if start < 0:
+            return False
+        return any(s.get("name") == "PUBLISH_TOKEN"
+                   for s in json.loads(r.stdout[start:]) if isinstance(s, dict))
+    except Exception:
+        return False
 
 
 def _wrangler_kv_configured() -> bool:
@@ -440,9 +580,16 @@ def cmd_init(argv):
     # is), and the config it would otherwise pick up beside it does not exist there any more.
     r = subprocess.run(["wrangler", "deploy", "--config", str(WRANGLER_TOML)], cwd=str(WORKER_DIR))
     deployed = r.returncode == 0
-    token_set = bool(_config().get("publish_token"))
+    # Ask the WORKER what secrets it has — not `.share/config.json`. The local mirror says what this
+    # vault last generated, which is a different question: after a rename (or any deploy to a new
+    # worker name) the config still carries the old worker's token while the new worker has none.
+    # Trusting the mirror skipped `secret put` exactly when it was most needed, and — before the
+    # worker began failing closed — published an open endpoint while reporting "PUBLISH_TOKEN set".
+    token_set = deployed and _worker_has_publish_token()
     if deployed and not token_set:
-        token = secrets.token_urlsafe(24)
+        # Reuse the vault's existing token when it has one, so a redeploy under a new worker name
+        # keeps `.share/config.json` valid instead of silently invalidating it.
+        token = _config().get("publish_token") or secrets.token_urlsafe(24)
         sr = subprocess.run(["wrangler", "secret", "put", "PUBLISH_TOKEN",
                              "--config", str(WRANGLER_TOML)], cwd=str(WORKER_DIR),
                             input=token, text=True)
@@ -462,6 +609,8 @@ def main(argv):
         return cmd_list()
     if action == "revoke":
         return cmd_revoke(argv[1:])
+    if action == "prune":
+        return cmd_prune(argv[1:])
     if action == "init":
         return cmd_init(argv[1:])
     if action == "pull":
@@ -470,7 +619,8 @@ def main(argv):
         return cmd_share(argv)
     if not action or action.startswith("-"):
         output.fail(output.EXIT_USAGE,
-                    "usage: plainkeep share <slug> [--expires 7d] | collection <tag> | list | pull <url> | revoke <id> | init",
+                    "usage: plainkeep share <slug> [--expires 7d] | collection <tag> | list | pull <url> "
+                    "| revoke <id> | prune [--yes] | init",
                     verb="share")
     return cmd_share(argv)
 

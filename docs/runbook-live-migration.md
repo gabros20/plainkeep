@@ -37,6 +37,12 @@ engine files from upstream into the checkout (STAGED, reviewable); `script/setup
    Review `git diff --staged` briefly (engine paths only), then commit:
    `git -C <vault> commit -m "engine: sync to plainkeep main (Phase 2)"`.
    If merge-conflict markers are surfaced (a local engine edit), STOP and report to the human.
+   - `script/engine.txt` is itself an engine path, so when an update ADDS entries to it the first
+     pass pulls the new manifest but not the files it names. The script now detects that and prints
+     `script/engine.txt changed — re-running against the new manifest`, re-running once by itself.
+     On an older `script/update` that does not, run it a **second time** before step 6 — otherwise
+     step 6 refuses with `source tree is missing pyproject.toml`, which reads like a broken checkout
+     but is really a stale manifest.
 6. `<vault>/script/setup --yes` — installs the engine as a versioned tree outside the vault,
    repoints `~/.local/bin/plainkeep` at `…/engine/current/plainkeep`. Verify:
    `test -f ~/.local/share/plainkeep/engine/current/bin/lib/migrate.py && echo ok`

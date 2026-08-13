@@ -30,6 +30,21 @@ done
 
 git -C "$ROOT" remote | grep -qx "$REMOTE" || { echo "no '$REMOTE' remote — run script/setup first" >&2; exit 1; }
 
+# THE MANIFEST IS ITSELF AN ENGINE PATH, so a single pass can never deliver a path the update ADDS
+# to it: the walk below reads script/engine.txt as it was when the run started, while refreshing that
+# same file for next time. When upstream added `pyproject.toml`/`uv.lock`, every existing vault
+# pulled the new manifest but not the files it named, and `script/setup` then refused with
+# "source tree is missing pyproject.toml" — a message about a missing file, for what is actually a
+# stale manifest. Same trap for `templates/verb`: unsynced in pass 1, and since the recorded ref
+# predates the path there is no merge base, so the vault's stale copy survives and later trips the
+# migration's DIVERGED preflight on a file the user never edited.
+#
+# So: note the manifest now, and if the walk changes it, re-exec ONCE against the new one. A stable
+# manifest makes the second pass a no-op, so this converges; PLAINKEEP_UPDATE_PASS caps it at two
+# regardless, because a manifest that never stabilises must not loop forever.
+MANIFEST_BEFORE="$(git -C "$ROOT" hash-object "$ROOT/script/engine.txt" 2>/dev/null || echo absent)"
+UPDATE_PASS="${PLAINKEEP_UPDATE_PASS:-1}"
+
 printf '\033[1mfetching %s\033[0m\n' "$REMOTE"
 git -C "$ROOT" fetch -q "$REMOTE"
 
@@ -103,6 +118,14 @@ else
       fi
     done < <(g ls-tree -r --name-only "$REMOTE/$BRANCH" -- "$path")
   done < "$ROOT/script/engine.txt"
+fi
+
+MANIFEST_AFTER="$(git -C "$ROOT" hash-object "$ROOT/script/engine.txt" 2>/dev/null || echo absent)"
+if [ "$MANIFEST_AFTER" != "$MANIFEST_BEFORE" ] && [ "$UPDATE_PASS" -lt 2 ]; then
+  printf '\033[1mscript/engine.txt changed — re-running against the new manifest\033[0m\n'
+  # Before the ref is written, so the second pass still 3-way merges against the ref it started
+  # with rather than against the commit it is currently syncing to.
+  PLAINKEEP_UPDATE_PASS=2 exec "$ROOT/script/update" --remote "$REMOTE" --branch "$BRANCH"
 fi
 
 printf '%s\n' "$UPSTREAM_SHA" > "$REFFILE"; g add -- .plainkeep-engine-ref   # single clean write: one SHA + newline, never appended

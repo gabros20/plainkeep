@@ -1134,6 +1134,10 @@ def _only_vanished_object_errors(vault: Path, fsck) -> bool:
         if not named:
             return False                              # a complaint about something else → real
         for raw in named:
+            # git quotes the path in some messages ("unable to load rev-index for pack '<p>'").
+            # Strip them: a still-quoted string never exists as a path, which would make EVERY
+            # quoted complaint look like a vanished artifact — including a real one.
+            raw = raw.strip("'\"")
             p = Path(raw)
             if not p.is_absolute():
                 p = vault / raw
@@ -1273,18 +1277,24 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
     # OBJECT INTEGRITY (acceptance item 2). Full `fsck`, not `--connectivity-only`: the migration is
     # about to make a commit the operator's only recovery path depends on, and connectivity says
     # nothing about whether a blob still hashes to its name.
+    # A concurrent `git gc` makes fsck fail for reasons that are not corruption: it writes
+    # `.tmp-<pid>-pack-<sha>.pack` while packing, packs loose objects and unlinks them, and builds
+    # a rev-index that is briefly unreadable. All of it surfaces as a non-zero fsck naming a path
+    # that has ALREADY VANISHED by the time we look — which is exactly what distinguishes the race
+    # from a damaged object store, where the named file is still sitting there.
+    #
+    # Re-VERIFY rather than filter the messages out: each retry is a full fsck that still checks
+    # every object, so corruption co-occurring with packing is still caught. Only a clean run is
+    # accepted. Bounded, with a short pause, because packing takes longer than one immediate retry
+    # on a loaded machine — this gate guards the commit the operator's rollback depends on, so it
+    # must neither pass on unverified objects nor abort a healthy vault over git's housekeeping.
     t0 = time.time()
-    fsck = _git(vault, "-c", "gc.auto=0", "fsck", "--no-progress", "--no-dangling", check=False)
-    if fsck.returncode != 0 and _only_vanished_object_errors(vault, fsck):
-        # git writes `.tmp-<pid>-pack-<sha>.pack` while packing and unlinks it when done; an fsck
-        # landing in that window reports the temp pack as unreadable and exits non-zero. That is a
-        # race with git's own housekeeping, not a damaged object store — it turned this gate red on
-        # CI (fast, parallel, Linux) while every local run was green.
-        #
-        # Re-VERIFY rather than filter the message out: a second full fsck still checks every
-        # object, so a real corruption that happened to co-occur with packing is still caught. Only
-        # a clean second run is accepted.
+    for attempt in range(4):
         fsck = _git(vault, "-c", "gc.auto=0", "fsck", "--no-progress", "--no-dangling", check=False)
+        if fsck.returncode == 0 or not _only_vanished_object_errors(vault, fsck):
+            break
+        doc["fsck_retries"] = attempt + 1
+        time.sleep(0.5 * (attempt + 1))
     doc["fsck_seconds"] = round(time.time() - t0, 2)
     if fsck.returncode != 0:
         raise VaultError(f"git object integrity check FAILED in {vault}:\n"

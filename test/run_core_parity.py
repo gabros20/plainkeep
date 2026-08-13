@@ -775,7 +775,16 @@ def _symlink_alias(root: Path, holder: list[Path]) -> Path:
 #
 #   "signal"   — died by that signal (returncode -N), the floor's behavior for every terminating signal
 #   "fallback" — survived the re-raise and exited 128+N, the shell rendering (bun IGNORES the signal)
-#   "sigtrap"  — died by SIGTRAP instead (bun's crash handler intercepted the re-raise)
+#   "sigtrap"  — bun's crash handler intercepted the re-raise and aborted the process itself
+#
+# "sigtrap" is a CLASS, not one number. It was measured as SIGTRAP on macOS Silicon, but bun 1.3.14
+# on Linux panics out through SIGILL for the same cases ("panic(main thread): Floating point error
+# … oh no: Bun has crashed"), which turned this matrix red on a bun upgrade that changed nothing
+# about plainkeep. Which signal a crash handler aborts with is a bun implementation detail across
+# versions and platforms; what the case is pinning is that the core does NOT pass the fault signal
+# through the way the floor does. So the cell accepts any of the abort signals a crash handler uses,
+# and still fails if the core ever matches the floor (which would be the divergence being FIXED, and
+# should be a deliberate catalog edit rather than a silent green).
 #
 # The last two name the two measured classes of core/floor divergence, so a case says WHICH failure it
 # is pinning rather than just an opaque number. See .orchestrate/raw/task4-fix2-signal-matrix.log.
@@ -783,17 +792,30 @@ def _signal_number(name: str) -> int:
     return int(getattr(signal, name))
 
 
-def _expected_rc(spec, signum: int) -> int:
+# The signals a crash handler aborts through. SIGTRAP is what macOS Silicon was measured at;
+# bun 1.3.14 on Linux comes out through SIGILL; SIGABRT is the conventional third.
+_CRASH_ABORT_RCS = frozenset(-int(getattr(signal, s)) for s in ("SIGTRAP", "SIGILL", "SIGABRT")
+                             if hasattr(signal, s))
+
+
+def _expected_rc(spec, signum: int) -> frozenset:
+    """Acceptable returncodes for a cell. A set, because one form names a class (see above)."""
     if isinstance(spec, bool):
         raise ValueError(f"expect_returncodes cell must not be a bool: {spec!r}")
     if isinstance(spec, int):
-        return spec
+        return frozenset((spec,))
     if spec == "signal":
-        return -signum
+        return frozenset((-signum,))
     if spec == "fallback":
-        return 128 + signum
+        return frozenset((128 + signum,))
     if spec == "sigtrap":
-        return -int(signal.SIGTRAP)
+        # Deliberately NOT excluding -signum. bun aborts all four fault cases through SIGILL, so for
+        # v_kill(SIGILL) the abort rc and the sent signal coincide and an "it must differ from the
+        # signal" guard would fail the very case it is meant to describe. Proof of interception does
+        # not rest on the rc anyway: every cell using this form also carries
+        # expect_stderr_divergence, which asserts bun's crash report on stderr where the floor is
+        # silent. That is the assertion that would notice if the core stopped intercepting.
+        return _CRASH_ABORT_RCS
     raise ValueError(f"unknown expect_returncodes form: {spec!r}")
 
 
@@ -923,7 +945,7 @@ def _compare_dispatch(binary: str, fx: Fixture, inv: dict) -> tuple[bool, str]:
         else:
             signum = _signal_number(args[0]) if args else 0
             exp = (_expected_rc(want_rc["core"], signum), _expected_rc(want_rc["floor"], signum))
-            rc_ok = (core.returncode, floor.returncode) == exp
+            rc_ok = core.returncode in exp[0] and floor.returncode in exp[1]
         # expect_stderr_divergence pins the SECOND facet of the fault-signal divergence, found by the
         # exhaustive sweep and not by any returncode table: when bun's crash handler intercepts a
         # re-raised fault signal it also DUMPS A CRASH REPORT to stderr ("Bun v1.3.14 … macOS Silicon

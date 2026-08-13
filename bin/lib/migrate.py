@@ -1108,6 +1108,32 @@ def _refuse_dangling_symlinks(vault: Path, removed: list[str]) -> list[str]:
     return broken
 
 
+_TMP_PACK_RE = re.compile(r"packfile (\S*?\.tmp-\d+-pack-[0-9a-f]+\.(?:pack|idx)) cannot be accessed")
+
+
+def _only_transient_pack_errors(vault: Path, fsck) -> bool:
+    """True when every fsck complaint is about a temp packfile git has since removed.
+
+    `.tmp-<pid>-pack-<sha>.pack` is git's in-progress packing artifact. fsck run while another git
+    process is packing sees it, fails to read it, and exits non-zero. The file being GONE by the
+    time we look is what distinguishes the race from a genuinely unreadable pack — a real one stays
+    put, and this returns False so the caller raises.
+    """
+    lines = [ln.strip() for ln in (fsck.stderr + "\n" + fsck.stdout).splitlines() if ln.strip()]
+    if not lines:
+        return False
+    for ln in lines:
+        m = _TMP_PACK_RE.search(ln)
+        if not m:
+            return False                              # any other complaint → treat as real
+        named = Path(m.group(1))
+        if not named.is_absolute():
+            named = vault / named
+        if named.exists():
+            return False                              # still there → not a vanishing temp artifact
+    return True
+
+
 def _clean_tree_gate(vault: Path, *, op: str = "migration") -> list[str]:
     """ACCEPTANCE ITEM 2's clean-tree requirement, scoped to what a migration can actually harm.
 
@@ -1241,6 +1267,16 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
     # nothing about whether a blob still hashes to its name.
     t0 = time.time()
     fsck = _git(vault, "fsck", "--no-progress", "--no-dangling", check=False)
+    if fsck.returncode != 0 and _only_transient_pack_errors(vault, fsck):
+        # git writes `.tmp-<pid>-pack-<sha>.pack` while packing and unlinks it when done; an fsck
+        # landing in that window reports the temp pack as unreadable and exits non-zero. That is a
+        # race with git's own housekeeping, not a damaged object store — it turned this gate red on
+        # CI (fast, parallel, Linux) while every local run was green.
+        #
+        # Re-VERIFY rather than filter the message out: a second full fsck still checks every
+        # object, so a real corruption that happened to co-occur with packing is still caught. Only
+        # a clean second run is accepted.
+        fsck = _git(vault, "fsck", "--no-progress", "--no-dangling", check=False)
     doc["fsck_seconds"] = round(time.time() - t0, 2)
     if fsck.returncode != 0:
         raise VaultError(f"git object integrity check FAILED in {vault}:\n"

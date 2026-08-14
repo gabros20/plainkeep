@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import plistlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -145,7 +146,42 @@ def schedule_str(s: dict) -> str:
     return "?"
 
 
+def _when(s: dict) -> dict:
+    """The scheduling key for a job's cadence, as a plist fragment (one key, either shape)."""
+    if "interval_minutes" in s:
+        return {"StartInterval": int(s["interval_minutes"]) * 60}
+    cal: dict[str, int] = {}
+    if "daily" in s:
+        hh, mm = s["daily"].split(":"); cal = {"Hour": int(hh), "Minute": int(mm)}
+    elif "weekly" in s:
+        day, hhmm = s["weekly"].split(); hh, mm = hhmm.split(":")
+        wd = {"Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6}
+        cal = {"Weekday": wd.get(day, 0), "Hour": int(hh), "Minute": int(mm)}
+    elif "monthly" in s:
+        dom, hhmm = s["monthly"].split(); hh, mm = hhmm.split(":")
+        cal = {"Day": int(dom), "Hour": int(hh), "Minute": int(mm)}
+    return {"StartCalendarInterval": cal}
+
+
 def plist(name: str, job: dict) -> str:
+    """The launchd plist for one registry job.
+
+    BUILT AS DATA, SERIALIZED BY `plistlib` — never as an f-string of XML (r1/B1). The previous
+    version interpolated each whitespace token of `job["command"]` straight into `<string>{a}</string>`,
+    and `jobs/registry.json` is VAULT CONTENT: agent-writable, and it syncs between machines. A
+    command could therefore close the `<array>` and open top-level launchd keys of its own — the
+    proven payload set `Program` (which overrides the executable `ProgramArguments` names) and
+    `RunAtLoad` (fire at login rather than at 07:30), from a command whose first two tokens were
+    `plainkeep index` and so passed the §15 token model untouched.
+
+    That was survivable while the rendered file only sat in the vault waiting for a human to paste
+    `launchctl load`. It is not survivable now that `job enable` installs and bootstraps it, from a
+    setup layer that is on by default — the same registry write became persistence.
+
+    `plistlib` is stdlib, so the stdlib-only floor is unaffected, and the serializer owns escaping:
+    a `<` or an `&` in a command is now an argument containing those characters, which is what the
+    registry meant, instead of markup. Structure cannot be expressed by content at all — the keys of
+    this document are decided here and nowhere else."""
     # THE LAUNCHER IS ENGINE-OWNED (Phase 2 Task 2). This built
     # `$PLAINKEEP_HOME/plainkeep` — the vault-local shim — and ADR-014 names the line as one that
     # must change: after the engine moves out, that path is ENOENT at 2am, in a sanitized launchd
@@ -161,36 +197,16 @@ def plist(name: str, job: dict) -> str:
     toks = job["command"].split()
     args = ([str(enginetree.stable_launcher()), *toks[1:]]
             if toks and toks[0] == "plainkeep" else toks)
-    pa = "".join(f"\n      <string>{a}</string>" for a in args)
-    s = job["schedule"]
-    if "interval_minutes" in s:
-        when = f"  <key>StartInterval</key>\n  <integer>{int(s['interval_minutes']) * 60}</integer>"
-    else:
-        cal = {}
-        if "daily" in s:
-            hh, mm = s["daily"].split(":"); cal = {"Hour": int(hh), "Minute": int(mm)}
-        elif "weekly" in s:
-            day, hhmm = s["weekly"].split(); hh, mm = hhmm.split(":")
-            wd = {"Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6}
-            cal = {"Weekday": wd.get(day, 0), "Hour": int(hh), "Minute": int(mm)}
-        elif "monthly" in s:
-            dom, hhmm = s["monthly"].split(); hh, mm = hhmm.split(":")
-            cal = {"Day": int(dom), "Hour": int(hh), "Minute": int(mm)}
-        inner = "".join(f"\n    <key>{k}</key><integer>{v}</integer>" for k, v in cal.items())
-        when = f"  <key>StartCalendarInterval</key>\n  <dict>{inner}\n  </dict>"
     log = paths.PLAINKEEP_HOME / ".logs" / "jobs" / f"{name}.log"
-    return (f'<?xml version="1.0" encoding="UTF-8"?>\n'
-            f'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-            f'"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-            f'<plist version="1.0">\n<dict>\n'
-            f'  <key>Label</key>\n  <string>{label(name)}</string>\n'
-            f'  <key>ProgramArguments</key>\n  <array>{pa}\n  </array>\n'
-            f'  <key>EnvironmentVariables</key>\n  <dict>\n'
-            f'    <key>PLAINKEEP_HOME</key><string>{paths.PLAINKEEP_HOME}</string>\n  </dict>\n'
-            f'{when}\n'
-            f'  <key>StandardOutPath</key>\n  <string>{log}</string>\n'
-            f'  <key>StandardErrorPath</key>\n  <string>{log}</string>\n'
-            f'</dict>\n</plist>\n')
+    doc = {
+        "Label": label(name),
+        "ProgramArguments": list(args),
+        "EnvironmentVariables": {"PLAINKEEP_HOME": str(paths.PLAINKEEP_HOME)},
+        "StandardOutPath": str(log),
+        "StandardErrorPath": str(log),
+        **_when(job["schedule"]),
+    }
+    return plistlib.dumps(doc, fmt=plistlib.FMT_XML, sort_keys=True).decode("utf-8")
 
 
 def _read(p: Path) -> str | None:

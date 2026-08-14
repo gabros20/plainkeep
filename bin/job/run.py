@@ -184,7 +184,9 @@ def main(argv):
                 flag = f" {RED}⚠ {'; '.join(r['warns'])}{RESET}" if r["warns"] else f" {GREEN}✓{RESET}"
                 out.append(f"  {r['name']:<14} {DIM}{r['schedule']:<16}{RESET} {r['command']:<26} "
                            f"[{r['risk']}]{flag}")
-            out.append(f"\n  run one now:  plainkeep job run <name>     install schedule:  plainkeep job apply")
+            out.append("\n  run one now:  plainkeep job run <name>"
+                       "     schedule them:  plainkeep job enable --all --yes"
+                       "     what's live:  plainkeep job status")
             return "\n".join(out)
         return output.emit_rows(rows, "job", human=render)
 
@@ -295,7 +297,8 @@ def main(argv):
                 "launch_agents_dir": str(agents)}
 
         def render(_):
-            print(f"{action}d {len(done) - len(failed)}/{len(done)} job(s) -> {agents}/")
+            where = "installed into" if action == "enable" else "removed from"
+            print(f"{action}d {len(done) - len(failed)}/{len(done)} job(s) — {where} {agents}/")
             for d in done:
                 mark = f"{GREEN}✓{RESET}" if d["ok"] else f"{RED}✗{RESET}"
                 print(f"  {mark} {launchdlib.label(d['name'])}"

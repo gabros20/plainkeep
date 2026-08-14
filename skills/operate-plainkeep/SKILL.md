@@ -65,6 +65,10 @@ drive verbs by flags + `--json`, which is the better surface for an agent.
 
 ## 3. Orientation — run this at the start of every session
 1. Read today's and yesterday's `journal/YYYY/MM/*.md` to see what already happened.
+   The day's bookends are SCHEDULED by default (ADR-022): journal lines like
+   `started the day (automated)` / `closed the day (automated)` mean launchd ran
+   `start`/`close`, not a human — do not re-run `start` because nobody typed it; the note is
+   already seeded and a second run is a no-op you'd be logging for nothing.
 2. Run `plainkeep status` (active/waiting tasks, last close/backup/index).
 3. If your work is multi-step, open or create its task: `plainkeep task add "<title>"`.
 Do not start acting until you've oriented; the journal exists so you never repeat or
@@ -155,6 +159,8 @@ Discover the live, authoritative set with `plainkeep help`; this is the working 
 
 - Capture / find:    `plainkeep capture "<text>"` · `plainkeep search "<query>"`
 - Daily / weekly:    `plainkeep start` · `plainkeep close` · `plainkeep week`
+  (start/close run on a schedule by default — `plainkeep job status` shows rendered/installed/
+  loaded per job; run them by hand only when the schedule didn't, or the human asks)
 - Tasks:             `plainkeep task list|add "<title>"|show <id>|move <id> <status>|done <id>`
 - Knowledge:         `plainkeep wiki open <slug>|new <type> <name>|backlinks <slug>|stale|orphans`
 - Filing:            `plainkeep triage` (text → tasks/wiki) · `plainkeep files ingest` (binaries → ~/files + shadow note)
@@ -195,7 +201,13 @@ Discover the live, authoritative set with `plainkeep help`; this is the working 
 - System:            `plainkeep status` · `plainkeep doctor` · `plainkeep setup [<layer>] [--all] [--yes|--wizard]`
   (layered installer; paired with `plainkeep doctor` as checker; see
   [`docs/setup.md`](../../docs/setup.md)) · `plainkeep vault status|list` (which vault am I on,
-  which engine is running, how was it chosen) · `plainkeep backup` · `plainkeep index` · `plainkeep job …` · `plainkeep sweep`
+  which engine is running, how was it chosen) · `plainkeep backup` · `plainkeep index` · `plainkeep sweep`
+  · `plainkeep job list|status|run <name>|apply|enable|disable` — the §15 schedule. `status` is a
+  read (rendered / installed / loaded / drift); `run <name>` is the manual fallback for any job.
+  `enable`/`disable` MUTATE THE HUMAN'S LAUNCHD SESSION (`~/Library/LaunchAgents`) and are
+  confirm-class (`--yes`): never run them on your own initiative — only on the human's explicit
+  ask, and prefer showing them `--dry-run` output first. Doctor WARNs (never fails) on a
+  rendered-but-unloaded schedule or drift; the remedy it names is the human's to run.
   · `plainkeep complete --json` (completion candidates) · `plainkeep ui` (human TUI — not for agents;
   installed by `plainkeep setup ui --yes` as a compiled binary into `.local/bin/`)
 

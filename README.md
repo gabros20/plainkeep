@@ -41,8 +41,10 @@ sh get.sh
 plainkeep setup --wizard
 ```
 
-The wizard walks the optional layers with safe defaults: vault skeleton and the terminal UI **on**;
-semantic search, local models, and scheduled jobs **off** until you opt in. Prefer flags?
+The wizard walks the optional layers with safe defaults: vault skeleton, the terminal UI, and the
+**schedule** (daily start and close, hourly index, nightly consolidate — installed as launchd jobs,
+macOS) **on**; semantic search and local models **off** until you opt in. Every prompt is
+skippable, and `plainkeep job disable --all --yes` reverses the schedule at any time. Prefer flags?
 `plainkeep setup --all --yes` does the same non-interactively.
 
 Then try it:
@@ -79,7 +81,10 @@ rebuilt from the text — never the source of truth.
 ## Daily use
 
 The rhythm is five verbs — `start` → `capture` / `triage` / `task` → `close`, with `week` on
-Fridays. Everything else is discoverable:
+Fridays — and by default the bookends run themselves: setup schedules `start` (07:30) and `close`
+(18:30) as launchd jobs, so the day opens with your tasks carried forward and closes with a facts
+digest whether or not you typed anything. The verbs stay as manual levers (`plainkeep job status`
+shows what is scheduled and loaded). Everything else is discoverable:
 
 ```sh
 plainkeep help                      # the whole surface, grouped, with summaries
@@ -93,7 +98,7 @@ plainkeep ui                        # or just point-and-pick
 | Tasks | `task` (folder = status: inbox / active / waiting / done) |
 | Work | `new` · `repo` · `archive` · `files` · `sweep` |
 | Business | `invoice` (draft only) · `share` (capability links) |
-| Jobs | `job` (schedule the nightly verbs) |
+| Jobs | `job` (the schedule: `status` · `enable` · `disable` · `run` — on by default via setup) |
 | System | `status` · `orient` · `doctor` · `setup` · `backup` · `index` · `models` · `plugin` · `ui` · `help` |
 
 You never memorize paths or formats — the verb owns placement. And you never memorize flags either:

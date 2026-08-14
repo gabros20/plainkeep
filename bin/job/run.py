@@ -49,12 +49,7 @@ def _load():
 
 
 def _sched_str(s: dict) -> str:
-    if "interval_minutes" in s:
-        return f"every {s['interval_minutes']}m"
-    for k in ("daily", "weekly", "monthly"):
-        if k in s:
-            return f"{k} {s[k]}"
-    return "?"
+    return launchdlib.schedule_str(s)
 
 
 def _validate(name, job, external):

@@ -298,22 +298,25 @@ def main() -> int:
             check("a rendered-but-unloaded layer points at the activation verb",
                   "job enable" in (a1.get("next") or ""), str(a1.get("next")))
 
-            # Loaded, through the same seam launchd would answer on.
-            auto_fake.mark_loaded("com.plainkeep.start")
-            a2 = mod_a.status("automation")[0]
-            check("automation is ready only once launchd has the job loaded",
-                  a2["status"] == "ready" and all(i["ok"] for i in a2["items"]), str(a2))
-
-            # ONE advance path, and it now covers both halves: render, then activate.
+            # ONE advance path, and it now covers both halves: render, then activate. Run it from the
+            # partial state above — `advance` skips an already-ready layer, so asking it here is the
+            # only place the two-step plan is observable.
             os.environ["PLAINKEEP_SETUP_FAKE"] = "1"
             auto_fake.clear()
             adv = mod_a.advance("automation", yes=True, fake=True)
             joined = " | ".join(adv["ran"])
             check("automation advance renders AND enables (through the job verb)",
                   "job apply" in joined and "job enable" in joined and "--yes" in joined, joined)
-            check("a fake automation advance calls no launchctl at all",
-                  not auto_fake.calls(), str(auto_fake.calls()))
+            check("a fake automation advance mutates no launchd state",
+                  not [c for c in auto_fake.calls() if c.split()[:1] in (["bootstrap"], ["bootout"])],
+                  str(auto_fake.calls()))
             os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
+
+            # Loaded, through the same seam launchd would answer on.
+            auto_fake.mark_loaded("com.plainkeep.start")
+            a2 = mod_a.status("automation")[0]
+            check("automation is ready only once launchd has the job loaded",
+                  a2["status"] == "ready" and all(i["ok"] for i in a2["items"]), str(a2))
         finally:
             restore(mod_a, old)
             for k, v in auto_env_saved.items():

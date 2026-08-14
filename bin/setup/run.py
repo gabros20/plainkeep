@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import output, setuplib, vaultreg  # noqa: E402
+from lib import launchdlib, output, setuplib, vaultreg  # noqa: E402
 
 GLYPHS = {
     "ready": "✓",
@@ -138,9 +138,10 @@ def _handoffs() -> list[str]:
     backups = by_id.get("backups")
     if backups and backups["status"] != "ready" and backups.get("next"):
         handoffs.append(backups["next"])
-    automation = by_id.get("automation")
-    if automation and automation["status"] == "ready":
-        handoffs.append("load launchd plists")
+    # The standing "load launchd plists" handoff is GONE: `ready` now means the jobs are loaded
+    # (ADR-022), so printing it was telling the operator to do the thing that had just been done.
+    # A layer that is rendered-but-not-loaded carries `plainkeep job enable --all --yes` in its own
+    # `next`, which `_advance_all` already folds into this list.
     handoffs.append("push git changes")
     return list(dict.fromkeys(handoffs))
 
@@ -234,13 +235,45 @@ def _advance_all(*, yes: bool, dry: bool = False) -> int:
     return output.EXIT_UNEXPECTED if attempted_failed else output.EXIT_OK
 
 
-# Safe defaults for the interactive wizard (Task 11 / roadmap 5.4 "≤5 skippable prompts, vectors/jobs
-# OFF"): the required, safe-write skeleton is pre-selected ON; the heavy/opt-in layers default OFF (no
-# vectors, no model pulls, no scheduled jobs). backups is never a yes/no here — it's a human handoff
-# (gate="blocked"), surfaced as a printed next-step, never auto-run.
+# Safe defaults for the interactive wizard (Task 11 / roadmap 5.4 "≤5 skippable prompts"): the
+# required, safe-write skeleton is pre-selected ON; the heavy/opt-in layers default OFF (no vectors,
+# no model pulls). backups is never a yes/no here — it's a human handoff (gate="blocked"), surfaced
+# as a printed next-step, never auto-run.
 # The `ui` layer defaults ON: the wizard's audience is exactly who the TUI serves, and the install
 # is a small, sha256-verified binary download into the vault's own .local/bin (no system writes).
-WIZARD_DEFAULTS = {"skeleton": True, "search": False, "models": False, "automation": False, "ui": True}
+#
+# `automation` DEFAULTS ON as of ADR-022, and the roadmap line that said "jobs OFF" is what changed.
+# A system whose premise is that the day opens and closes without being asked cannot ship that
+# premise behind a prompt the operator has to know to say yes to — the default WAS the offering, and
+# it was off. It remains one skippable prompt (Enter now accepts instead of declining), it is
+# safe_write and reversible with `plainkeep job disable --all --yes`, and the prompt names the actual
+# jobs and times rather than the word "Schedules", because a default that installs something is one
+# whose text has to carry its own consent.
+WIZARD_DEFAULTS = {"skeleton": True, "search": False, "models": False, "automation": True, "ui": True}
+
+
+def _automation_prompt() -> str:
+    """The automation prompt, built from THIS vault's registry when it can be read.
+
+    A hardcoded sentence would be a second statement of the schedule, and the registry is
+    user-editable — someone who moved their close to 22:00 would be asked to agree to 18:30. So the
+    jobs and their times are read from the file the answer will actually act on, and the static
+    fallback (a vault with no registry yet — the wizard runs before `skeleton` on a fresh machine)
+    describes the shipped defaults it is about to create."""
+    reg = launchdlib.load_registry()
+    jobs = (reg or {}).get("jobs", {})
+    listed = [f"{name} ({launchdlib.schedule_str(job.get('schedule', {}))})"
+              for name, job in jobs.items() if launchdlib.schedulable(job)]
+    if not listed:
+        return ("schedule your day unattended — daily start (07:30) and close (18:30), hourly index, "
+                "nightly consolidate, weekly organize scan + backup check?")
+    return "schedule these to run unattended — " + ", ".join(listed) + "?"
+
+
+def _wizard_prompt(row: dict) -> str:
+    if row["id"] == "automation":
+        return _automation_prompt()
+    return f"set up {row['id']} — {row['title']}?"
 
 
 def _ask_yes_no(prompt: str, default: bool, ask) -> bool:
@@ -271,7 +304,9 @@ def _run_wizard(rows, ask, say) -> dict:
     handoffs: list[str] = []
     say("plainkeep setup — guided first run")
     say("  safe defaults are pre-selected; press Enter to accept each.")
-    say("  search / models / automation default to OFF (no vectors, no model pulls, no jobs).")
+    say("  scheduling your day (plainkeep's whole point) defaults to ON — reversible any time with")
+    say("    plainkeep job disable --all --yes")
+    say("  search / models default to OFF (no vectors, no model pulls).")
     say("  the terminal UI (plainkeep ui) defaults to ON — a small verified binary download.")
     for row in rows:
         lid, status = row["id"], row["status"]
@@ -287,7 +322,7 @@ def _run_wizard(rows, ask, say) -> dict:
             skipped.append(lid)
             continue
         # Attemptable (partial/absent): the one skippable prompt, pre-set to the safe default.
-        if not _ask_yes_no(f"set up {lid} — {row['title']}?", WIZARD_DEFAULTS.get(lid, False), ask):
+        if not _ask_yes_no(_wizard_prompt(row), WIZARD_DEFAULTS.get(lid, False), ask):
             say(f"  skip {lid}")
             skipped.append(lid)
             continue

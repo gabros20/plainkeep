@@ -133,6 +133,18 @@ def schedulable(job: dict) -> bool:
     return job.get("risk") in SCHEDULABLE
 
 
+def schedule_str(s: dict) -> str:
+    """A job's cadence in one human phrase — `every 60m`, `daily 07:30`, `weekly Sun 03:00`. Shared
+    with the wizard's automation prompt, which names the actual jobs and times it is about to
+    schedule rather than restating them in a sentence that can drift from the registry."""
+    if "interval_minutes" in s:
+        return f"every {s['interval_minutes']}m"
+    for k in ("daily", "weekly", "monthly"):
+        if k in s:
+            return f"{k} {s[k]}"
+    return "?"
+
+
 def plist(name: str, job: dict) -> str:
     # THE LAUNCHER IS ENGINE-OWNED (Phase 2 Task 2). This built
     # `$PLAINKEEP_HOME/plainkeep` — the vault-local shim — and ADR-014 names the line as one that

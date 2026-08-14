@@ -284,13 +284,13 @@ def main() -> int:
             check("automation is absent when nothing is rendered",
                   a0["status"] == "absent", str(a0))
 
-            # Rendered but never activated: the state the old layer called `ready`.
-            launchd_dir = auto_home / "jobs" / "launchd"
-            launchd_dir.mkdir(parents=True, exist_ok=True)
-            from lib import launchdlib  # noqa: E402  (bin/lib — sys.path is bin/ here)
-            reg = launchdlib.load_registry()
-            (launchd_dir / "com.plainkeep.start.plist").write_text(
-                launchdlib.plist("start", reg["jobs"]["start"]), encoding="utf-8")
+            # Rendered but never activated: the state the old layer called `ready`. Rendered by the
+            # PRODUCT (`plainkeep job apply`) rather than by reaching into the renderer, so the file
+            # the layer then judges is the one a real operator would have.
+            subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), "apply"],
+                           capture_output=True, text=True,
+                           env={**os.environ, "PLAINKEEP_HOME": str(auto_home),
+                                "PYTHONPATH": str(REPO / "bin")})
             a1 = mod_a.status("automation")[0]
             check("rendered-but-not-loaded is PARTIAL, never ready",
                   a1["status"] == "partial"

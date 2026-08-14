@@ -82,6 +82,7 @@ class Fake:
 def install(tmp) -> Fake:
     """Write the fake binary and its log/state/LaunchAgents directories under `tmp`."""
     tmp = Path(tmp)
+    tmp.mkdir(parents=True, exist_ok=True)
     exe = tmp / "fake-launchctl"
     exe.write_text(SCRIPT, encoding="utf-8")
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)

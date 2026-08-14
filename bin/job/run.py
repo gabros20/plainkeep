@@ -1,22 +1,40 @@
 #!/usr/bin/env python3
 """
-plainkeep job list | run <name> | apply — the §15 scheduler-neutral jobs surface. Definitions live in
-jobs/registry.json; `run` executes any job manually (the universal fallback); `apply` renders
-launchd plists into jobs/launchd/ and tells you how to load them (the privileged step stays yours).
-Jobs call ONE verb, log to .logs/jobs/, and only read/safe_write may be scheduled.
+plainkeep job list | run <name> | apply | enable | disable | status — the §15 scheduler-neutral jobs
+surface. Definitions live in jobs/registry.json; `run` executes any job manually (the universal
+fallback); `apply` renders launchd plists into jobs/launchd/. Jobs call ONE verb, log to .logs/jobs/,
+and only read/safe_write may be scheduled.
+
+ACTIVATION IS A VERB NOW (ADR-022). `apply` used to end by PRINTING a `ln -sf` and a `launchctl
+load` for the operator to paste, on the principle that the privileged, out-of-vault step was theirs.
+The result was that automation — which this system offers as the default way to use it — was reliably
+rendered and unreliably running, and nothing could tell the difference: a plist in `jobs/launchd/`
+proves a file was written, not that launchd ever read it. `enable`/`disable` do that step, and
+`status` reports the three facts separately (rendered / installed / loaded) so the gap between them
+is visible instead of assumed.
+
+The step keeps its weight rather than losing it: `enable` and `disable` are CONFIRM-class subactions
+(`--yes`, or exit 3), because they write outside the vault (`~/Library/LaunchAgents`) and mutate a
+live launchd domain. `--dry-run` previews both without needing `--yes` — it is a read.
+
+A COPY, not a symlink. `apply`'s old hint linked the vault's rendered file into LaunchAgents; recent
+macOS is unreliable about symlinked plists (bootstrap intermittently refuses them), and a symlink
+also means editing a vault file silently changes what a privileged loader reads. The vault artefact
+stays the record; the LaunchAgents file is an installed copy of it.
 """
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, output, paths, vaultio  # noqa: E402
+from lib import enginetree, launchdlib, output, paths, vaultio  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 BIN = Path(__file__).resolve().parents[1]
 REGISTRY = paths.PLAINKEEP_HOME / "jobs" / "registry.json"
-SCHEDULABLE = {"read", "safe_write"}
+SCHEDULABLE = launchdlib.SCHEDULABLE
 
 
 def _known_verbs():
@@ -56,57 +74,104 @@ def _validate(name, job, external):
 
 
 def _plist(name, job) -> str:
-    # THE LAUNCHER IS ENGINE-OWNED (Phase 2 Task 2). This built
-    # `$PLAINKEEP_HOME/plainkeep` — the vault-local shim — and ADR-014 names the line as one that
-    # must change: after the engine moves out, that path is ENOENT at 2am, in a sanitized launchd
-    # environment where nothing will be there to explain it. The plist keeps naming an ABSOLUTE
-    # launcher (a scheduled job must never depend on discovery or on PATH) and both roots are baked
-    # in absolutely: the engine's launcher as the program, the validated vault as PLAINKEEP_HOME.
-    #
-    # `stable_launcher()`, not `launcher()`, and the difference is the whole point: a plist is a
-    # PERSISTED artefact. `launcher()` spells the version (`…/engine/4.0.0-dev/plainkeep`) because
-    # ENGINE_ROOT resolves through `current`, so a plist written with it keeps running the OLD engine
-    # after the next `--activate` — silently — and becomes the 2am ENOENT above the moment that
-    # version is pruned. `current` is the name that survives an engine update.
-    toks = job["command"].split()
-    args = ([str(enginetree.stable_launcher()), *toks[1:]]
-            if toks and toks[0] == "plainkeep" else toks)
-    pa = "".join(f"\n      <string>{a}</string>" for a in args)
-    s = job["schedule"]
-    if "interval_minutes" in s:
-        when = f"  <key>StartInterval</key>\n  <integer>{int(s['interval_minutes']) * 60}</integer>"
-    else:
-        cal = {}
-        if "daily" in s:
-            hh, mm = s["daily"].split(":"); cal = {"Hour": int(hh), "Minute": int(mm)}
-        elif "weekly" in s:
-            day, hhmm = s["weekly"].split(); hh, mm = hhmm.split(":")
-            wd = {"Sun": 0, "Mon": 1, "Tue": 2, "Wed": 3, "Thu": 4, "Fri": 5, "Sat": 6}
-            cal = {"Weekday": wd.get(day, 0), "Hour": int(hh), "Minute": int(mm)}
-        elif "monthly" in s:
-            dom, hhmm = s["monthly"].split(); hh, mm = hhmm.split(":")
-            cal = {"Day": int(dom), "Hour": int(hh), "Minute": int(mm)}
-        inner = "".join(f"\n    <key>{k}</key><integer>{v}</integer>" for k, v in cal.items())
-        when = f"  <key>StartCalendarInterval</key>\n  <dict>{inner}\n  </dict>"
-    log = paths.PLAINKEEP_HOME / ".logs" / "jobs" / f"{name}.log"
-    return (f'<?xml version="1.0" encoding="UTF-8"?>\n'
-            f'<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
-            f'"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n'
-            f'<plist version="1.0">\n<dict>\n'
-            f'  <key>Label</key>\n  <string>com.plainkeep.{name}</string>\n'
-            f'  <key>ProgramArguments</key>\n  <array>{pa}\n  </array>\n'
-            f'  <key>EnvironmentVariables</key>\n  <dict>\n'
-            f'    <key>PLAINKEEP_HOME</key><string>{paths.PLAINKEEP_HOME}</string>\n  </dict>\n'
-            f'{when}\n'
-            f'  <key>StandardOutPath</key>\n  <string>{log}</string>\n'
-            f'  <key>StandardErrorPath</key>\n  <string>{log}</string>\n'
-            f'</dict>\n</plist>\n')
+    """The rendered launchd plist. The renderer itself lives in `lib/launchdlib.py` because three
+    surfaces now need the SAME bytes — this verb, the `automation` setup layer, and doctor's drift
+    check — and a second copy would disagree with the first the moment the template changed."""
+    return launchdlib.plist(name, job)
+
+
+USAGE = ("usage: plainkeep job list | run <name> | apply | status | "
+         "enable [<name>…|--all] --yes | disable [<name>…|--all] --yes")
+
+# What the operator is agreeing to, at the moment they are asked (exit 3). Both lines name the two
+# things that make this confirm-class rather than safe_write: a write OUTSIDE the vault, and a change
+# to a running system daemon's state.
+_CONFIRM = {
+    "enable": "enable installs launch agents into ~/Library/LaunchAgents and loads them into launchd "
+              "(a write outside the vault, and a change to a running launchd domain)",
+    "disable": "disable unloads the jobs from launchd and removes their ~/Library/LaunchAgents copies "
+               "(the rendered plists under jobs/launchd/ are kept)",
+}
+
+
+def _targets(action, names, jobs, all_):
+    """Which jobs an enable/disable acts on, and which were skipped. Refuses before anything runs.
+
+    `--all` SKIPS a non-schedulable job (the same thing `apply` does — the registry may legally hold
+    one, it just may never be scheduled), but an explicitly NAMED one is REFUSED: someone who typed
+    the name is owed the reason rather than a silent no-op."""
+    if all_ and names:
+        output.fail(output.EXIT_USAGE,
+                    f"plainkeep job {action} takes either job names or --all, not both", verb="job")
+    if not all_ and not names:
+        output.fail(output.EXIT_USAGE,
+                    f"usage: plainkeep job {action} [<name>…|--all] [--yes] [--dry-run]   "
+                    f"(one of: {', '.join(jobs)})", verb="job")
+    if all_:
+        return ([n for n, j in jobs.items() if j.get("risk") in SCHEDULABLE],
+                [n for n, j in jobs.items() if j.get("risk") not in SCHEDULABLE])
+    unknown = [n for n in names if n not in jobs]
+    if unknown:
+        output.fail(output.EXIT_USAGE,
+                    f"unknown job(s): {', '.join(unknown)}   (one of: {', '.join(jobs)})", verb="job")
+    # `disable` stays permissive: it only ever REMOVES, and a job whose risk class was tightened
+    # after it was enabled is exactly the one an operator most needs to be able to turn off.
+    if action == "enable":
+        bad = [n for n in names if jobs[n].get("risk") not in SCHEDULABLE]
+        if bad:
+            output.fail(output.EXIT_UNEXPECTED,
+                        f"{RED}refusing to enable {', '.join(bad)}: "
+                        f"risk is not schedulable (must be read/safe_write){RESET}",
+                        hint="only read/safe_write jobs may run unattended (§15)", verb="job")
+    return list(names), []
+
+
+def _enable(targets, jobs, agents):
+    """Render fresh → install a COPY → bootout → bootstrap, per job.
+
+    RENDERED FRESH, ALWAYS. Whatever sits in `jobs/launchd/` may predate the registry (that is what
+    `status`'s `drift` column reports), and installing a stale file would load a schedule nobody
+    wrote. The registry is the source; the rendered file is a projection of it.
+
+    BOOTOUT BEFORE BOOTSTRAP, and the bootout's failure is IGNORED. `bootstrap` refuses a label that
+    is already loaded, so re-enabling after an edit needs the unload first; `bootout` on a label that
+    was never loaded exits nonzero, which here means "already in the state we wanted"."""
+    vaultio.mkdir(launchdlib.render_dir())
+    agents.mkdir(parents=True, exist_ok=True)
+    out = []
+    for name in targets:
+        src = launchdlib.rendered_path(name)
+        vaultio.write_text(src, launchdlib.plist(name, jobs[name]), encoding="utf-8")
+        dst = launchdlib.installed_path(name)
+        shutil.copyfile(src, dst)
+        launchdlib.launchctl("bootout", launchdlib.service_target(name))
+        r = launchdlib.launchctl("bootstrap", launchdlib.domain(), str(dst))
+        out.append({"name": name, "ok": r.returncode == 0, "plist": str(dst),
+                    "error": (r.stderr or r.stdout).strip()[:200] if r.returncode else ""})
+    return out
+
+
+def _disable(targets, agents):
+    """Bootout → remove the LaunchAgents copy. Idempotent by construction: a bootout of something not
+    loaded and an unlink of something not there are both fine, so `disable` twice is `disable` once.
+    The rendered plists under `jobs/launchd/` are NOT removed — they are the vault's record of the
+    schedule, owned by `apply`, and deleting them would make `enable` unable to say what changed."""
+    out = []
+    for name in targets:
+        launchdlib.launchctl("bootout", launchdlib.service_target(name))
+        dst = agents / f"{launchdlib.label(name)}.plist"
+        existed = dst.exists()
+        dst.unlink(missing_ok=True)
+        out.append({"name": name, "ok": True, "plist": str(dst), "removed": existed, "error": ""})
+    return out
 
 
 def main(argv):
     _, argv = output.parse_argv(argv)
     dry = "--dry-run" in argv
-    argv = [a for a in argv if a != "--dry-run"]
+    yes = ("--yes" in argv) or ("-y" in argv)
+    all_ = "--all" in argv
+    argv = [a for a in argv if a not in ("--dry-run", "--yes", "-y", "--all")]
     action = argv[0] if argv else "list"
     reg = _load()
     jobs, external = reg["jobs"], set(reg.get("external_allowlist", []))
@@ -196,14 +261,84 @@ def main(argv):
                 print(f"  {f.name}")
             if skipped:
                 print(f"{YEL}skipped (not schedulable): {', '.join(skipped)}{RESET}")
-            print("\nactivate (the privileged, out-of-root step is yours to run):")
-            print(f"  ln -sf {out}/com.plainkeep.*.plist ~/Library/LaunchAgents/")
-            print("  for p in ~/Library/LaunchAgents/com.plainkeep.*.plist; do launchctl load \"$p\"; done")
+            # `apply` renders; ACTIVATING what it rendered is its own confirm-class step, and it is a
+            # command here rather than a shell recipe to paste (ADR-022).
+            print("\nactivate the schedule:  plainkeep job enable --all --yes")
+            print("check what launchd has:  plainkeep job status")
 
         return output.emit(data, "job", human=render)
 
+    elif action in ("enable", "disable"):
+        targets, skipped = _targets(action, argv[1:], jobs, all_)
+        agents = launchdlib.launch_agents_dir()
+        if dry:
+            # A --dry-run is a READ (the guardrail downgrades it), so it never needs --yes and never
+            # calls launchctl: it prints the exact files and service targets it WOULD touch.
+            data = {"dry_run": True, "action": action, "targets": targets, "skipped": skipped,
+                    "launch_agents_dir": str(agents)}
+
+            def render_dry(_):
+                print(f"would {action} {len(targets)} job(s)  (dry run — nothing written, launchctl not called)")
+                for n in targets:
+                    print(f"  {launchdlib.label(n)}.plist -> {agents}/  [{launchdlib.service_target(n)}]")
+                if skipped:
+                    print(f"{YEL}skipped (not schedulable): {', '.join(skipped)}{RESET}")
+            return output.emit(data, "job", human=render_dry)
+
+        if not yes:
+            output.fail(output.EXIT_CONFIRM, _CONFIRM[action],
+                        hint=f"re-run: plainkeep job {action} "
+                             f"{'--all' if all_ else ' '.join(targets)} --yes"
+                             f"   (preview first: add --dry-run instead of --yes)", verb="job")
+        if not launchdlib.launchctl_available():
+            output.fail(output.EXIT_UNEXPECTED,
+                        "launchd is not available on this host — scheduling is macOS-only",
+                        hint="run any job by hand instead: plainkeep job run <name>", verb="job")
+        done = _enable(targets, jobs, agents) if action == "enable" else _disable(targets, agents)
+        failed = [d for d in done if not d["ok"]]
+        data = {"action": action, "results": done, "skipped": skipped,
+                "launch_agents_dir": str(agents)}
+
+        def render(_):
+            print(f"{action}d {len(done) - len(failed)}/{len(done)} job(s) -> {agents}/")
+            for d in done:
+                mark = f"{GREEN}✓{RESET}" if d["ok"] else f"{RED}✗{RESET}"
+                print(f"  {mark} {launchdlib.label(d['name'])}"
+                      + (f"  {RED}{d['error']}{RESET}" if not d["ok"] else ""))
+            if skipped:
+                print(f"{YEL}skipped (not schedulable): {', '.join(skipped)}{RESET}")
+            print("\ncheck what launchd has:  plainkeep job status")
+
+        output.emit(data, "job", human=render)
+        return output.EXIT_UNEXPECTED if failed else output.EXIT_OK
+
+    elif action == "status":
+        rows = launchdlib.job_states(reg)
+
+        def render(rs):
+            out = [f"{len(rs)} job(s) — rendered (vault) / installed (LaunchAgents) / loaded (launchd):\n"]
+            for r in rs:
+                if not r["schedulable"]:
+                    state = f"{DIM}not schedulable{RESET}"
+                elif r["loaded"]:
+                    state = f"{GREEN}loaded{RESET}"
+                elif r["installed"]:
+                    state = f"{YEL}installed, not loaded{RESET}"
+                elif r["rendered"]:
+                    state = f"{YEL}rendered only{RESET}"
+                else:
+                    state = f"{DIM}not rendered{RESET}"
+                drift = f"  {RED}⚠ drift — re-render with `plainkeep job apply`{RESET}" if r["drift"] else ""
+                out.append(f"  {r['name']:<14} {'yes' if r['rendered'] else ' - ':<4} "
+                           f"{'yes' if r['installed'] else ' - ':<4} {'yes' if r['loaded'] else ' - ':<4} "
+                           f"{state}{drift}")
+            out.append("\n  activate:  plainkeep job enable --all --yes"
+                       "     turn off:  plainkeep job disable --all --yes")
+            return "\n".join(out)
+        return output.emit_rows(rows, "job", human=render)
+
     else:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep job list | run <name> | apply", verb="job")
+        output.fail(output.EXIT_USAGE, USAGE, verb="job")
     return 0
 
 

@@ -369,17 +369,33 @@ def diverge(vault: Path, rel: str = "bin/lib/vaultroot.py",
     return p
 
 
+def _chmod_best_effort(q: Path) -> None:
+    try:
+        if q.is_dir() and not q.is_symlink():
+            q.chmod(0o755)
+        elif not q.is_symlink():
+            q.chmod(0o644)
+    except OSError:
+        pass
+
+
 def unlock(p: Path) -> None:
     """Installed engine trees are sealed 0555; a temp dir holding one cannot be removed until they
-    are writable again."""
-    for q in [p, *p.rglob("*")]:
-        try:
-            if q.is_dir() and not q.is_symlink():
-                q.chmod(0o755)
-            elif not q.is_symlink():
-                q.chmod(0o644)
-        except OSError:
-            pass
+    are writable again.
+
+    Walks tolerantly. This used to be `for q in [p, *p.rglob("*")]`, where the per-entry try/except
+    could never fire for the failure that actually happened: a concurrent `git gc` removes
+    `.git/objects/XX` directories while the tree is being walked, and rglob raises FileNotFoundError
+    out of the ITERATOR, during the list comprehension, before the loop body exists. Teardown then
+    crashed the whole suite — after every check in it had already passed — and reported as a suite
+    failure with no failing check to point at. os.walk's `onerror` swallows the same race, and
+    top-down order still makes each directory writable before it is descended into.
+    """
+    _chmod_best_effort(p)
+    for root, dirs, files in os.walk(p, topdown=True, onerror=lambda _e: None):
+        r = Path(root)
+        for name in dirs + files:
+            _chmod_best_effort(r / name)
 
 
 def wipe(p: Path) -> None:

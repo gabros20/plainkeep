@@ -176,7 +176,9 @@ def _enable(targets, jobs, agents):
     first two are already bootstrapped — so an exception escaping it left the operator with a nonzero
     exit and no statement of what had been enabled. A per-job failure is now recorded the same way a
     failed `bootstrap` already was, and the loop finishes; `main` reports the partial state and exits
-    nonzero."""
+    nonzero. The containment is `except Exception`, not `except OSError` (r2/I5): `plist()` raises
+    KeyError/ValueError for a malformed registry entry, and the read path (`job_states`) already
+    treats "can't re-render" as data — the mutating path must not be less careful."""
     vaultio.mkdir(launchdlib.render_dir())
     agents.mkdir(parents=True, exist_ok=True)
     out = []
@@ -186,8 +188,9 @@ def _enable(targets, jobs, agents):
             src = launchdlib.rendered_path(name)
             vaultio.write_text(src, launchdlib.plist(name, jobs[name]), encoding="utf-8")
             shutil.copyfile(src, dst)
-        except OSError as exc:
-            out.append({"name": name, "ok": False, "plist": str(dst), "error": str(exc)[:200]})
+        except Exception as exc:  # r2/I5: a malformed entry too, not just a filesystem refusal
+            out.append({"name": name, "ok": False, "plist": str(dst),
+                        "error": f"{type(exc).__name__}: {exc}"[:200]})
             continue
         launchdlib.launchctl("bootout", launchdlib.service_target(name))
         r = launchdlib.launchctl("bootstrap", launchdlib.domain(), str(dst))
@@ -212,7 +215,7 @@ def _disable(targets, agents):
         try:
             existed = dst.exists()
             dst.unlink(missing_ok=True)
-        except OSError as exc:
+        except Exception as exc:  # r2/I5: same containment breadth as _enable
             out.append({"name": name, "ok": False, "plist": str(dst), "removed": False,
                         "error": str(exc)[:200]})
             continue
@@ -304,20 +307,26 @@ def main(argv):
             return output.emit(data, "job", human=render_dry)
 
         vaultio.mkdir(out)
-        written = []
+        written, failed = [], []
         for name, job in jobs.items():
             if job.get("risk") not in SCHEDULABLE:
                 continue
             f = out / f"com.plainkeep.{name}.plist"
-            vaultio.write_text(f, _plist(name, job), encoding="utf-8")
+            try:
+                vaultio.write_text(f, _plist(name, job), encoding="utf-8")
+            except Exception as exc:  # r2/I5: a malformed entry is that job's failure, not the loop's
+                failed.append({"name": name, "error": f"{type(exc).__name__}: {exc}"[:200]})
+                continue
             written.append(f)
-        data = {"rendered": [f.name for f in written], "skipped": skipped,
+        data = {"rendered": [f.name for f in written], "failed": failed, "skipped": skipped,
                 "dir": str(out.relative_to(paths.PLAINKEEP_HOME))}
 
         def render(_):
             print(f"rendered {len(written)} plist(s) -> {out.relative_to(paths.PLAINKEEP_HOME)}/")
             for f in written:
                 print(f"  {f.name}")
+            for d in failed:
+                print(f"  {RED}✗ com.plainkeep.{d['name']}.plist — {d['error']}{RESET}")
             if skipped:
                 print(f"{YEL}skipped (not schedulable): {', '.join(skipped)}{RESET}")
             # `apply` renders; ACTIVATING what it rendered is its own confirm-class step, and it is a
@@ -325,7 +334,8 @@ def main(argv):
             print("\nactivate the schedule:  plainkeep job enable --all --yes")
             print("check what launchd has:  plainkeep job status")
 
-        return output.emit(data, "job", human=render)
+        output.emit(data, "job", human=render)
+        return output.EXIT_UNEXPECTED if failed else output.EXIT_OK
 
     elif action in ("enable", "disable"):
         targets, skipped = _targets(action, argv[1:], jobs, all_)

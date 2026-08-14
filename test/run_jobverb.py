@@ -280,6 +280,65 @@ def case_enable_contains_a_per_job_failure(td: Path) -> None:
     run(h, "disable", "--all", "--yes")
 
 
+_MALFORMED_REGISTRY = {"external_allowlist": [], "jobs": {
+    # aaa/zzz sort either side of the malformed entry, so the loop provably continues past it.
+    "aaa_ok": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    "mmm_noschedule": {"command": "plainkeep index", "risk": "read"},
+    "zzz_ok": {"command": "plainkeep consolidate", "schedule": {"daily": "02:30"}, "risk": "safe_write"},
+}}
+
+
+def case_enable_contains_a_malformed_entry(td: Path) -> None:
+    """A MALFORMED ENTRY IS THAT JOB'S FAILURE, NOT THE LOOP'S CRASH (r2/I5).
+
+    r1/I4's containment caught only OSError, but `launchdlib.plist()` raises KeyError for a missing
+    `schedule` and ValueError for an unparseable one (or a control character in the command, since
+    the plistlib rewrite) — all of which escaped `_enable` as a raw traceback AFTER earlier jobs
+    were already bootstrapped: the exact complaint I4 was commissioned to close, through a
+    different door. The read path (`job_states`) already treats "can't re-render" as data; the
+    mutating path must not be less careful."""
+    h = td / "malformed_enable"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps(_MALFORMED_REGISTRY), encoding="utf-8")
+    clear_log()
+    r = run(h, "enable", "--all", "--yes", "--json")
+    check("a malformed entry raises no traceback out of enable",
+          "Traceback" not in r.stderr, r.stderr[:200])
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    results_by = {d["name"]: d for d in env.get("data", {}).get("results", [])}
+    check("the loop finishes past the malformed entry: every job is reported",
+          set(results_by) == {"aaa_ok", "mmm_noschedule", "zzz_ok"}, str(sorted(results_by)))
+    check("the malformed entry is its own recorded failure, with the reason",
+          results_by.get("mmm_noschedule", {}).get("ok") is False
+          and results_by["mmm_noschedule"]["error"], str(results_by.get("mmm_noschedule")))
+    check("the job sorting AFTER the malformed one was still bootstrapped",
+          any(c.startswith("bootstrap ") and "zzz_ok" in c for c in fake_log()), str(fake_log()))
+    check("a malformed entry still exits nonzero from enable", r.returncode == 1, f"rc={r.returncode}")
+    run(h, "disable", "--all", "--yes")
+
+
+def case_apply_contains_a_malformed_entry(td: Path) -> None:
+    """`apply` renders the same projection `enable` installs, so the same malformed entry must be
+    its recorded failure there too — partial renders reported, not a traceback (r2/I5)."""
+    h = td / "malformed_apply"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps(_MALFORMED_REGISTRY), encoding="utf-8")
+    r = run(h, "apply", "--json")
+    check("a malformed entry raises no traceback out of apply",
+          "Traceback" not in r.stderr, r.stderr[:200])
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    data = env.get("data", {})
+    check("apply still renders the well-formed jobs either side of it",
+          set(data.get("rendered", [])) == {"com.plainkeep.aaa_ok.plist", "com.plainkeep.zzz_ok.plist"},
+          str(data.get("rendered")))
+    check("apply reports the malformed entry as that job's failure, with the reason",
+          [f["name"] for f in data.get("failed", [])] == ["mmm_noschedule"]
+          and data["failed"][0].get("error"), str(data.get("failed")))
+    check("a malformed entry still exits nonzero from apply", r.returncode == 1, f"rc={r.returncode}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         # The vault and the "machine" (LaunchAgents + the fake launchctl's log/state) are SIBLINGS,
@@ -454,6 +513,10 @@ def main() -> int:
         case_illegal_jobs_are_never_scheduled(Path(td))
         case_traversing_key_is_refused_before_anything_runs(Path(td))
         case_enable_contains_a_per_job_failure(Path(td))
+
+        # r2 fix: I5 — containment must cover more than OSError.
+        case_enable_contains_a_malformed_entry(Path(td))
+        case_apply_contains_a_malformed_entry(Path(td))
 
     print(f"{BOLD}Jobs scheduler verb (job list/run/apply/enable/disable/status) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

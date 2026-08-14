@@ -84,7 +84,13 @@ LAYERS: list[Layer] = [
     Layer("search", "Semantic search", "Vector index dependencies and embedding model", False, "confirm"),
     Layer("backups", "Durability", "Encrypted off-machine backup configuration", False, "blocked", "plainkeep backup init"),
     Layer("models", "File-processing / LLM", "Local models and optional file-processing runtimes", False, "confirm"),
-    Layer("automation", "Schedules", "Rendered launchd job plists", False, "safe_write"),
+    # CONFIRM, not safe_write (r1/I1). Every other layer installs into the vault or into its own
+    # `.venv`; this one writes into `~/Library/LaunchAgents` and mutates a running launchd domain.
+    # `plainkeep job enable` is confirm-class for exactly that reason, and while this gate said
+    # `safe_write` the setup path around it handed out the `--yes` the verb was asking for — so
+    # `plainkeep setup automation`, with no `--yes` anywhere, loaded launch agents. Three documents
+    # claimed otherwise. The wizard is unaffected (it advances with yes=True after its own prompt).
+    Layer("automation", "Schedules", "Scheduled jobs, loaded into launchd", False, "confirm"),
     Layer("ui", "Terminal UI", "The guided plainkeep-ui binary for humans (`plainkeep ui`)", False, "confirm"),
 ]
 

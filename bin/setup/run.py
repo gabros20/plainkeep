@@ -264,10 +264,14 @@ def _automation_prompt() -> str:
     jobs = (reg or {}).get("jobs", {})
     listed = [f"{name} ({launchdlib.schedule_str(job.get('schedule', {}))})"
               for name, job in jobs.items() if launchdlib.schedulable(job)]
+    # The prompt names WHERE it writes, not only what it schedules (r1/I1). "schedule your day?" and
+    # "install launch agents into ~/Library/LaunchAgents?" are different questions, and the second is
+    # the one being answered — it is the fact that makes this layer confirm-class.
+    where = " (installs launch agents in ~/Library/LaunchAgents; undo: plainkeep job disable --all --yes)"
     if not listed:
         return ("schedule your day unattended — daily start (07:30) and close (18:30), hourly index, "
-                "nightly consolidate, weekly organize scan + backup check?")
-    return "schedule these to run unattended — " + ", ".join(listed) + "?"
+                "nightly consolidate, weekly organize scan + backup check?" + where)
+    return "schedule these to run unattended — " + ", ".join(listed) + "?" + where
 
 
 def _wizard_prompt(row: dict) -> str:

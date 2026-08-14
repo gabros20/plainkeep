@@ -310,6 +310,22 @@ def main() -> int:
             check("a fake automation advance mutates no launchd state",
                   not [c for c in auto_fake.calls() if c.split()[:1] in (["bootstrap"], ["bootout"])],
                   str(auto_fake.calls()))
+
+            # --- r1/I1: the confirm class has to survive the SETUP path, not just the verb. ---
+            #
+            # ADR-022, machine-contract §9 and docs/setup.md all say activation needs `--yes`. That
+            # was true of `plainkeep job enable` and false of `plainkeep setup automation`, which is
+            # the path this branch makes DEFAULT: the layer's gate was still `safe_write`, so
+            # `advance(yes=False)` sailed through and ran `job enable --all --yes` on the operator's
+            # behalf. It is the only layer that writes outside the vault and mutates a system daemon,
+            # and it was the only such layer gated `safe_write`.
+            check("the automation layer is confirm-class (it leaves the vault)",
+                  mod_a._layer("automation").gate == "confirm", str(mod_a._layer("automation")))
+            no_yes = mod_a.advance("automation", yes=False, fake=True)
+            check("advance('automation', yes=False) demands confirmation and runs nothing",
+                  no_yes["confirm_needed"] and not no_yes["ran"], str(no_yes))
+            check("advance('automation', yes=True) is unaffected (the wizard's path)",
+                  bool(mod_a.advance("automation", yes=True, fake=True)["ran"]))
             os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
 
             # Loaded, through the same seam launchd would answer on.
@@ -733,6 +749,33 @@ def main() -> int:
               "automation default to OFF" not in wiz2_out and "no jobs" not in wiz2_out, wiz2_out)
         check("the automation prompt spells out what gets scheduled (not just 'Schedules')",
               any("07:30" in p and "18:30" in p for p in wiz2_prompts), str(wiz2_prompts))
+        # r1/I1 sub-point: the prompt must also name the fact that MAKES it confirm-class — it writes
+        # outside the vault. "schedule your day?" and "install launch agents into ~/Library?" are
+        # different questions, and the operator is agreeing to the second one.
+        check("the automation prompt says it writes outside the vault",
+              any("LaunchAgents" in p for p in wiz2_prompts), str(wiz2_prompts))
+
+        # r1/M3: design decision #6 said the prompt is DERIVED from this vault's registry rather than
+        # a hardcoded sentence — but the static fallback also contains 07:30 and 18:30, so deleting
+        # the registry-reading branch entirely would have left the check above green. A registry that
+        # DISAGREES with the fallback is the only thing that pins the decision.
+        moved = tmp / "moved-schedule"
+        (moved / "jobs").mkdir(parents=True)
+        (moved / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+            "close_nudge": {"command": "plainkeep close --automated", "schedule": {"daily": "22:00"},
+                            "risk": "safe_write"},
+        }}), encoding="utf-8")
+        moved_prompt = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, %r)\n"
+             "import importlib.util as u\n"
+             "s = u.spec_from_file_location('sr', %r); m = u.module_from_spec(s); s.loader.exec_module(m)\n"
+             "print(m._automation_prompt())" % (str(REPO / "bin"), str(REPO / "bin" / "setup" / "run.py"))],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAINKEEP_HOME": str(moved)}).stdout
+        check("the wizard prompt is READ from the vault's registry, not a hardcoded sentence",
+              "22:00" in moved_prompt and "18:30" not in moved_prompt and "07:30" not in moved_prompt,
+              moved_prompt)
 
         os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
 

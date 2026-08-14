@@ -8,16 +8,15 @@ is outside the vault (`~/Library/LaunchAgents`, the user's live launchd domain),
 are redirected for every invocation in this suite, in `run()` and with no per-call opt-in:
 
   * `PLAINKEEP_LAUNCH_AGENTS_DIR` → a temp directory, so an installed plist lands in the fixture.
-  * `PLAINKEEP_LAUNCHCTL` → `fake-launchctl`, a shell script written below that RECORDS its argv and
-    keeps a tiny "loaded" state directory. Ordering (bootout before bootstrap), the domain target and
-    the exact plist path are asserted from that log rather than believed.
+  * `PLAINKEEP_LAUNCHCTL` → the fake from `test/lib/launchdfx.py`, which RECORDS its argv and keeps a
+    tiny "loaded" state directory. Ordering (bootout before bootstrap), the domain target and the
+    exact plist path are asserted from that log rather than believed.
 
 The fake is also what makes the suite host-independent: `bootstrap`/`bootout`/`print` behave the same
 on a Linux runner as on a Mac, and no real `launchctl` is ever executed."""
 from __future__ import annotations
 import json
 import os
-import stat
 import subprocess
 import sys
 import tempfile
@@ -27,7 +26,7 @@ seal()   # hermetic: an empty throwaway registry, never the developer's real vau
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import vaultfx  # noqa: E402
+from lib import launchdfx, vaultfx  # noqa: E402
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
 
@@ -40,46 +39,7 @@ REGISTRY = {
     },
 }
 
-# The fake `launchctl`. It models exactly the three subcommands the verb uses, including the failure
-# the real one returns for a bootout of something that was never loaded (which `enable` must ignore):
-#   bootstrap <domain> <plist>   -> remembers the label, rc 0
-#   bootout   <domain>/<label>   -> forgets it (rc 0), or rc 3 when it was not loaded
-#   print     <domain>/<label>   -> rc 0 iff loaded
-FAKE_LAUNCHCTL = """#!/bin/sh
-printf '%s\\n' "$*" >> "$PK_FAKE_LOG"
-mkdir -p "$PK_FAKE_STATE"
-case "$1" in
-  bootstrap)
-    label=`basename "$3" .plist`
-    touch "$PK_FAKE_STATE/$label"
-    exit 0 ;;
-  bootout)
-    label=${2##*/}
-    if [ -e "$PK_FAKE_STATE/$label" ]; then rm -f "$PK_FAKE_STATE/$label"; exit 0; fi
-    exit 3 ;;
-  print)
-    label=${2##*/}
-    if [ -e "$PK_FAKE_STATE/$label" ]; then exit 0; fi
-    exit 1 ;;
-esac
-exit 1
-"""
-
-FAKE: dict[str, Path] = {}
-
-
-def install_fake_launchctl(tmp: Path) -> None:
-    """Write the fake binary + its log/state dirs, and the redirected LaunchAgents dir."""
-    exe = tmp / "fake-launchctl"
-    exe.write_text(FAKE_LAUNCHCTL, encoding="utf-8")
-    exe.chmod(exe.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
-    FAKE["exe"] = exe
-    FAKE["log"] = tmp / "launchctl.log"
-    FAKE["state"] = tmp / "launchctl-state"
-    FAKE["agents"] = tmp / "LaunchAgents"
-    FAKE["log"].write_text("", encoding="utf-8")
-    FAKE["state"].mkdir()
-    FAKE["agents"].mkdir()
+FAKE: dict[str, object] = {}
 
 
 def text(p: Path) -> str:
@@ -92,11 +52,11 @@ def text(p: Path) -> str:
 
 
 def fake_log() -> list[str]:
-    return [ln for ln in FAKE["log"].read_text(encoding="utf-8").splitlines() if ln.strip()]
+    return FAKE["fx"].calls()
 
 
 def clear_log() -> None:
-    FAKE["log"].write_text("", encoding="utf-8")
+    FAKE["fx"].clear()
 
 
 def check(name, cond, detail=""):
@@ -106,9 +66,7 @@ def check(name, cond, detail=""):
 def run(home, *args):
     env = {**os.environ, "PLAINKEEP_HOME": str(home)}
     if FAKE:
-        env.update({"PLAINKEEP_LAUNCHCTL": str(FAKE["exe"]),
-                    "PLAINKEEP_LAUNCH_AGENTS_DIR": str(FAKE["agents"]),
-                    "PK_FAKE_LOG": str(FAKE["log"]), "PK_FAKE_STATE": str(FAKE["state"])})
+        env.update(FAKE["fx"].env)
     return subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), *args],
                           capture_output=True, text=True, env=env)
 
@@ -119,7 +77,8 @@ def main() -> int:
         # not nested: an installed plist must be provably outside the vault, the way the real one is.
         machine = Path(td) / "machine"
         machine.mkdir()
-        install_fake_launchctl(machine)
+        FAKE["fx"] = launchdfx.install(machine)
+        FAKE["agents"] = FAKE["fx"].agents
         h = Path(td) / "vault"
         h.mkdir()
         (h / "wiki" / "notes").mkdir(parents=True)

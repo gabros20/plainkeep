@@ -1,0 +1,15 @@
+{
+  "newLinkFormat": "shortest",
+  "useMarkdownLinks": false,
+  "attachmentFolderPath": "inbox/attachments",
+  "newFileLocation": "folder",
+  "newFileFolderPath": "inbox",
+  "alwaysUpdateLinks": true,
+  "trashOption": "local",
+  "promptDelete": true,
+  "showUnsupportedFiles": true,
+  "strictLineBreaks": false,
+  "propertiesInDocument": "visible",
+  "readableLineLength": true,
+  "spellcheck": false
+}

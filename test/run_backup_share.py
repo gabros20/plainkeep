@@ -96,11 +96,15 @@ const fails = [];
 const A = (cond, msg) => { if (!cond) fails.push(msg); };
 
 (async () => {
-  const env = { PLAINKEEP_SHARE: kvStub(), PUBLISH_TOKEN: undefined };
+  // A CONFIGURED worker: it has its PUBLISH_TOKEN secret. This used to be `undefined` here, back
+  // when a missing secret meant "no auth required" — which is exactly the hole that made a freshly
+  // deployed worker an open write endpoint. The unconfigured case is asserted separately below.
+  const env = { PLAINKEEP_SHARE: kvStub(), PUBLISH_TOKEN: "sekret" };
+  const AUTH = { "X-Publish-Token": "sekret" };
   const blob = buildOpsx("# hello agent", "<!doctype html><p>hi</p>");
 
   // PUT / → 200 JSON with a 24-char id + admin_token
-  let r = await worker.fetch(new Request("https://w/", { method: "PUT", body: blob }), env);
+  let r = await worker.fetch(new Request("https://w/", { method: "PUT", body: blob, headers: AUTH }), env);
   A(r.status === 200, "PUT status " + r.status);
   const j = await r.json();
   A(typeof j.id === "string" && /^[a-z0-9]{24}$/.test(j.id), "PUT id " + j.id);
@@ -113,6 +117,15 @@ const A = (cond, msg) => { if (!cond) fails.push(msg); };
   A(r.status === 401, "PUT no-token status " + r.status);
   r = await worker.fetch(new Request("https://w/", { method: "PUT", body: blob, headers: { "X-Publish-Token": "sekret" } }), envT);
   A(r.status === 200, "PUT good-token status " + r.status);
+
+  // FAIL CLOSED on an UNCONFIGURED worker. A freshly deployed worker has no secrets; treating that
+  // as "no auth required" published an open, unauthenticated write endpoint on the user's account.
+  // Absence of the secret must be a refusal, and no header may talk its way past it.
+  const envNone = { PLAINKEEP_SHARE: kvStub(), PUBLISH_TOKEN: undefined };
+  r = await worker.fetch(new Request("https://w/", { method: "PUT", body: blob }), envNone);
+  A(r.status === 503, "PUT unconfigured worker status " + r.status);
+  r = await worker.fetch(new Request("https://w/", { method: "PUT", body: blob, headers: { "X-Publish-Token": "guess" } }), envNone);
+  A(r.status === 503, "PUT unconfigured worker w/ header status " + r.status);
 
   // GET /<id> Accept: text/html → the html half, with CSP + Link headers
   r = await worker.fetch(new Request("https://w/" + id, { headers: { Accept: "text/html" } }), env);

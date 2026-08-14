@@ -1108,6 +1108,44 @@ def _refuse_dangling_symlinks(vault: Path, removed: list[str]) -> list[str]:
     return broken
 
 
+# Every fsck complaint that names something under .git/objects. Concurrent git housekeeping shows up
+# in more than one shape: a temp packfile it is still writing, and loose objects it has just packed
+# and unlinked.
+#   packfile .git/objects/pack/.tmp-<pid>-pack-<sha>.pack cannot be accessed
+#   unable to mmap .git/objects/ab/cdef…: No such file or directory
+#   <sha>: object corrupt or missing: .git/objects/ab/cdef…
+_OBJ_PATH_RE = re.compile(r"(\S*\.git/objects/\S+?)(?::|\s|$)")
+
+
+def _only_vanished_object_errors(vault: Path, fsck) -> bool:
+    """True when every fsck complaint names a path that no longer exists.
+
+    That is the signature of racing git's own housekeeping rather than of a damaged object store:
+    `git gc` packs loose objects and unlinks them, and a concurrent fsck that already enumerated one
+    then fails to read it. A REAL problem names a file that is still sitting there — so a single
+    still-present path, or a single complaint that names no path at all, returns False and the
+    caller raises.
+    """
+    lines = [ln.strip() for ln in (fsck.stderr + "\n" + fsck.stdout).splitlines() if ln.strip()]
+    if not lines:
+        return False
+    for ln in lines:
+        named = _OBJ_PATH_RE.findall(ln)
+        if not named:
+            return False                              # a complaint about something else → real
+        for raw in named:
+            # git quotes the path in some messages ("unable to load rev-index for pack '<p>'").
+            # Strip them: a still-quoted string never exists as a path, which would make EVERY
+            # quoted complaint look like a vanished artifact — including a real one.
+            raw = raw.strip("'\"")
+            p = Path(raw)
+            if not p.is_absolute():
+                p = vault / raw
+            if p.exists():
+                return False                          # still there → not a vanishing artifact
+    return True
+
+
 def _clean_tree_gate(vault: Path, *, op: str = "migration") -> list[str]:
     """ACCEPTANCE ITEM 2's clean-tree requirement, scoped to what a migration can actually harm.
 
@@ -1238,9 +1276,44 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
 
     # OBJECT INTEGRITY (acceptance item 2). Full `fsck`, not `--connectivity-only`: the migration is
     # about to make a commit the operator's only recovery path depends on, and connectivity says
-    # nothing about whether a blob still hashes to its name.
+    # nothing about whether a blob still hashes to its name. That argument is about REACHABLE
+    # objects, and `--no-reflogs` does not weaken it — every reachable object is still walked and
+    # still hash-verified.
+    #
+    # What it drops is fsck's default traversal of the REFLOG, which reports objects an earlier
+    # `git gc` pruned but that a stale reflog entry still names:
+    #
+    #     error: HEAD: invalid reflog entry <sha>
+    #     error: <sha>: object corrupt or missing: .git/objects/ab/cdef…
+    #
+    # That is the normal state of any repository whose history was rewritten and then packed — it
+    # says nothing about the integrity of the history itself, and no retry can clear it because the
+    # objects are genuinely gone. Refusing there fails a healthy vault for a condition git created
+    # on purpose.
+    #
+    # This is safe for recovery specifically because rollback does NOT read the reflog: it restores
+    # `before_commit` from the receipt (see `_before_commit()` and the parent check in `rollback()`),
+    # which is a reachable commit this fsck still verifies. If recovery ever starts depending on the
+    # reflog, this flag has to come back off with it.
+    # A concurrent `git gc` makes fsck fail for reasons that are not corruption: it writes
+    # `.tmp-<pid>-pack-<sha>.pack` while packing, packs loose objects and unlinks them, and builds
+    # a rev-index that is briefly unreadable. All of it surfaces as a non-zero fsck naming a path
+    # that has ALREADY VANISHED by the time we look — which is exactly what distinguishes the race
+    # from a damaged object store, where the named file is still sitting there.
+    #
+    # Re-VERIFY rather than filter the messages out: each retry is a full fsck that still checks
+    # every object, so corruption co-occurring with packing is still caught. Only a clean run is
+    # accepted. Bounded, with a short pause, because packing takes longer than one immediate retry
+    # on a loaded machine — this gate guards the commit the operator's rollback depends on, so it
+    # must neither pass on unverified objects nor abort a healthy vault over git's housekeeping.
     t0 = time.time()
-    fsck = _git(vault, "fsck", "--no-progress", "--no-dangling", check=False)
+    for attempt in range(4):
+        fsck = _git(vault, "-c", "gc.auto=0", "fsck", "--no-progress", "--no-dangling",
+                    "--no-reflogs", check=False)
+        if fsck.returncode == 0 or not _only_vanished_object_errors(vault, fsck):
+            break
+        doc["fsck_retries"] = attempt + 1
+        time.sleep(0.5 * (attempt + 1))
     doc["fsck_seconds"] = round(time.time() - t0, 2)
     if fsck.returncode != 0:
         raise VaultError(f"git object integrity check FAILED in {vault}:\n"

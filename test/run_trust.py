@@ -222,6 +222,59 @@ def _doctor(home, roots):
                           capture_output=True, text=True, env=env)
 
 
+def test_update_manifest_two_pass():
+    """A path ADDED to script/engine.txt must arrive in the SAME run that adds it.
+
+    engine.txt is itself an engine path, so the walk reads the manifest it started with while
+    refreshing that manifest for next time. One pass therefore pulled the new list but not the
+    files it named — which is how a vault ended up with `pyproject.toml` in its manifest, absent
+    from disk, and `script/setup` refusing "source tree is missing pyproject.toml".
+    """
+    with tempfile.TemporaryDirectory() as td:
+        up, vault = Path(td) / "upstream", Path(td) / "vault"
+        (up / "engine").mkdir(parents=True)
+        (up / "script").mkdir(parents=True)
+        shutil.copy(REPO / "script" / "update", up / "script" / "update")
+        (up / "script" / "update").chmod(0o755)
+        (up / "script" / "engine.txt").write_text("engine/foo.txt\nscript\n")
+        _foo(up).write_text("L1\n")
+        _git_init(up)
+        git(up, "add", "-A"); git(up, "commit", "-q", "-m", "v1")
+
+        subprocess.run(["git", "clone", "-q", str(up), str(vault)], capture_output=True, text=True)
+        git(vault, "config", "user.email", "t@example.com"); git(vault, "config", "user.name", "Test")
+        git(vault, "remote", "add", "upstream", str(up))
+
+        def update():
+            return subprocess.run([str(vault / "script" / "update")], capture_output=True, text=True)
+
+        update()                                   # establish the ref
+        git(vault, "add", "-A"); git(vault, "commit", "-q", "-m", "sync v1")
+
+        # upstream adds a NEW engine file and lists it, in one commit
+        (up / "engine" / "bar.txt").write_text("BAR\n")
+        (up / "script" / "engine.txt").write_text("engine/foo.txt\nengine/bar.txt\nscript\n")
+        git(up, "add", "-A"); git(up, "commit", "-q", "-m", "v2: add bar to the manifest")
+
+        r = update()
+        bar = vault / "engine" / "bar.txt"
+        check("manifest change is detected and announced",
+              "engine.txt changed" in r.stdout, r.stdout + r.stderr)
+        check("a path added to engine.txt arrives in the SAME run",
+              bar.is_file() and bar.read_text() == "BAR\n",
+              f"exists={bar.is_file()} stdout={r.stdout}")
+        check("the newly pulled path is STAGED, like every other engine path",
+              "engine/bar.txt" in git(vault, "diff", "--cached", "--name-only").stdout, r.stdout)
+        check("ref still advances after the extra pass",
+              (vault / ".plainkeep-engine-ref").read_text().strip()
+              == git(up, "rev-parse", "HEAD").stdout.strip())
+
+        # a stable manifest must NOT trigger a second pass (and must not loop)
+        r2 = update()
+        check("a run that does not change the manifest re-runs nothing",
+              "engine.txt changed" not in r2.stdout, r2.stdout)
+
+
 def test_doctor():
     # a healthy git vault, one remote, a churny note → WARN (not FAIL) on remotes + frontmatter
     with tempfile.TemporaryDirectory() as td:
@@ -276,6 +329,7 @@ def test_doctor():
 def main() -> int:
     test_exit_codes()
     test_update_merge()
+    test_update_manifest_two_pass()
     test_doctor()
 
     print(f"{BOLD}Trust wave: exit codes + update merge + doctor walls — {len(results)} checks{RESET}\n")

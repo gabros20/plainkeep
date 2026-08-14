@@ -43,6 +43,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: ensure a local `main` ref
+        # test/run_setup.py's update cases CLONE this checkout and run `script/update --branch main`
+        # against it. On a push build HEAD *is* main so the clone gets it for free; on a PULL_REQUEST
+        # build actions/checkout leaves a detached merge ref with no refs/heads/main, the clone has
+        # no main to merge from, and those cases fail for a reason that has nothing to do with the
+        # change under review. (They were red on every PR, green on every push, long before this
+        # step existed.) Fetch it only when it is genuinely absent, so push builds are untouched.
+        run: |
+          git show-ref --verify --quiet refs/heads/main \
+            || git fetch --no-tags --depth=1 origin +refs/heads/main:refs/heads/main
       - name: git identity (suites create temp repos)
         run: |
           git config --global user.email "ci@example.com"
@@ -67,6 +77,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: ensure a local `main` ref
+        # test/run_setup.py's update cases CLONE this checkout and run `script/update --branch main`
+        # against it. On a push build HEAD *is* main so the clone gets it for free; on a PULL_REQUEST
+        # build actions/checkout leaves a detached merge ref with no refs/heads/main, the clone has
+        # no main to merge from, and those cases fail for a reason that has nothing to do with the
+        # change under review. (They were red on every PR, green on every push, long before this
+        # step existed.) Fetch it only when it is genuinely absent, so push builds are untouched.
+        run: |
+          git show-ref --verify --quiet refs/heads/main \
+            || git fetch --no-tags --depth=1 origin +refs/heads/main:refs/heads/main
       - uses: oven-sh/setup-bun@v2
         with:
           # Pinned, not `latest`, and matching .bun-version. The core binary inverts a bun defect

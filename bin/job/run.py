@@ -23,6 +23,7 @@ also means editing a vault file silently changes what a privileged loader reads.
 stays the record; the LaunchAgents file is an installed copy of it.
 """
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -52,9 +53,22 @@ def _sched_str(s: dict) -> str:
     return launchdlib.schedule_str(s)
 
 
+# A registry key becomes a FILENAME in two directories, one of which is outside the vault
+# (`com.plainkeep.<name>.plist`). The pathwall exemption, machine-contract §9 and ADR-022 all claimed
+# the destination was bounded because "neither the directory nor the filename comes from an argument"
+# — true, and not the operative bound: the filename comes from a registry KEY, and the registry is
+# vault content. What actually stopped a traversing key was `vaultio`'s guardrail firing on the
+# vault-side render (exit 5, mid-loop), which is a backstop rather than a rule. This is the rule, and
+# it runs before anything is rendered, so the claim in those three documents is now true as written.
+_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+
+
 def _validate(name, job, external):
     """§15 legality of one job — returns list of warning strings."""
     warns = []
+    if not _NAME_RE.match(str(name)):
+        warns.append(f"job name {name!r} is not a plain identifier "
+                     "(letters, digits, '_', '.', '-'; it becomes a plist filename)")
     toks = job["command"].split()
     if job.get("risk") not in SCHEDULABLE:
         warns.append(f"risk {job.get('risk')!r} is not schedulable (must be read/safe_write)")
@@ -121,6 +135,32 @@ def _targets(action, names, jobs, all_):
     return list(names), []
 
 
+def _legal_or_refuse(action, targets, jobs, external):
+    """WHAT `job run` REFUSES, NOTHING MAY SCHEDULE (r1/B2).
+
+    `_validate()` is the §15 legality model, and `list`/`run` were its only readers: `apply` and
+    `enable` looked at the RISK CLASS alone — a field the same registry file declares about itself.
+    So a job the product refuses to run once by hand (`/bin/sh -c …` off the allowlist, inline shell
+    logic, a verb that does not exist) was rendered, installed and bootstrapped to run unattended
+    forever, exit 0, with a green tick beside it. The ratchet pointed the wrong way.
+
+    WHOLE-COMMAND, not per-job skip. `--all` legitimately SKIPS a non-schedulable job — the registry
+    may hold one, it simply may never be scheduled, and that is a property of that entry. An ILLEGAL
+    entry is different in kind: it means the registry is malformed, and quietly scheduling the other
+    five would leave the operator believing a schedule they cannot see is broken. The remedy is local
+    and the refusal names it."""
+    offenders = [(n, _validate(n, jobs[n], external)) for n in targets]
+    offenders = [(n, w) for n, w in offenders if w]
+    if not offenders:
+        return
+    lines = "; ".join(f"{n}: {'; '.join(w)}" for n, w in offenders)
+    output.fail(output.EXIT_UNEXPECTED,
+                f"{RED}refusing to {action} {len(offenders)} illegal job(s) — {lines}{RESET}",
+                hint="fix jobs/registry.json (see `plainkeep job list`); a job the product refuses "
+                     "to run by hand must never be scheduled to run unattended",
+                verb="job")
+
+
 def _enable(targets, jobs, agents):
     """Render fresh → install a COPY → bootout → bootstrap, per job.
 
@@ -130,15 +170,25 @@ def _enable(targets, jobs, agents):
 
     BOOTOUT BEFORE BOOTSTRAP, and the bootout's failure is IGNORED. `bootstrap` refuses a label that
     is already loaded, so re-enabling after an edit needs the unload first; `bootout` on a label that
-    was never loaded exits nonzero, which here means "already in the state we wanted"."""
+    was never loaded exits nonzero, which here means "already in the state we wanted".
+
+    ONE JOB'S FAILURE IS NOT THE LOOP'S (r1/I4). This loop MUTATES as it goes — by the third job the
+    first two are already bootstrapped — so an exception escaping it left the operator with a nonzero
+    exit and no statement of what had been enabled. A per-job failure is now recorded the same way a
+    failed `bootstrap` already was, and the loop finishes; `main` reports the partial state and exits
+    nonzero."""
     vaultio.mkdir(launchdlib.render_dir())
     agents.mkdir(parents=True, exist_ok=True)
     out = []
     for name in targets:
-        src = launchdlib.rendered_path(name)
-        vaultio.write_text(src, launchdlib.plist(name, jobs[name]), encoding="utf-8")
         dst = launchdlib.installed_path(name)
-        shutil.copyfile(src, dst)
+        try:
+            src = launchdlib.rendered_path(name)
+            vaultio.write_text(src, launchdlib.plist(name, jobs[name]), encoding="utf-8")
+            shutil.copyfile(src, dst)
+        except OSError as exc:
+            out.append({"name": name, "ok": False, "plist": str(dst), "error": str(exc)[:200]})
+            continue
         launchdlib.launchctl("bootout", launchdlib.service_target(name))
         r = launchdlib.launchctl("bootstrap", launchdlib.domain(), str(dst))
         out.append({"name": name, "ok": r.returncode == 0, "plist": str(dst),
@@ -150,13 +200,22 @@ def _disable(targets, agents):
     """Bootout → remove the LaunchAgents copy. Idempotent by construction: a bootout of something not
     loaded and an unlink of something not there are both fine, so `disable` twice is `disable` once.
     The rendered plists under `jobs/launchd/` are NOT removed — they are the vault's record of the
-    schedule, owned by `apply`, and deleting them would make `enable` unable to say what changed."""
+    schedule, owned by `apply`, and deleting them would make `enable` unable to say what changed.
+
+    Same per-job containment as `_enable` (r1/I4), and it matters more here: a `disable` that aborts
+    partway leaves jobs loaded that the operator has just asked to turn off, which is the direction
+    you least want to fail silently in."""
     out = []
     for name in targets:
         launchdlib.launchctl("bootout", launchdlib.service_target(name))
         dst = agents / f"{launchdlib.label(name)}.plist"
-        existed = dst.exists()
-        dst.unlink(missing_ok=True)
+        try:
+            existed = dst.exists()
+            dst.unlink(missing_ok=True)
+        except OSError as exc:
+            out.append({"name": name, "ok": False, "plist": str(dst), "removed": False,
+                        "error": str(exc)[:200]})
+            continue
         out.append({"name": name, "ok": True, "plist": str(dst), "removed": existed, "error": ""})
     return out
 
@@ -228,6 +287,9 @@ def main(argv):
     elif action == "apply":
         skipped = [n for n, j in jobs.items() if j.get("risk") not in SCHEDULABLE]
         schedulable = [n for n, j in jobs.items() if j.get("risk") in SCHEDULABLE]
+        # `apply` renders what `enable` installs, so it answers the legality question at the same
+        # bar (r1/B2) — otherwise the vault-side artefact could disagree with `job list`'s own flags.
+        _legal_or_refuse(action, schedulable, jobs, external)
         out = paths.PLAINKEEP_HOME / "jobs" / "launchd"
         if dry:
             data = {"dry_run": True, "would_render": [f"com.plainkeep.{n}.plist" for n in schedulable],
@@ -267,6 +329,10 @@ def main(argv):
 
     elif action in ("enable", "disable"):
         targets, skipped = _targets(action, argv[1:], jobs, all_)
+        if action == "enable":
+            # Before anything is rendered, installed or loaded — including under --dry-run, so the
+            # preview cannot promise what the real run would refuse.
+            _legal_or_refuse(action, targets, jobs, external)
         agents = launchdlib.launch_agents_dir()
         if dry:
             # A --dry-run is a READ (the guardrail downgrades it), so it never needs --yes and never

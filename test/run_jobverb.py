@@ -204,37 +204,79 @@ def case_illegal_jobs_are_never_scheduled(td: Path) -> None:
     run(h, "disable", "--all", "--yes")
 
 
-def case_enable_contains_a_mid_loop_refusal(td: Path) -> None:
-    """A REFUSAL IS ONE JOB'S FAILURE, NOT THE LOOP'S (r1/I4).
+def case_traversing_key_is_refused_before_anything_runs(td: Path) -> None:
+    """A REGISTRY KEY IS A FILENAME, SO IT IS VALIDATED AS ONE (r1/M2).
 
-    A registry key that traverses (`../../..`) is correctly refused by the path wall when the
-    VAULT-side render is attempted — that is what actually stops an escape, and it is load-bearing.
-    But the refusal used to `sys.exit(5)` from inside the loop, so any job processed earlier was
-    already installed and bootstrapped and the operator got exit 5 with no statement of what had been
-    left enabled. `enable` already collects per-job results for a failed `bootstrap`; a guardrail
-    refusal now takes the same path."""
-    h = td / "midloop"
+    The key becomes `com.plainkeep.<name>.plist` in two directories, one of them outside the vault.
+    The pathwall exemption and the docs claimed the destination was bounded because it never comes
+    from an argument — true, and not the operative bound: it comes from a registry KEY, and the
+    registry is vault content. What actually stopped a traversing key was the path wall firing on the
+    vault-side render, which is a backstop that fires MID-LOOP, after earlier jobs are bootstrapped.
+
+    Now it is a legality rule, checked with the rest of §15 before anything is rendered — so the
+    refusal is whole-command and nothing at all is installed."""
+    h = td / "traverse"
     (h / "jobs").mkdir(parents=True)
     vaultfx.mark_vault(h)
     (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
         "aaa_first": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
         "../../../../../../tmp/pk-escape": {"command": "plainkeep index",
                                             "schedule": {"daily": "07:30"}, "risk": "read"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+    FAKE["fx"].clear()
+    before = set(p.name for p in agents.glob("*.plist"))
+    r = run(h, "enable", "--all", "--yes")
+    out = r.stdout + r.stderr
+    check("a traversing registry key is refused as a NAME, before any render",
+          r.returncode == 1 and "not a plain identifier" in out, f"rc={r.returncode} {out}")
+    check("nothing escapes the roots, and nothing at all was installed",
+          not Path("/tmp/pk-escape.plist").exists()
+          and set(p.name for p in agents.glob("*.plist")) == before
+          and not FAKE["fx"].calls(), f"calls={FAKE['fx'].calls()}")
+    check("job list flags the bad key too (one legality model, all readers)",
+          "not a plain identifier" in run(h, "list").stdout, "")
+
+
+def case_enable_contains_a_per_job_failure(td: Path) -> None:
+    """ONE JOB'S FAILURE IS NOT THE LOOP'S (r1/I4).
+
+    `_enable` mutates as it goes — by the third job the first two are already bootstrapped — so an
+    exception escaping the loop left a nonzero exit and no statement of what had been enabled. The
+    `bootstrap` failure path right beside it already collected per-job results; every other per-job
+    failure now takes the same path.
+
+    The injected failure is a directory sitting where one job's installed plist must go, so
+    `copyfile` raises for exactly that job. That is a real OSError on the real path, not a patched
+    function — and it lands mid-loop, between two jobs that must both still be handled."""
+    h = td / "perjob"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "aaa_first": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+        "mmm_blocked": {"command": "plainkeep index", "schedule": {"daily": "07:30"}, "risk": "read"},
         "zzz_last": {"command": "plainkeep consolidate", "schedule": {"daily": "02:30"},
                      "risk": "safe_write"},
     }}), encoding="utf-8")
     agents = FAKE["fx"].agents
+    (agents / "com.plainkeep.mmm_blocked.plist").mkdir()      # a directory where the file must go
     FAKE["fx"].clear()
     r = run(h, "enable", "--all", "--yes", "--json")
-    out = r.stdout + r.stderr
-    check("a traversing registry key is still refused (nothing escapes the roots)",
-          not Path("/tmp/pk-escape.plist").exists()
-          and not (agents / "com.plainkeep.../../../../../../tmp/pk-escape.plist").exists(), out)
-    check("the loop finishes and reports the refusal as that job's failure",
-          "zzz_last" in out and ("refus" in out.lower() or "deny" in out.lower()
-                                or "escape" in out.lower()), out)
-    check("a mid-loop refusal exits nonzero but still summarizes partial state",
-          r.returncode != 0 and "aaa_first" in out, f"rc={r.returncode} {out}")
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    results_by = {d["name"]: d for d in env.get("data", {}).get("results", [])}
+    check("the loop finishes: every job is reported, not just the ones before the failure",
+          set(results_by) == {"aaa_first", "mmm_blocked", "zzz_last"}, str(sorted(results_by)))
+    check("the failing job is reported as that job's failure, with its reason",
+          results_by.get("mmm_blocked", {}).get("ok") is False
+          and results_by["mmm_blocked"]["error"], str(results_by.get("mmm_blocked")))
+    check("the jobs on either side of it still succeeded",
+          results_by.get("aaa_first", {}).get("ok") is True
+          and results_by.get("zzz_last", {}).get("ok") is True, str(results_by))
+    check("a per-job failure still exits nonzero", r.returncode == 1, f"rc={r.returncode}")
+    check("the job AFTER the failure really was bootstrapped",
+          any(c.startswith("bootstrap ") and "zzz_last" in c for c in FAKE["fx"].calls()),
+          str(FAKE["fx"].calls()))
+    (agents / "com.plainkeep.mmm_blocked.plist").rmdir()
     run(h, "disable", "--all", "--yes")
 
 
@@ -410,7 +452,8 @@ def main() -> int:
         # r1 fix wave: the adversarial cases. Same fixture root, fresh vaults.
         case_plist_is_not_injectable(Path(td))
         case_illegal_jobs_are_never_scheduled(Path(td))
-        case_enable_contains_a_mid_loop_refusal(Path(td))
+        case_traversing_key_is_refused_before_anything_runs(Path(td))
+        case_enable_contains_a_per_job_failure(Path(td))
 
     print(f"{BOLD}Jobs scheduler verb (job list/run/apply/enable/disable/status) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

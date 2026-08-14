@@ -2,6 +2,7 @@
   "description": "Model of the §15 jobs registry (jobs/registry.yaml). The simulator checks the design's own job rules: only read/safe_write may be scheduled; jobs call verbs (no inline logic); declared risk matches what the command actually does; commands reference real verbs; mutating jobs are safe to run mid-work.",
   "external_allowlist": ["restic"],
   "jobs": {
+    "start":        { "command": "plainkeep start --automated",         "schedule": { "daily": "07:30" },        "risk": "safe_write", "writes": ["~/plainkeep/journal"] },
     "index":        { "command": "plainkeep index",                     "schedule": { "interval_minutes": 60 }, "risk": "read",       "writes": ["~/plainkeep/.index"] },
     "close_nudge":  { "command": "plainkeep close --automated",         "schedule": { "daily": "18:30" },        "risk": "safe_write", "writes": ["~/plainkeep/journal"] },
     "backup_check": { "command": "plainkeep backup",                    "schedule": { "weekly": "Fri 17:00" },   "risk": "read",       "writes": [] },

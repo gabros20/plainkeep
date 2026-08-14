@@ -15,6 +15,11 @@ def _tasks(status):
 
 def main(argv):
     _, argv = output.parse_argv(argv)
+    # The daily 07:30 job (§15) passes this, mirroring `close --automated`: behaviour is IDENTICAL,
+    # only the journal's audit line differs. That difference is the point — reading the journal in
+    # the morning must tell you whether the schedule opened your day or you did, and a marker in the
+    # one line already written is cheaper than a second record of the same fact.
+    automated = "--automated" in argv
     dry = "--dry-run" in argv
     active, waiting = _tasks("active"), _tasks("waiting")
     inbox = len([p for p in paths.INBOX.glob("*.md")]) if paths.INBOX.exists() else 0
@@ -64,7 +69,7 @@ def main(argv):
 
     output.emit(data, "start", human=render)
     if not dry:
-        paths.append_journal("started the day")
+        paths.append_journal("started the day" + (" (automated)" if automated else ""))
     return output.EXIT_OK
 
 

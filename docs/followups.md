@@ -636,3 +636,36 @@ both verbs and asserts exit 5 with an empty `tools/` and an unexecuted payload.
   which is the cheapest stdlib signal available, and a glibc interpreter on a musl host would be
   misread (`bin/lib/provision.py:164`). Only this machine's `aarch64-apple-darwin` is ever downloaded
   in anger.
+
+## Automation lifecycle (`plainkeep job enable/disable/status`, ADR-022)
+
+Found by the two review waves of the automation-default task (r1 FAIL → fix wave → r2
+PASS_WITH_FOLLOWUPS, 2026-08-14; `.orchestrate/review-task-automation-r1.md` / `-r2.md` in the
+working repo). Blockers and importants were fixed in-branch; this is the deferred tail.
+
+- **`bin/backup/run.py` still has its own plist renderer and prints the deprecated
+  `cp` + `launchctl load` handoff** (r1/I3). `com.plainkeep.backup.cloud` is invisible to
+  `job status` and doctor's rows, and the activation story it teaches contradicts ADR-022's.
+  Measured: `grep` puts the second template at `bin/backup/run.py:303-352`; ADR-022 scopes itself
+  to §15 in a Consequences bullet rather than claiming it. Fix: render through `launchdlib`,
+  activate through `job enable`, or register it as a §15 job.
+- **Registry keys are validated as filesystem names only where `enable`/`apply` run** (r2/M6).
+  `_NAME_RE` gates the mutating-install path, but `disable` deliberately stays permissive and does
+  `unlink` on a path built from the key: with a hand-made `com.plainkeep...` directory inside the
+  LaunchAgents dir and a traversing key, `job disable --all --yes` deleted a file outside it
+  (demonstrated in a throwaway tree; nothing in plainkeep creates that hop directory, so it is an
+  unenforced invariant, not a live exploit). Fix where the rule belongs: `load_registry()`.
+- **`setup automation` without `--yes` prints the generic confirm line** — "installs downloads and
+  local dependencies" — which is false for this layer and omits the launchd facts that made it
+  confirm-class (r2/M7). The wizard prompt says the right thing; `_confirm_message()` needs the
+  same special case `models` already has.
+- **`hermetic.seal()` makes `launchctl_available()` true everywhere**, so the off-Darwin refusal in
+  `job enable` and doctor's availability guard are untestable on the one platform where they are
+  real (r2/M9). No suite asserts them today — measured zero hits. Fix: gate availability on
+  `is_darwin() or override`, or let a suite opt out of the seam.
+- **No suite exercises a *failing* `bootstrap`** — the fake always succeeds; the error path is
+  truncated launchctl stderr, never measured (implementer OQ3, r2 concurs). And **`job status` has
+  no last-run/last-exit column** (OQ5): a job that bootstraps cleanly and dies at 07:30 is visible
+  only in `.logs/jobs/<name>.log`; `launchctl print` carries the data.
+- **Drift names two remedies in two surfaces** (OQ6): the setup layer says `plainkeep setup
+  automation`, doctor says `plainkeep job apply`. Both converge, measured; it reads as noise.

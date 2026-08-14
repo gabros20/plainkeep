@@ -1,9 +1,23 @@
 #!/usr/bin/env python3
 """run_jobverb.py — exercises the `plainkeep job` verb: list (with legality flags), run <name>
-(manual fallback), apply (render launchd plists, skipping non-schedulable jobs). Temp PLAINKEEP_HOME."""
+(manual fallback), apply (render launchd plists, skipping non-schedulable jobs), and the §15
+ACTIVATION lifecycle — enable / disable / status against a FAKE launchctl. Temp PLAINKEEP_HOME.
+
+NOTHING HERE MAY TOUCH THE REAL MACHINE. Activation is the one part of this verb whose blast radius
+is outside the vault (`~/Library/LaunchAgents`, the user's live launchd domain), so both halves of it
+are redirected for every invocation in this suite, in `run()` and with no per-call opt-in:
+
+  * `PLAINKEEP_LAUNCH_AGENTS_DIR` → a temp directory, so an installed plist lands in the fixture.
+  * `PLAINKEEP_LAUNCHCTL` → the fake from `test/lib/launchdfx.py`, which RECORDS its argv and keeps a
+    tiny "loaded" state directory. Ordering (bootout before bootstrap), the domain target and the
+    exact plist path are asserted from that log rather than believed.
+
+The fake is also what makes the suite host-independent: `bootstrap`/`bootout`/`print` behave the same
+on a Linux runner as on a Mac, and no real `launchctl` is ever executed."""
 from __future__ import annotations
 import json
 import os
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -13,7 +27,7 @@ seal()   # hermetic: an empty throwaway registry, never the developer's real vau
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lib import vaultfx  # noqa: E402
+from lib import launchdfx, vaultfx  # noqa: E402
 GREEN, RED, DIM, BOLD, RESET = "\033[32m", "\033[31m", "\033[2m", "\033[1m", "\033[0m"
 results = []
 
@@ -26,6 +40,25 @@ REGISTRY = {
     },
 }
 
+FAKE: dict[str, object] = {}
+
+
+def text(p: Path) -> str:
+    """Read a file that a not-yet-implemented action may not have created — so a missing artefact
+    reports as a FAILED check rather than a traceback that hides every check after it."""
+    try:
+        return p.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def fake_log() -> list[str]:
+    return FAKE["fx"].calls()
+
+
+def clear_log() -> None:
+    FAKE["fx"].clear()
+
 
 def check(name, cond, detail=""):
     results.append((name, cond, detail))
@@ -33,13 +66,289 @@ def check(name, cond, detail=""):
 
 def run(home, *args):
     env = {**os.environ, "PLAINKEEP_HOME": str(home)}
+    if FAKE:
+        env.update(FAKE["fx"].env)
     return subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), *args],
                           capture_output=True, text=True, env=env)
 
 
+def render_plist(home: Path, name: str) -> str:
+    """`launchdlib.plist()` for one registry job, obtained from a child process so this suite keeps
+    its subprocess shape (and never puts `bin/lib` on its own `sys.path`)."""
+    code = ("import sys; sys.path.insert(0, %r)\n"
+            "from lib import launchdlib\n"
+            "reg = launchdlib.load_registry()\n"
+            "sys.stdout.write(launchdlib.plist(%r, reg['jobs'][%r]))\n"
+            % (str(REPO / "bin"), name, name))
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       env={**os.environ, "PLAINKEEP_HOME": str(home)})
+    return r.stdout if r.returncode == 0 else ""
+
+
+def case_plist_is_not_injectable(td: Path) -> None:
+    """THE PLIST IS DATA, NOT A STRING TEMPLATE (r1/B1).
+
+    `jobs/registry.json` is vault content: agent-writable, and it syncs between machines. Rendering it
+    into an f-string of XML meant a command could close the `<array>` and open top-level launchd keys
+    of its own — `Program` (which OVERRIDES the executable `ProgramArguments` names) and `RunAtLoad`
+    (which fires it at login instead of at 07:30). Its first two tokens were `plainkeep index`, so the
+    §15 token validation passed it, and before this branch the result was an inert file in the vault.
+    This branch installs and bootstraps it.
+
+    The check is a ROUND TRIP through `plistlib` — the same parser launchd uses — because that is the
+    only question that matters: does the document a parser sees contain exactly the argv the registry
+    named, and nothing else? Asserting on the rendered text (no `<key>Program`) would pass for an
+    escaping scheme that was merely different rather than correct."""
+    h = td / "inject"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    payload = ("plainkeep index --q</string></array>"
+               "<key>Program</key><string>/bin/sh</string>"
+               "<key>RunAtLoad</key><true/>"
+               "<key>ProgramArguments2</key><array><string>x")
+    ampersand = "plainkeep index --tag a&b<c"
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "evil": {"command": payload, "schedule": {"daily": "07:30"}, "risk": "read"},
+        "amp": {"command": ampersand, "schedule": {"daily": "07:30"}, "risk": "read"},
+    }}), encoding="utf-8")
+
+    def parsed(name: str) -> dict:
+        """Parse the render, or report an unparseable one as a failed check rather than a traceback
+        (an unescaped `&` produces invalid XML, which is its own kind of broken)."""
+        try:
+            return plistlib.loads(render_plist(h, name).encode("utf-8"))
+        except Exception as exc:
+            check(f"the rendered plist for '{name}' PARSES", False, str(exc))
+            return {}
+
+    doc = parsed("evil")
+    check("a hostile registry command renders a plist that still parses", bool(doc))
+
+    expected_keys = {"Label", "ProgramArguments", "EnvironmentVariables",
+                     "StartCalendarInterval", "StandardOutPath", "StandardErrorPath"}
+    check("registry content cannot introduce launchd keys of its own",
+          set(doc) == expected_keys, f"got {sorted(doc)}")
+    check("registry content cannot set Program (which overrides the executable)",
+          "Program" not in doc, str(sorted(doc)))
+    check("registry content cannot set RunAtLoad (fire at login, not at the scheduled time)",
+          "RunAtLoad" not in doc, str(sorted(doc)))
+    check("the payload survives as ARGUMENTS, verbatim and inert",
+          doc.get("ProgramArguments", [])[1:] == payload.split()[1:],
+          str(doc.get("ProgramArguments")))
+    check("the plist's label still names the job, not something the command supplied",
+          doc.get("Label") == "com.plainkeep.evil", str(doc.get("Label")))
+
+    amp_doc = parsed("amp")
+    check("XML metacharacters in a command round-trip exactly (& and <)",
+          amp_doc.get("ProgramArguments", [])[1:] == ["index", "--tag", "a&b<c"],
+          str(amp_doc.get("ProgramArguments")))
+
+
+def case_illegal_jobs_are_never_scheduled(td: Path) -> None:
+    """WHAT `job run` REFUSES, `job enable` MUST NOT SCHEDULE (r1/B2).
+
+    `_validate()` is the §15 legality model — one verb, no inline logic, a verb that exists, an
+    external command on the allowlist. `list` shows its warnings and `run` refuses on them. `enable`
+    and `apply` checked only the RISK CLASS, which is a self-declared field in the same file, so a
+    job the product refuses to run once by hand was installed and bootstrapped to run unattended
+    forever. That is the ratchet pointing the wrong way.
+
+    The refusal is WHOLE-COMMAND rather than per-job-skip: an illegal entry means the registry is
+    malformed, and the operator has to see that. See the report's fix-wave design decisions."""
+    h = td / "illegal"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "evil_external": {"command": "/bin/sh -c curl-evil-placeholder",
+                          "schedule": {"daily": "07:30"}, "risk": "safe_write"},
+        "xml_smuggle": {"command": "plainkeep index</string><string>--x",
+                        "schedule": {"daily": "07:30"}, "risk": "read"},
+        "ghost_verb": {"command": "plainkeep notaverb", "schedule": {"daily": "07:30"}, "risk": "read"},
+        "fine": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+
+    r = run(h, "list")
+    check("job list still flags all three illegal jobs (the model itself is unchanged)",
+          all(n in r.stdout for n in ("evil_external", "xml_smuggle", "ghost_verb"))
+          and r.stdout.count("⚠") >= 3, r.stdout)
+
+    FAKE["fx"].clear()
+    before = set(p.name for p in agents.glob("*.plist"))
+    r = run(h, "enable", "--all", "--yes")
+    after = set(p.name for p in agents.glob("*.plist"))
+    check("job enable --all refuses a registry holding illegal jobs",
+          r.returncode == 1 and "refusing" in (r.stdout + r.stderr), f"rc={r.returncode} {r.stdout}{r.stderr}")
+    check("the refusal names every offender, not just the first",
+          all(n in (r.stdout + r.stderr) for n in ("evil_external", "xml_smuggle", "ghost_verb")),
+          r.stdout + r.stderr)
+    check("a refused enable installs NOTHING and calls no launchctl",
+          after == before and not FAKE["fx"].calls(),
+          f"installed={sorted(after - before)} calls={FAKE['fx'].calls()}")
+
+    r = run(h, "enable", "ghost_verb", "--yes")
+    check("job enable <name> refuses a named illegal job",
+          r.returncode == 1 and "not a built verb" in (r.stdout + r.stderr), r.stdout + r.stderr)
+
+    r = run(h, "apply")
+    check("job apply refuses to render an illegal registry",
+          r.returncode == 1 and not (h / "jobs" / "launchd").exists(), r.stdout + r.stderr)
+
+    # And the legal case still works — a refusal that fires on everything teaches nothing.
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "fine": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    }}), encoding="utf-8")
+    r = run(h, "enable", "--all", "--yes")
+    check("a legal registry still enables normally",
+          r.returncode == 0 and (agents / "com.plainkeep.fine.plist").exists(), r.stdout + r.stderr)
+    run(h, "disable", "--all", "--yes")
+
+
+def case_traversing_key_is_refused_before_anything_runs(td: Path) -> None:
+    """A REGISTRY KEY IS A FILENAME, SO IT IS VALIDATED AS ONE (r1/M2).
+
+    The key becomes `com.plainkeep.<name>.plist` in two directories, one of them outside the vault.
+    The pathwall exemption and the docs claimed the destination was bounded because it never comes
+    from an argument — true, and not the operative bound: it comes from a registry KEY, and the
+    registry is vault content. What actually stopped a traversing key was the path wall firing on the
+    vault-side render, which is a backstop that fires MID-LOOP, after earlier jobs are bootstrapped.
+
+    Now it is a legality rule, checked with the rest of §15 before anything is rendered — so the
+    refusal is whole-command and nothing at all is installed."""
+    h = td / "traverse"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "aaa_first": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+        "../../../../../../tmp/pk-escape": {"command": "plainkeep index",
+                                            "schedule": {"daily": "07:30"}, "risk": "read"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+    FAKE["fx"].clear()
+    before = set(p.name for p in agents.glob("*.plist"))
+    r = run(h, "enable", "--all", "--yes")
+    out = r.stdout + r.stderr
+    check("a traversing registry key is refused as a NAME, before any render",
+          r.returncode == 1 and "not a plain identifier" in out, f"rc={r.returncode} {out}")
+    check("nothing escapes the roots, and nothing at all was installed",
+          not Path("/tmp/pk-escape.plist").exists()
+          and set(p.name for p in agents.glob("*.plist")) == before
+          and not FAKE["fx"].calls(), f"calls={FAKE['fx'].calls()}")
+    check("job list flags the bad key too (one legality model, all readers)",
+          "not a plain identifier" in run(h, "list").stdout, "")
+
+
+def case_enable_contains_a_per_job_failure(td: Path) -> None:
+    """ONE JOB'S FAILURE IS NOT THE LOOP'S (r1/I4).
+
+    `_enable` mutates as it goes — by the third job the first two are already bootstrapped — so an
+    exception escaping the loop left a nonzero exit and no statement of what had been enabled. The
+    `bootstrap` failure path right beside it already collected per-job results; every other per-job
+    failure now takes the same path.
+
+    The injected failure is a directory sitting where one job's installed plist must go, so
+    `copyfile` raises for exactly that job. That is a real OSError on the real path, not a patched
+    function — and it lands mid-loop, between two jobs that must both still be handled."""
+    h = td / "perjob"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "aaa_first": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+        "mmm_blocked": {"command": "plainkeep index", "schedule": {"daily": "07:30"}, "risk": "read"},
+        "zzz_last": {"command": "plainkeep consolidate", "schedule": {"daily": "02:30"},
+                     "risk": "safe_write"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+    (agents / "com.plainkeep.mmm_blocked.plist").mkdir()      # a directory where the file must go
+    FAKE["fx"].clear()
+    r = run(h, "enable", "--all", "--yes", "--json")
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    results_by = {d["name"]: d for d in env.get("data", {}).get("results", [])}
+    check("the loop finishes: every job is reported, not just the ones before the failure",
+          set(results_by) == {"aaa_first", "mmm_blocked", "zzz_last"}, str(sorted(results_by)))
+    check("the failing job is reported as that job's failure, with its reason",
+          results_by.get("mmm_blocked", {}).get("ok") is False
+          and results_by["mmm_blocked"]["error"], str(results_by.get("mmm_blocked")))
+    check("the jobs on either side of it still succeeded",
+          results_by.get("aaa_first", {}).get("ok") is True
+          and results_by.get("zzz_last", {}).get("ok") is True, str(results_by))
+    check("a per-job failure still exits nonzero", r.returncode == 1, f"rc={r.returncode}")
+    check("the job AFTER the failure really was bootstrapped",
+          any(c.startswith("bootstrap ") and "zzz_last" in c for c in FAKE["fx"].calls()),
+          str(FAKE["fx"].calls()))
+    (agents / "com.plainkeep.mmm_blocked.plist").rmdir()
+    run(h, "disable", "--all", "--yes")
+
+
+_MALFORMED_REGISTRY = {"external_allowlist": [], "jobs": {
+    # aaa/zzz sort either side of the malformed entry, so the loop provably continues past it.
+    "aaa_ok": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    "mmm_noschedule": {"command": "plainkeep index", "risk": "read"},
+    "zzz_ok": {"command": "plainkeep consolidate", "schedule": {"daily": "02:30"}, "risk": "safe_write"},
+}}
+
+
+def case_enable_contains_a_malformed_entry(td: Path) -> None:
+    """A MALFORMED ENTRY IS THAT JOB'S FAILURE, NOT THE LOOP'S CRASH (r2/I5).
+
+    r1/I4's containment caught only OSError, but `launchdlib.plist()` raises KeyError for a missing
+    `schedule` and ValueError for an unparseable one (or a control character in the command, since
+    the plistlib rewrite) — all of which escaped `_enable` as a raw traceback AFTER earlier jobs
+    were already bootstrapped: the exact complaint I4 was commissioned to close, through a
+    different door. The read path (`job_states`) already treats "can't re-render" as data; the
+    mutating path must not be less careful."""
+    h = td / "malformed_enable"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps(_MALFORMED_REGISTRY), encoding="utf-8")
+    clear_log()
+    r = run(h, "enable", "--all", "--yes", "--json")
+    check("a malformed entry raises no traceback out of enable",
+          "Traceback" not in r.stderr, r.stderr[:200])
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    results_by = {d["name"]: d for d in env.get("data", {}).get("results", [])}
+    check("the loop finishes past the malformed entry: every job is reported",
+          set(results_by) == {"aaa_ok", "mmm_noschedule", "zzz_ok"}, str(sorted(results_by)))
+    check("the malformed entry is its own recorded failure, with the reason",
+          results_by.get("mmm_noschedule", {}).get("ok") is False
+          and results_by["mmm_noschedule"]["error"], str(results_by.get("mmm_noschedule")))
+    check("the job sorting AFTER the malformed one was still bootstrapped",
+          any(c.startswith("bootstrap ") and "zzz_ok" in c for c in fake_log()), str(fake_log()))
+    check("a malformed entry still exits nonzero from enable", r.returncode == 1, f"rc={r.returncode}")
+    run(h, "disable", "--all", "--yes")
+
+
+def case_apply_contains_a_malformed_entry(td: Path) -> None:
+    """`apply` renders the same projection `enable` installs, so the same malformed entry must be
+    its recorded failure there too — partial renders reported, not a traceback (r2/I5)."""
+    h = td / "malformed_apply"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps(_MALFORMED_REGISTRY), encoding="utf-8")
+    r = run(h, "apply", "--json")
+    check("a malformed entry raises no traceback out of apply",
+          "Traceback" not in r.stderr, r.stderr[:200])
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    data = env.get("data", {})
+    check("apply still renders the well-formed jobs either side of it",
+          set(data.get("rendered", [])) == {"com.plainkeep.aaa_ok.plist", "com.plainkeep.zzz_ok.plist"},
+          str(data.get("rendered")))
+    check("apply reports the malformed entry as that job's failure, with the reason",
+          [f["name"] for f in data.get("failed", [])] == ["mmm_noschedule"]
+          and data["failed"][0].get("error"), str(data.get("failed")))
+    check("a malformed entry still exits nonzero from apply", r.returncode == 1, f"rc={r.returncode}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
-        h = Path(td)
+        # The vault and the "machine" (LaunchAgents + the fake launchctl's log/state) are SIBLINGS,
+        # not nested: an installed plist must be provably outside the vault, the way the real one is.
+        machine = Path(td) / "machine"
+        machine.mkdir()
+        FAKE["fx"] = launchdfx.install(machine)
+        FAKE["agents"] = FAKE["fx"].agents
+        h = Path(td) / "vault"
+        h.mkdir()
         (h / "wiki" / "notes").mkdir(parents=True)
         (h / "wiki" / "notes" / "alpha.md").write_text(
             "---\ntype: note\nupdated: 2026-06-20\n---\n# Alpha\nretrieval and ranking\n")
@@ -73,10 +382,143 @@ def main() -> int:
         if (ld / "com.plainkeep.index.plist").exists():
             pl = (ld / "com.plainkeep.index.plist").read_text()
             check("plist is well-formed launchd", "StartInterval" in pl and "com.plainkeep.index" in pl and "PLAINKEEP_HOME" in pl, pl[:200])
+        check("job apply's hint points at the activation VERB, not a manual launchctl line",
+              "plainkeep job enable" in r.stdout and "launchctl load" not in r.stdout, r.stdout)
         r = run(h, "run", "nope")
         check("job run rejects an unknown job name", r.returncode == 2, r.stdout + r.stderr)
 
-    print(f"{BOLD}Jobs scheduler verb (job list/run/apply) — {len(results)} checks{RESET}\n")
+        # ---------------------------------------------------------------------------------
+        # The §15 ACTIVATION lifecycle: enable / disable / status. Everything below runs
+        # against the fake launchctl and the redirected LaunchAgents dir installed above.
+        # ---------------------------------------------------------------------------------
+        agents = FAKE["agents"]
+
+        # status after `apply` alone: rendered, but neither installed nor loaded. This is exactly the
+        # gap the old manual handoff left open, and the row is what makes it visible.
+        clear_log()
+        r = run(h, "status", "--json")
+        rows = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
+        by_name = {row["name"]: row for row in rows[1:]}
+        check("job status reports rendered/installed/loaded per job",
+              r.returncode == 0 and {"index", "consolidate"} <= set(by_name)
+              and all({"rendered", "installed", "loaded", "drift"} <= set(row) for row in by_name.values()),
+              r.stdout + r.stderr)
+        check("job status: rendered-but-not-installed after apply alone",
+              by_name.get("index", {}).get("rendered") is True
+              and by_name.get("index", {}).get("installed") is False
+              and by_name.get("index", {}).get("loaded") is False, str(by_name.get("index")))
+
+        # The confirm gate. `enable` writes outside the vault and mutates the live launchd domain, so
+        # it is confirm-class: no --yes (and no tty) must refuse with exit 3 having done NOTHING.
+        clear_log()
+        r = run(h, "enable", "--all")
+        check("job enable without --yes refuses (exit 3) and installs nothing",
+              r.returncode == 3 and not list(agents.glob("*.plist")) and not fake_log(),
+              f"rc={r.returncode} agents={list(agents.glob('*.plist'))} log={fake_log()}")
+
+        # --dry-run is a READ: it prints the plan, needs no --yes, writes nothing and calls nothing.
+        clear_log()
+        r = run(h, "enable", "--all", "--dry-run")
+        check("job enable --dry-run writes nothing and calls no launchctl",
+              r.returncode == 0 and not list(agents.glob("*.plist")) and not fake_log()
+              and "com.plainkeep.index.plist" in r.stdout,
+              f"rc={r.returncode} out={r.stdout} log={fake_log()}")
+
+        # The real thing.
+        clear_log()
+        r = run(h, "enable", "--all", "--yes")
+        log = fake_log()
+        installed = sorted(p.name for p in agents.glob("*.plist"))
+        check("job enable --all --yes installs a COPY into LaunchAgents (never a symlink)",
+              r.returncode == 0
+              and installed == ["com.plainkeep.consolidate.plist", "com.plainkeep.index.plist"]
+              and not any((agents / n).is_symlink() for n in installed),
+              f"rc={r.returncode} installed={installed} err={r.stderr}")
+        check("job enable skips the non-schedulable job under --all",
+              not (agents / "com.plainkeep.danger.plist").exists() and "danger" in r.stdout, r.stdout)
+        idx_out = [ln for ln in log if "com.plainkeep.index" in ln]
+        check("job enable boots OUT before it bootstraps (idempotent reload)",
+              len(idx_out) == 2 and idx_out[0].startswith("bootout ") and idx_out[1].startswith("bootstrap "),
+              str(log))
+        check("job enable targets the gui domain and the INSTALLED plist path",
+              any(ln == f"bootout gui/{os.getuid()}/com.plainkeep.index" for ln in log)
+              and any(ln == f"bootstrap gui/{os.getuid()} {agents / 'com.plainkeep.index.plist'}"
+                      for ln in log), str(log))
+        check("the installed copy is byte-identical to the rendered vault artefact",
+              bool(text(agents / "com.plainkeep.index.plist"))
+              and text(agents / "com.plainkeep.index.plist") == text(ld / "com.plainkeep.index.plist"))
+
+        r = run(h, "status", "--json")
+        rows = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
+        by_name = {row["name"]: row for row in rows[1:]}
+        check("job status reports loaded once enabled",
+              all(by_name.get(n, {}).get("installed") and by_name.get(n, {}).get("loaded")
+                  for n in ("index", "consolidate")),
+              str(by_name))
+
+        # Drift: a rendered plist that no longer matches a fresh render of the registry. Stale files
+        # are never trusted — `status` says so, and `enable` re-renders rather than copying the stale one.
+        (ld / "com.plainkeep.index.plist").write_text("<plist>stale</plist>\n", encoding="utf-8")
+        r = run(h, "status", "--json")
+        rows = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
+        by_name = {row["name"]: row for row in rows[1:]}
+        check("job status flags DRIFT when a rendered plist no longer matches the registry",
+              by_name.get("index", {}).get("drift") is True
+              and by_name.get("consolidate", {}).get("drift") is False, str(by_name))
+        r = run(h, "enable", "index", "--yes")
+        check("job enable re-renders from the registry (never copies a stale file)",
+              r.returncode == 0 and "stale" not in text(ld / "com.plainkeep.index.plist")
+              and bool(text(agents / "com.plainkeep.index.plist"))
+              and "stale" not in text(agents / "com.plainkeep.index.plist"),
+              r.stdout + r.stderr)
+
+        # A named non-schedulable job is REFUSED (skipping it silently under an explicit name would
+        # be the wrong lesson); an unknown name is a usage error.
+        r = run(h, "enable", "danger", "--yes")
+        check("job enable refuses a named non-schedulable job",
+              r.returncode == 1 and "not schedulable" in (r.stdout + r.stderr)
+              and not (agents / "com.plainkeep.danger.plist").exists(), r.stdout + r.stderr)
+        r = run(h, "enable", "nope", "--yes")
+        check("job enable rejects an unknown job name (exit 2)", r.returncode == 2, r.stdout + r.stderr)
+
+        # disable: bootout + remove the LaunchAgents copy. The rendered vault artefact STAYS — it is
+        # the vault-side record of what the schedule is, and `apply` is what owns it.
+        clear_log()
+        r = run(h, "disable", "--all", "--dry-run")
+        check("job disable --dry-run removes nothing and calls no launchctl",
+              r.returncode == 0 and (agents / "com.plainkeep.index.plist").exists() and not fake_log(),
+              f"rc={r.returncode} log={fake_log()}")
+        r = run(h, "disable", "--all")
+        check("job disable without --yes refuses (exit 3)",
+              r.returncode == 3 and (agents / "com.plainkeep.index.plist").exists(), r.stdout + r.stderr)
+        clear_log()
+        r = run(h, "disable", "--all", "--yes")
+        check("job disable --all --yes boots out and removes the LaunchAgents copies",
+              r.returncode == 0 and not list(agents.glob("*.plist"))
+              and any(ln == f"bootout gui/{os.getuid()}/com.plainkeep.index" for ln in fake_log()),
+              f"rc={r.returncode} log={fake_log()} left={list(agents.glob('*.plist'))}")
+        check("job disable leaves the rendered vault artefacts in place",
+              (ld / "com.plainkeep.index.plist").exists() and (ld / "com.plainkeep.consolidate.plist").exists())
+        r2 = run(h, "disable", "--all", "--yes")
+        check("job disable is idempotent when nothing is loaded", r2.returncode == 0, r2.stdout + r2.stderr)
+        r = run(h, "status", "--json")
+        rows = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
+        by_name = {row["name"]: row for row in rows[1:]}
+        check("job status is back to rendered-only after disable",
+              by_name.get("index", {}).get("rendered") and not by_name.get("index", {}).get("installed")
+              and not by_name.get("index", {}).get("loaded"), str(by_name))
+
+        # r1 fix wave: the adversarial cases. Same fixture root, fresh vaults.
+        case_plist_is_not_injectable(Path(td))
+        case_illegal_jobs_are_never_scheduled(Path(td))
+        case_traversing_key_is_refused_before_anything_runs(Path(td))
+        case_enable_contains_a_per_job_failure(Path(td))
+
+        # r2 fix: I5 — containment must cover more than OSError.
+        case_enable_contains_a_malformed_entry(Path(td))
+        case_apply_contains_a_malformed_entry(Path(td))
+
+    print(f"{BOLD}Jobs scheduler verb (job list/run/apply/enable/disable/status) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)
     for name, ok, detail in results:
         mark = f"{GREEN}PASS{RESET}" if ok else f"{RED}FAIL{RESET}"

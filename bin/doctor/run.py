@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, guardrail, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
+from lib import enginetree, guardrail, launchdlib, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
@@ -147,6 +147,12 @@ def _adapter_skills(label: str, link: Path) -> None:
          "or remove the adapter")
 
 
+# `cached_probes` as a DECORATOR, so the whole of `main` is the read-only span without re-indenting
+# it: doctor asks `job_states()` twice (the `automation` setup-layer row, and check 12 below), and
+# without this every rendered job pays two `launchctl print` subprocesses to answer one question
+# (r1/M5). Legal here precisely because doctor mutates nothing — see the policy at the top of this
+# file, and `cached_probes`' own docstring for why the memo is opt-in rather than process-wide.
+@launchdlib.cached_probes()
 def main(argv):
     _, argv = output.parse_argv(argv)
     init = "--init" in argv
@@ -606,6 +612,33 @@ def main(argv):
         (warn if offenders else ok)(
             f"{len(offenders)} confirm/deny-class job(s) scheduled (must never be): {offenders}" if offenders
             else "jobs registry schedules only read/safe_write verbs")
+
+    # 12. ACTIVATION (ADR-022): is the schedule the operator asked for actually running? Three facts,
+    # two of which nothing checked before — a plist under `jobs/launchd/` proves a file was written,
+    # not that it still matches the registry and not that launchd ever read it.
+    #
+    # WARN-ONLY, and per JOB. The `setup layer: automation` row above already reports the aggregate;
+    # what it cannot say is WHICH job drifted, or that the remedy differs by cause — a stale file is
+    # re-rendered (`job apply`), an unloaded one is activated (`job enable`). Never a FAIL: running
+    # plainkeep by hand is a legitimate way to run it, and a health check that goes red for a
+    # declined optional layer is one people stop reading.
+    #
+    # It stays SILENT when nothing is rendered, which is also what keeps it free: `job_states` only
+    # spawns `launchctl print` for a job that has something on disk, so a vault that never rendered
+    # (every fixture, and every machine that declined automation) costs no subprocess at all.
+    if launchdlib.launchctl_available():
+        sched = [s for s in launchdlib.job_states() if s["schedulable"]]
+        rendered = [s for s in sched if s["rendered"]]
+        drifted = [s["name"] for s in sched if s["drift"]]
+        unloaded = [s["name"] for s in rendered if not s["loaded"]]
+        if drifted:
+            warn(f"{len(drifted)} rendered plist(s) no longer match jobs/registry.json: "
+                 f"{', '.join(drifted)} (re-render: plainkeep job apply)")
+        if unloaded:
+            warn(f"{len(unloaded)} scheduled job(s) rendered but not loaded into launchd: "
+                 f"{', '.join(unloaded)} (activate: plainkeep job enable --all --yes)")
+        if rendered and not drifted and not unloaded:
+            ok(f"{len(rendered)} scheduled job(s) rendered and loaded into launchd")
 
     nfail = sum(1 for lv, _ in checks if lv == "fail")
     nwarn = sum(1 for lv, _ in checks if lv == "warn")

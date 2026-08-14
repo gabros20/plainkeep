@@ -1,7 +1,7 @@
 {
   "verb": "start",
   "summary": "daily start: today's journal, carry-forward open tasks, dashboard",
-  "usage": "plainkeep start [--dry-run]",
+  "usage": "plainkeep start [--automated] [--dry-run]",
   "risk": "safe_write",
   "dry_run": true,
   "reads": [
@@ -12,7 +12,7 @@
   "writes": [
     "journal/"
   ],
-  "hints": "Daily start: opens today's journal, carries forward open tasks, shows the dashboard. Common mistake: expecting it to be read-only \u2014 it seeds and logs to the journal.",
+  "hints": "Daily start: opens today's journal, carries forward open tasks, shows the dashboard. `--automated` is what the scheduled 07:30 job passes \u2014 same behaviour, the journal's audit line just says the schedule opened the day. Common mistake: expecting it to be read-only \u2014 it seeds and logs to the journal.",
   "output": {
     "mode": "scalar",
     "fields": {

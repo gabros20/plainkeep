@@ -203,6 +203,33 @@ EXEMPT: dict[str, dict[str, str]] = {
             "the REGISTRY's config directory ($XDG_CONFIG_HOME/plainkeep) — it lives outside every "
             "vault by design, since it is the thing that knows which vaults exist",
     },
+    # ACTIVATION (ADR-022). `plainkeep job enable` installs a rendered plist into the directory
+    # launchd actually reads — `~/Library/LaunchAgents`, or `$PLAINKEEP_LAUNCH_AGENTS_DIR` for the
+    # suites. That is the machine, not a vault, so `classify()` answers DENY for it exactly the way
+    # it answers DENY for `~/.local/bin` and `~/work`: same class as the `backup init` plist this
+    # verb's old printed handoff asked the operator to copy by hand, now done by the product.
+    #
+    # WHAT BOUNDS IT, since the wall cannot — and this reason was WRONG in its first form, which is
+    # worth leaving visible. It said "never from an argument", which is true and beside the point: the
+    # filename is `com.plainkeep.<registry key>.plist`, and `jobs/registry.json` is VAULT CONTENT, so
+    # not caller-controlled is not the same as not attacker-controlled. Review r1 walked a traversing
+    # key straight to `vaultio`, which refused it — mid-loop, after earlier jobs were bootstrapped.
+    #
+    # The operative bound now, in order: a registry key is validated as the identifier it becomes
+    # (`bin/job/run.py`'s `_NAME_RE`, checked with the rest of §15 BEFORE anything is rendered); the
+    # vault-side render still goes through `vaultio` as an independent second answer; the directory
+    # comes from `launchdlib.launch_agents_dir()` and nothing else; the `com.plainkeep.` prefix is
+    # glued to the front of whatever survives; and the CONTENT is a fresh `plistlib` render of the
+    # registry, never a file copied from wherever. It is confirm-class (`--yes`, or exit 3) and
+    # previewable with `--dry-run`, which is the consent this exemption stands in for.
+    "bin/job/run.py": {
+        'agents.mkdir(parents=True, exist_ok=True)':
+            "~/Library/LaunchAgents — created if the operator has never had a launch agent; the "
+            "directory is derived from launchdlib.launch_agents_dir(), never from an argument",
+        'shutil.copyfile(src, dst)':
+            "installing the rendered plist as a COPY (launchd is unreliable with symlinked plists, "
+            "and a symlink would let a vault edit change what a privileged loader reads)",
+    },
     # The ENGINE INSTALLER (Phase 2 Task 2). Every line below writes into
     # `${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/`, which is CODE and is outside
     # every vault by construction — the disjointness check in `vaultroot.validate()` refuses any
@@ -405,6 +432,11 @@ def _is_raw_delete(code: str) -> bool:
 PINNED_DELETES: dict[str, set[str]] = {
     "bin/archive/run.py": {"shutil.rmtree(repo)"},
     "bin/backup/run.py": {"out.unlink(missing_ok=True)", "stale.unlink(missing_ok=True)"},
+    # `plainkeep job disable` removing the installed launch agent (ADR-022). The question this
+    # ratchet asks — can this path resolve under `~/files/**/in/`? — is answered NO structurally: the
+    # name is `<launch_agents_dir()>/com.plainkeep.<registry key>.plist`, and neither half comes from
+    # an argument. It removes only what `enable` installed; the vault-side rendered plist is left.
+    "bin/job/run.py": {"dst.unlink(missing_ok=True)"},
     "bin/lib/setuplib.py": {"shutil.rmtree(venv, ignore_errors=True)",
                             "asset_path.unlink(missing_ok=True)",
                             "checksums_path.unlink(missing_ok=True)"},

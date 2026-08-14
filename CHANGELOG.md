@@ -7,6 +7,21 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 ## [Unreleased]
 
 ### Added
+- **Automation is now the default offering, and activation is a product verb** ([`docs/DECISIONS.md`](docs/DECISIONS.md)
+  ADR-022 — accepted 2026-08-14). The §15 registry gains a `start` job (daily 07:30,
+  `plainkeep start --automated`), and `plainkeep job enable | disable | status` replaces the printed
+  `launchctl` recipe: `enable` re-renders from the registry, installs a copy into
+  `~/Library/LaunchAgents` and `launchctl bootstrap`s it (confirm-class — `--yes` or exit 3;
+  `--dry-run` previews); `status` reports rendered / installed / loaded plus drift. The setup
+  wizard now defaults automation ON (still one skippable prompt), and the `automation` layer is
+  `ready` only when the schedule is actually loaded. Doctor warns (never fails) on drift or a
+  rendered-but-unloaded schedule. Plists are built with `plistlib` — registry content can no longer
+  express plist structure — and `enable`/`apply` refuse any job `job list` flags as illegal.
+  **Upgrade note:** plists rendered by an earlier version differ byte-wise from a fresh render
+  (indentation/key order), so the first `job status`/doctor after upgrading reports drift once —
+  `plainkeep job apply` re-renders and clears it; nothing about the schedule changed.
+
+### Added
 - **A compiled `plainkeep` core binary now does the dispatching** ([`docs/DECISIONS.md`](docs/DECISIONS.md)
   ADR-013, Phase 1 — accepted 2026-08-01). `plainkeep <verb>` used to be a bash script that started three
   Python interpreters (guardrail, resolver, verb); the gate and the resolver are now compiled into one

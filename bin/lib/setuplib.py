@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from lib import embed, enginetree, enrichlib, imagelib, paths, provision, vaultio
+from lib import embed, enginetree, enrichlib, imagelib, launchdlib, paths, provision, vaultio
 
 # The ENGINE's bin/ (paths.BIN) — this module reads engine-owned files through it, `bin/ui/version.txt`
 # above all: the pin `plainkeep setup ui` downloads against and compares the installed binary to.
@@ -84,7 +84,13 @@ LAYERS: list[Layer] = [
     Layer("search", "Semantic search", "Vector index dependencies and embedding model", False, "confirm"),
     Layer("backups", "Durability", "Encrypted off-machine backup configuration", False, "blocked", "plainkeep backup init"),
     Layer("models", "File-processing / LLM", "Local models and optional file-processing runtimes", False, "confirm"),
-    Layer("automation", "Schedules", "Rendered launchd job plists", False, "safe_write"),
+    # CONFIRM, not safe_write (r1/I1). Every other layer installs into the vault or into its own
+    # `.venv`; this one writes into `~/Library/LaunchAgents` and mutates a running launchd domain.
+    # `plainkeep job enable` is confirm-class for exactly that reason, and while this gate said
+    # `safe_write` the setup path around it handed out the `--yes` the verb was asking for — so
+    # `plainkeep setup automation`, with no `--yes` anywhere, loaded launch agents. Three documents
+    # claimed otherwise. The wizard is unaffected (it advances with yes=True after its own prompt).
+    Layer("automation", "Schedules", "Scheduled jobs, loaded into launchd", False, "confirm"),
     Layer("ui", "Terminal UI", "The guided plainkeep-ui binary for humans (`plainkeep ui`)", False, "confirm"),
 ]
 
@@ -359,18 +365,44 @@ def _status_models(layer: Layer) -> dict:
 
 
 def _status_automation(layer: Layer) -> dict:
+    """READY MEANS THE SCHEDULE IS RUNNING (ADR-022), not that a file was written.
+
+    This layer used to report `ready` for `jobs/launchd/*.plist` existing. That is a claim about a
+    render, and the thing the operator wants to know is whether launchd ever read it — two states
+    that only ever coincided when someone remembered to paste the activation commands `job apply`
+    printed. Every machine where they did not got a green setup row and a schedule that never fired.
+
+    So the layer has two items, and both must be true:
+      * `rendered` — every schedulable job has a plist under `jobs/launchd/` that still MATCHES a
+        fresh render of the registry (a drifted file is not rendered; it is stale),
+      * `loaded`   — launchd answers for every one of their labels.
+
+    Both come from `launchdlib.job_states()`, which is the same function the `job status` action and
+    doctor's advisory rows read, through the same injectable launchctl seam.
+    """
     # launchd is macOS-only: off Darwin the layer cannot apply at all (Task 8) — report
     # `not_applicable` with a one-line reason rather than a perpetually-"absent" nag the host can
     # never satisfy. Advisory everywhere it surfaces (doctor never fails it; `--all` never attempts it).
     if _platform_system() != "Darwin":
         return _row(layer, "not_applicable", "launchd scheduling is macOS-only (no plists on this host)",
                     [{"id": "launchd", "title": "jobs/launchd/*.plist", "ok": False, "advisory": True}], "")
-    launchd = paths.PLAINKEEP_HOME / "jobs" / "launchd"
-    plists = sorted(launchd.glob("*.plist")) if launchd.exists() else []
-    items = [{"id": "launchd", "title": "jobs/launchd/*.plist", "ok": bool(plists)}]
-    state = "ready" if plists else "absent"
-    detail = "job plists rendered" if state == "ready" else "job plists have not been rendered"
-    return _row(layer, state, detail, items, "plainkeep setup automation" if state != "ready" else "")
+    sched = [s for s in launchdlib.job_states() if s["schedulable"]]
+    rendered = bool(sched) and all(s["rendered"] and not s["drift"] for s in sched)
+    loaded = bool(sched) and all(s["loaded"] for s in sched)
+    items = [{"id": "rendered", "title": "jobs/launchd/*.plist match the registry", "ok": rendered},
+             {"id": "loaded", "title": f"loaded into launchd ({len(sched)} job(s))", "ok": loaded}]
+    if rendered and loaded:
+        return _row(layer, "ready", "scheduled jobs are rendered and loaded into launchd", items)
+    state = _items_status(items)
+    if rendered:
+        # The one state worth naming precisely: the files are right, the schedule simply is not
+        # running. Activating is its own confirm-class verb, so `next` points at it rather than at
+        # the layer (which would re-render files that are already correct).
+        return _row(layer, state, "job plists are rendered but not loaded into launchd", items,
+                    "plainkeep job enable --all --yes")
+    detail = ("job plists have not been rendered" if not sched or not any(s["rendered"] for s in sched)
+              else "rendered job plists no longer match jobs/registry.json")
+    return _row(layer, state, detail, items, "plainkeep setup automation")
 
 
 # --- the `ui` layer (ADR-011): the plainkeep-ui terminal binary for humans. The TS source lives in the
@@ -657,7 +689,14 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             _ensure_venv(res, fake=fake)
             res["ran"].append(_venv_pip(*models_deps(), fake=fake))
         elif layer.id == "automation":
+            # BOTH HALVES, through the ONE advance path (ADR-022). Rendering was all this did, which
+            # is why the layer could report success on a machine whose schedule never ran. `enable`
+            # is confirm-class as a verb, so the layer passes `--yes` — the operator's consent was
+            # given to `plainkeep setup automation` (or the wizard prompt, which now names the jobs
+            # and times), and re-asking inside a step they already approved is how a wizard becomes
+            # a thing people click through.
             res["ran"].append(_run_verb("job", "apply", fake=fake))
+            res["ran"].append(_run_verb("job", "enable", "--all", "--yes", fake=fake))
         elif layer.id == "ui":
             # ADR-011: download the compiled plainkeep-ui release binary (sha256-verified) into
             # $PLAINKEEP_HOME/.local/bin — or compile from cli/ source in a contributor checkout.

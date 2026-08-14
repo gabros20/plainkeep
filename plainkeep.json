@@ -690,8 +690,8 @@
     },
     {
       "verb": "job",
-      "summary": "list | run <name> | apply \u2014 scheduler-neutral jobs (\u00a715); apply renders launchd plists",
-      "usage": "plainkeep job [list|run <name>|apply]",
+      "summary": "list | run <name> | apply | enable | disable | status \u2014 scheduler-neutral jobs (\u00a715); apply renders launchd plists, enable activates them",
+      "usage": "plainkeep job [list|run <name>|apply|status|enable [<name>\u2026|--all] --yes|disable [<name>\u2026|--all] --yes]",
       "risk": "safe_write",
       "args": [
         {
@@ -705,10 +705,11 @@
       ],
       "writes": [
         "jobs/launchd/",
+        "~/Library/LaunchAgents/",
         ".logs/jobs/",
         "journal/"
       ],
-      "hints": "Scheduler-neutral jobs: list/run/apply. Only read/safe_write may be scheduled. Common mistake: a job with inline shell logic \u2014 a job calls exactly ONE verb.",
+      "hints": "Scheduler-neutral jobs: list/run/apply/enable/disable/status. Only read/safe_write may be scheduled. `apply` renders the plists; `enable` installs + loads them into launchd (confirm-class \u2014 needs --yes); `status` shows rendered/installed/loaded per job. Common mistake: a job with inline shell logic \u2014 a job calls exactly ONE verb.",
       "output": {
         "mode": "rows",
         "fields": {
@@ -747,6 +748,52 @@
           "risk": "safe_write",
           "dry_run": true,
           "args": []
+        },
+        {
+          "name": "status",
+          "summary": "per job: rendered (vault) / installed (LaunchAgents) / loaded (launchd)",
+          "risk": "read",
+          "args": []
+        },
+        {
+          "name": "enable",
+          "summary": "install the plists into ~/Library/LaunchAgents and load them into launchd; needs --yes",
+          "risk": "confirm",
+          "dry_run": true,
+          "args": [
+            {
+              "name": "name",
+              "type": "string",
+              "required": false,
+              "help": "job name(s) from `plainkeep job list`; omit with --all"
+            },
+            {
+              "name": "--all",
+              "type": "flag",
+              "required": false,
+              "help": "every schedulable job in the registry"
+            }
+          ]
+        },
+        {
+          "name": "disable",
+          "summary": "unload from launchd and remove the ~/Library/LaunchAgents copies; needs --yes",
+          "risk": "confirm",
+          "dry_run": true,
+          "args": [
+            {
+              "name": "name",
+              "type": "string",
+              "required": false,
+              "help": "job name(s) from `plainkeep job list`; omit with --all"
+            },
+            {
+              "name": "--all",
+              "type": "flag",
+              "required": false,
+              "help": "every schedulable job in the registry"
+            }
+          ]
         }
       ],
       "source": "engine",
@@ -1674,7 +1721,7 @@
     {
       "verb": "start",
       "summary": "daily start: today's journal, carry-forward open tasks, dashboard",
-      "usage": "plainkeep start [--dry-run]",
+      "usage": "plainkeep start [--automated] [--dry-run]",
       "risk": "safe_write",
       "dry_run": true,
       "reads": [
@@ -1685,7 +1732,7 @@
       "writes": [
         "journal/"
       ],
-      "hints": "Daily start: opens today's journal, carries forward open tasks, shows the dashboard. Common mistake: expecting it to be read-only \u2014 it seeds and logs to the journal.",
+      "hints": "Daily start: opens today's journal, carries forward open tasks, shows the dashboard. `--automated` is what the scheduled 07:30 job passes \u2014 same behaviour, the journal's audit line just says the schedule opened the day. Common mistake: expecting it to be read-only \u2014 it seeds and logs to the journal.",
       "output": {
         "mode": "scalar",
         "fields": {

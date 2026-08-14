@@ -10,6 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 from lib.hermetic import seal
+from lib import launchdfx      # TEST-ONLY fake launchctl — imported HERE, above the sys.path swap
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -249,6 +250,97 @@ def main() -> int:
                   not na_adv["ran"] and "automation" in na_adv["skipped"], str(na_adv))
         finally:
             restore(mod, old)
+
+        # --- ADR-022: "automation ready" means LOADED, not merely rendered. ---
+        #
+        # The layer used to answer "ready" for `jobs/launchd/*.plist` existing, which is a claim about
+        # a file the operator wrote and not about anything launchd knows. On a machine where the
+        # activation step was never pasted, setup reported the layer done and the schedule never ran —
+        # the exact gap `plainkeep job status` now shows as three separate columns.
+        #
+        # Every probe below goes through the SAME injected seam the verb uses (a fake launchctl and a
+        # redirected LaunchAgents dir): no real `launchctl` runs, and the developer's own
+        # ~/Library/LaunchAgents is never read or written.
+        auto_home = make_home(tmp / "automation")
+        (auto_home / "jobs").mkdir(parents=True)
+        (auto_home / "jobs" / "registry.json").write_text(json.dumps({
+            "external_allowlist": [],
+            "jobs": {
+                "start": {"command": "plainkeep start --automated", "schedule": {"daily": "07:30"},
+                          "risk": "safe_write"},
+                "danger": {"command": "plainkeep capture x", "schedule": {"daily": "09:00"},
+                           "risk": "confirm"},
+            }}), encoding="utf-8")
+        auto_fake = launchdfx.install(tmp / "automation-machine")
+        auto_env_saved = {k: os.environ.get(k) for k in auto_fake.env}
+        os.environ.update(auto_fake.env)
+        mod_a = reload_setuplib(auto_home)
+        old = patch_probe(mod_a, _platform_system=lambda: "Darwin")
+        try:
+            a0 = mod_a.status("automation")[0]
+            item_ids = [i["id"] for i in a0["items"]]
+            check("automation layer reports rendered AND loaded as separate items",
+                  item_ids == ["rendered", "loaded"], str(a0))
+            check("automation is absent when nothing is rendered",
+                  a0["status"] == "absent", str(a0))
+
+            # Rendered but never activated: the state the old layer called `ready`. Rendered by the
+            # PRODUCT (`plainkeep job apply`) rather than by reaching into the renderer, so the file
+            # the layer then judges is the one a real operator would have.
+            subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), "apply"],
+                           capture_output=True, text=True,
+                           env={**os.environ, "PLAINKEEP_HOME": str(auto_home),
+                                "PYTHONPATH": str(REPO / "bin")})
+            a1 = mod_a.status("automation")[0]
+            check("rendered-but-not-loaded is PARTIAL, never ready",
+                  a1["status"] == "partial"
+                  and [i["ok"] for i in a1["items"]] == [True, False], str(a1))
+            check("a rendered-but-unloaded layer points at the activation verb",
+                  "job enable" in (a1.get("next") or ""), str(a1.get("next")))
+
+            # ONE advance path, and it now covers both halves: render, then activate. Run it from the
+            # partial state above — `advance` skips an already-ready layer, so asking it here is the
+            # only place the two-step plan is observable.
+            os.environ["PLAINKEEP_SETUP_FAKE"] = "1"
+            auto_fake.clear()
+            adv = mod_a.advance("automation", yes=True, fake=True)
+            joined = " | ".join(adv["ran"])
+            check("automation advance renders AND enables (through the job verb)",
+                  "job apply" in joined and "job enable" in joined and "--yes" in joined, joined)
+            check("a fake automation advance mutates no launchd state",
+                  not [c for c in auto_fake.calls() if c.split()[:1] in (["bootstrap"], ["bootout"])],
+                  str(auto_fake.calls()))
+
+            # --- r1/I1: the confirm class has to survive the SETUP path, not just the verb. ---
+            #
+            # ADR-022, machine-contract §9 and docs/setup.md all say activation needs `--yes`. That
+            # was true of `plainkeep job enable` and false of `plainkeep setup automation`, which is
+            # the path this branch makes DEFAULT: the layer's gate was still `safe_write`, so
+            # `advance(yes=False)` sailed through and ran `job enable --all --yes` on the operator's
+            # behalf. It is the only layer that writes outside the vault and mutates a system daemon,
+            # and it was the only such layer gated `safe_write`.
+            check("the automation layer is confirm-class (it leaves the vault)",
+                  mod_a._layer("automation").gate == "confirm", str(mod_a._layer("automation")))
+            no_yes = mod_a.advance("automation", yes=False, fake=True)
+            check("advance('automation', yes=False) demands confirmation and runs nothing",
+                  no_yes["confirm_needed"] and not no_yes["ran"], str(no_yes))
+            check("advance('automation', yes=True) is unaffected (the wizard's path)",
+                  bool(mod_a.advance("automation", yes=True, fake=True)["ran"]))
+            os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
+
+            # Loaded, through the same seam launchd would answer on.
+            auto_fake.mark_loaded("com.plainkeep.start")
+            a2 = mod_a.status("automation")[0]
+            check("automation is ready only once launchd has the job loaded",
+                  a2["status"] == "ready" and all(i["ok"] for i in a2["items"]), str(a2))
+        finally:
+            restore(mod_a, old)
+            for k, v in auto_env_saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            mod = reload_setuplib(home)
 
         # Task 8: models blocked (ollama absent) → advance skips with the install hint, never crashes.
         old = patch_probe(mod, _ollama_present=lambda: False, _ollama_has=lambda model: False)
@@ -612,6 +704,78 @@ def main() -> int:
               "plainkeep backup init" in wiz_out and ("backups", True) not in wiz_calls, wiz_out)
         check("wizard prints standing next-steps (push + backup init)",
               "git push -u origin main" in wiz_out, wiz_out)
+
+        # --- ADR-022: automation is the DEFAULT offering, so the wizard's default is ON. ---
+        #
+        # It defaulted OFF ("no vectors, no model pulls, no jobs"), which put the product's core —
+        # a day that starts and closes without being asked — behind a prompt the operator had to
+        # know to say yes to. It is still ONE skippable prompt; what changed is which way Enter goes,
+        # and that the prompt SAYS what it is about to schedule instead of the word "Schedules".
+        check("wizard automation default is ON", setup_run.WIZARD_DEFAULTS["automation"] is True,
+              str(setup_run.WIZARD_DEFAULTS))
+        check("wizard still defaults search/models OFF (only automation flipped)",
+              setup_run.WIZARD_DEFAULTS["search"] is False and setup_run.WIZARD_DEFAULTS["models"] is False,
+              str(setup_run.WIZARD_DEFAULTS))
+
+        wiz2_calls = []
+
+        def wiz2_advance(layer_id, *, yes, fake):
+            wiz2_calls.append((layer_id, yes))
+            r = mod._result()
+            r["ran"].append(f"did {layer_id}")
+            return r
+
+        # Answers: Enter, Enter, Enter, Enter — every layer left at its default. Automation must be
+        # among the ones that ADVANCED.
+        wiz2_answers = iter(["", "", "", ""])
+        wiz2_lines = []
+        wiz2_prompts = []
+
+        def wiz2_ask(prompt):
+            wiz2_prompts.append(prompt)
+            return next(wiz2_answers)
+
+        _saved_w2 = setup_run.setuplib.advance
+        setup_run.setuplib.advance = wiz2_advance
+        try:
+            wiz2_summary = setup_run._run_wizard(wiz_rows, wiz2_ask, wiz2_lines.append)
+        finally:
+            setup_run.setuplib.advance = _saved_w2
+        wiz2_out = "\n".join(wiz2_lines)
+        check("wizard schedules automation on a bare Enter (it is the default now)",
+              ("automation", True) in wiz2_calls and "automation" in wiz2_summary["advanced"],
+              str(wiz2_calls))
+        check("the wizard intro no longer says automation is off",
+              "automation default to OFF" not in wiz2_out and "no jobs" not in wiz2_out, wiz2_out)
+        check("the automation prompt spells out what gets scheduled (not just 'Schedules')",
+              any("07:30" in p and "18:30" in p for p in wiz2_prompts), str(wiz2_prompts))
+        # r1/I1 sub-point: the prompt must also name the fact that MAKES it confirm-class — it writes
+        # outside the vault. "schedule your day?" and "install launch agents into ~/Library?" are
+        # different questions, and the operator is agreeing to the second one.
+        check("the automation prompt says it writes outside the vault",
+              any("LaunchAgents" in p for p in wiz2_prompts), str(wiz2_prompts))
+
+        # r1/M3: design decision #6 said the prompt is DERIVED from this vault's registry rather than
+        # a hardcoded sentence — but the static fallback also contains 07:30 and 18:30, so deleting
+        # the registry-reading branch entirely would have left the check above green. A registry that
+        # DISAGREES with the fallback is the only thing that pins the decision.
+        moved = tmp / "moved-schedule"
+        (moved / "jobs").mkdir(parents=True)
+        (moved / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+            "close_nudge": {"command": "plainkeep close --automated", "schedule": {"daily": "22:00"},
+                            "risk": "safe_write"},
+        }}), encoding="utf-8")
+        moved_prompt = subprocess.run(
+            [sys.executable, "-c",
+             "import sys; sys.path.insert(0, %r)\n"
+             "import importlib.util as u\n"
+             "s = u.spec_from_file_location('sr', %r); m = u.module_from_spec(s); s.loader.exec_module(m)\n"
+             "print(m._automation_prompt())" % (str(REPO / "bin"), str(REPO / "bin" / "setup" / "run.py"))],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAINKEEP_HOME": str(moved)}).stdout
+        check("the wizard prompt is READ from the vault's registry, not a hardcoded sentence",
+              "22:00" in moved_prompt and "18:30" not in moved_prompt and "07:30" not in moved_prompt,
+              moved_prompt)
 
         os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
 

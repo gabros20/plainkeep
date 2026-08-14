@@ -121,10 +121,20 @@ plainkeep setup --wizard
 The wizard walks the layers in order with skippable prompts and safe defaults pre-selected:
 
 - `skeleton` **on** — required and safe.
+- `automation` **on** — your day starts and closes on a schedule (see [Automation](#automation-the-default) below). It installs launch agents in `~/Library/LaunchAgents`; reversible with one command.
 - `ui` **on** — a small sha256-verified binary download into the vault's own `.local/bin`.
-- `search`, `models`, `automation` **off** — no vectors, no model pulls, no scheduled jobs.
+- `search`, `models` **off** — no vectors, no model pulls.
 
 Press Enter to accept a default. Type `y`/`n` to override.
+
+The automation prompt names the actual jobs and times it is about to schedule, read from *your*
+`jobs/registry.json` rather than from a sentence in this document:
+
+```
+schedule these to run unattended — start (daily 07:30), index (every 60m),
+consolidate (daily 02:30), organize_scan (weekly Sun 03:00),
+close_nudge (daily 18:30), backup_check (weekly Fri 17:00)? [Y/n]
+```
 
 Already-`ready` layers are noted and skipped. `blocked` and `not_applicable` layers show their reason and next step, and are never prompted to install.
 
@@ -149,6 +159,8 @@ Read the checklist top to bottom.
 
 Required structure failures are fixed by the `skeleton` layer. Optional layers degrade gracefully: missing search, model, backup, or automation pieces become warnings with a one-line next step, not a broken vault.
 
+The `automation` row reads `ready` only when the jobs are **loaded into launchd**, not merely rendered — the two are different facts and `plainkeep job status` shows them separately.
+
 ## Advance layers
 
 Run one layer at a time for a controlled setup:
@@ -157,7 +169,7 @@ Run one layer at a time for a controlled setup:
 plainkeep setup skeleton --yes
 plainkeep setup search --yes
 plainkeep setup models --yes
-plainkeep setup automation --yes
+plainkeep setup automation --yes   # renders the job plists AND loads them into launchd
 plainkeep setup ui --yes
 ```
 
@@ -266,6 +278,96 @@ Key facts:
 - **Updates ride `script/update`.** The engine ships the expected version in `bin/ui/version.txt`; the installed binary self-reports via `plainkeep-ui --version`. When they disagree, the layer turns `partial` with "update available" and re-running `plainkeep setup ui --yes` re-downloads the pinned release.
 
 Full install, use, and update details are in the [terminal UI guide](terminal-ui.md).
+
+## Automation: the default
+
+Scheduling is not an add-on here. The premise of the whole system is that your day opens and closes
+without you asking, so the `automation` layer is **on by default** in the wizard and in
+`plainkeep setup --all --yes`. What it schedules (macOS/launchd; see the note at the end):
+
+| Job | When | What it does |
+| --- | --- | --- |
+| `start` | daily 07:30 | opens today's journal, carries forward open tasks |
+| `close_nudge` | daily 18:30 | writes the day's facts digest, flags loose ends |
+| `index` | every 60m | keeps search current |
+| `consolidate` | daily 02:30 | the nightly digest |
+| `organize_scan` | weekly Sun 03:00 | proposes filing moves (proposes — never applies) |
+| `backup_check` | weekly Fri 17:00 | nags if the backup is stale |
+
+Only `read` and `safe_write` jobs may be scheduled (§15). A `confirm`-class verb — anything that
+transmits, or that moves your files without asking — can never run unattended, and both
+`plainkeep job list` and `plainkeep doctor` flag a registry that tries.
+
+### The three states, and why they are three
+
+```sh
+plainkeep job status
+```
+
+```
+6 job(s) — rendered (vault) / installed (LaunchAgents) / loaded (launchd):
+
+  start          yes  yes  yes  loaded
+  index          yes  yes  -    installed, not loaded
+  consolidate    yes  -    -    rendered only
+```
+
+- **rendered** — `jobs/launchd/com.plainkeep.<job>.plist` exists in your vault *and still matches a
+  fresh render of `jobs/registry.json`*. A file that no longer matches is **drift**, not a render:
+  it describes a schedule nobody currently wants.
+- **installed** — a copy of that plist sits in `~/Library/LaunchAgents/`.
+- **loaded** — launchd actually answers for the label (`launchctl print`).
+
+They are reported separately because they used to be conflated, and the middle two were where a
+schedule quietly failed to exist. Until ADR-022, `plainkeep job apply` rendered the files and
+*printed* the `ln -sf` + `launchctl load` lines for you to paste; every machine where nobody pasted
+them had a green setup row and no automation.
+
+### Turning it on, off, and back on
+
+```sh
+plainkeep job enable --all --yes      # render fresh, install, load
+plainkeep job enable start --yes      # just one job
+plainkeep job disable --all --yes     # unload + remove the installed copies
+plainkeep job enable --all --dry-run  # exactly what would happen; nothing written, launchctl not called
+```
+
+`enable` and `disable` need `--yes` (they exit `3` without it), and so does `plainkeep setup
+automation` — the layer is confirm-class for the same reason the verb is. That is not ceremony: they
+write outside your vault, into `~/Library/LaunchAgents`, and they change the state of a running
+system daemon. `--dry-run` is a read and never needs `--yes`.
+
+A job whose registry entry is illegal under §15 — inline shell logic, a verb that does not exist, an
+external command that is not on the allowlist, a name that is not a plain identifier — is **refused**
+by `apply` and `enable`, not skipped. `plainkeep job list` shows you which and why. What the product
+refuses to run once by hand it will not schedule to run unattended.
+
+`enable` always **re-renders from the registry** before installing, so editing `jobs/registry.json`
+and re-running is the whole edit loop — it never installs a stale file. It unloads before it loads,
+so re-enabling an already-running job is safe and idempotent.
+
+`disable` removes the installed copies and unloads the jobs. It leaves the rendered plists under
+`jobs/launchd/` alone: those are your vault's record of the schedule, owned by `plainkeep job apply`.
+
+Nothing is lost by declining. Every job is one verb you can run yourself:
+
+```sh
+plainkeep job run start
+```
+
+### If something looks wrong
+
+`plainkeep doctor` reports two advisory warnings (never a failure — running plainkeep by hand is a
+legitimate way to run it):
+
+- *rendered but not loaded* → `plainkeep job enable --all --yes`
+- *rendered plists no longer match the registry* → `plainkeep job apply`
+
+Job output goes to `.logs/jobs/<name>.log`.
+
+**Off macOS** the layer reports `not_applicable`: launchd is macOS-only. The registry is
+scheduler-neutral by design, so the jobs remain runnable by hand (or from any scheduler you point at
+`plainkeep job run <name>`), and nothing about this ever fails a health check on Linux.
 
 ## Blocked: backups
 

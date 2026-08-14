@@ -1276,7 +1276,25 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
 
     # OBJECT INTEGRITY (acceptance item 2). Full `fsck`, not `--connectivity-only`: the migration is
     # about to make a commit the operator's only recovery path depends on, and connectivity says
-    # nothing about whether a blob still hashes to its name.
+    # nothing about whether a blob still hashes to its name. That argument is about REACHABLE
+    # objects, and `--no-reflogs` does not weaken it — every reachable object is still walked and
+    # still hash-verified.
+    #
+    # What it drops is fsck's default traversal of the REFLOG, which reports objects an earlier
+    # `git gc` pruned but that a stale reflog entry still names:
+    #
+    #     error: HEAD: invalid reflog entry <sha>
+    #     error: <sha>: object corrupt or missing: .git/objects/ab/cdef…
+    #
+    # That is the normal state of any repository whose history was rewritten and then packed — it
+    # says nothing about the integrity of the history itself, and no retry can clear it because the
+    # objects are genuinely gone. Refusing there fails a healthy vault for a condition git created
+    # on purpose.
+    #
+    # This is safe for recovery specifically because rollback does NOT read the reflog: it restores
+    # `before_commit` from the receipt (see `_before_commit()` and the parent check in `rollback()`),
+    # which is a reachable commit this fsck still verifies. If recovery ever starts depending on the
+    # reflog, this flag has to come back off with it.
     # A concurrent `git gc` makes fsck fail for reasons that are not corruption: it writes
     # `.tmp-<pid>-pack-<sha>.pack` while packing, packs loose objects and unlinks them, and builds
     # a rev-index that is briefly unreadable. All of it surfaces as a non-zero fsck naming a path
@@ -1290,7 +1308,8 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
     # must neither pass on unverified objects nor abort a healthy vault over git's housekeeping.
     t0 = time.time()
     for attempt in range(4):
-        fsck = _git(vault, "-c", "gc.auto=0", "fsck", "--no-progress", "--no-dangling", check=False)
+        fsck = _git(vault, "-c", "gc.auto=0", "fsck", "--no-progress", "--no-dangling",
+                    "--no-reflogs", check=False)
         if fsck.returncode == 0 or not _only_vanished_object_errors(vault, fsck):
             break
         doc["fsck_retries"] = attempt + 1

@@ -1836,3 +1836,143 @@ how a WARN bucket stops meaning "look at this".
 - **`init` does not seed `templates/obsidian/`**, because those files are user data that lives in a
   source checkout and an installed engine does not carry them. `plainkeep doctor --init` seeds
   `.obsidian/` from them when they are there; on a data-only vault that row stays advisory.
+
+## ADR-022 — activation is a product verb, and automation is the default offering (2026-08-14)
+
+**Status.** **Accepted** (2026-08-14). It reverses one boundary this repo had drawn deliberately —
+*"the privileged, out-of-root step is yours to run"*, printed by `plainkeep job apply` since §15 —
+and it flips the wizard default that put the system's own premise behind an opt-in. Basis:
+`bin/job/run.py`, the new `bin/lib/launchdlib.py`, `bin/lib/setuplib.py`'s `automation` layer, and
+`test/run_jobverb.py` / `test/run_setup_layers.py` / `test/run_health.py`, whose fake-launchctl seam
+is what makes any of this assertable.
+
+### Context — a handoff nobody could tell had been skipped
+
+`plainkeep job apply` rendered launchd plists into `jobs/launchd/` and then printed two lines for the
+operator to paste:
+
+```
+ln -sf <vault>/jobs/launchd/com.plainkeep.*.plist ~/Library/LaunchAgents/
+for p in ~/Library/LaunchAgents/com.plainkeep.*.plist; do launchctl load "$p"; done
+```
+
+The reasoning was sound as far as it went: writing outside the three roots is a different kind of
+act, the path wall DENIES it (`test/run_pathwall.py`'s exemption list is the record), and handing it
+to the human keeps the product honest about its blast radius.
+
+What it produced was worse than either alternative. Three states existed —
+
+1. rendered (a file in the vault),
+2. installed (a file in `~/Library/LaunchAgents`),
+3. loaded (launchd answers for the label)
+
+— the product could only observe the first, and it reported the first as **done**. The `automation`
+setup layer returned `ready` for `jobs/launchd/*.plist` existing, so a machine where nobody pasted
+the commands had a green `plainkeep setup`, a green `plainkeep doctor`, and no automation. Nothing
+anywhere would ever say so. A refusal teaches; a printed instruction that is silently not followed
+teaches nothing and lies to every later check.
+
+### D1 — `enable` / `disable` / `status` are actions on `job`, confirm-class
+
+`enable` re-renders each job from the registry, copies the plist into `~/Library/LaunchAgents/`,
+then `launchctl bootout` (failure ignored) followed by `launchctl bootstrap gui/$UID`. `disable`
+boots out and removes the installed copy. `status` reports the three states above per job.
+
+**The step keeps its weight rather than losing it.** These are `confirm`-class subactions under a
+`safe_write` verb — the same shape as `share revoke` and `models pull` — so they self-gate on
+`--yes` and return exit 3 without it, and `--dry-run` previews both without needing `--yes`, calling
+launchctl zero times. The boundary that moved is *who types the command*, not *whether consent is
+asked*. The old model asked for consent by making the human do the work, which is the one form of
+consent that cannot be recorded, tested, or reversed by the product.
+
+**A copy, not the `ln -sf` the old hint used.** Recent macOS bootstraps symlinked plists
+unreliably, and a symlink means an edit to a vault file changes what a privileged loader reads
+without anything installing anything. The vault artefact is the record; the LaunchAgents file is an
+installed copy of it, and `job status` compares them.
+
+**`enable` never trusts what is on disk.** It renders fresh from `jobs/registry.json` every time.
+The alternative — copy whatever is in `jobs/launchd/` — would load a schedule nobody currently
+wants the first time someone edited the registry and forgot to re-`apply`. That comparison is also
+what `status` exposes as **drift**, and it is the only reason a rendered file can be reported as
+*not* rendered.
+
+**`bootout` before `bootstrap`, with the bootout's failure ignored.** `bootstrap` refuses a label
+that is already loaded, so re-enabling after an edit needs the unload; `bootout` of something never
+loaded exits nonzero, which here means the state we wanted. That pair is what makes `enable`
+idempotent, and `disable` is idempotent for the same reason plus `unlink(missing_ok=True)`.
+
+### D2 — "ready" means loaded, and that is why the layer has two items
+
+The `automation` layer now reports `rendered` **and** `loaded`, and is `ready` only when both hold.
+Rendered-but-not-loaded is `partial`, and its `next` is `plainkeep job enable --all --yes` rather
+than the layer's own name — re-running the layer would re-render files that are already correct.
+
+`advance` runs both halves through the one path (`job apply`, then `job enable --all --yes`). It
+passes `--yes` on the operator's behalf, and that is a deliberate reading of where consent was
+given: to `plainkeep setup automation`, or to a wizard prompt that now names the jobs and times.
+Re-asking inside a step someone already approved is how a wizard becomes a thing people click
+through.
+
+**One renderer, three readers.** `bin/lib/launchdlib.py` exists because the verb, the setup layer
+and doctor now need the same bytes and the same label spelling, and the interesting property is a
+COMPARISON — a second implementation would answer it differently the first time the plist template
+changed. That is ADR-019's rule applied before the fact rather than after it.
+
+### D3 — the wizard defaults automation ON
+
+`WIZARD_DEFAULTS["automation"]` was `False`, under a roadmap line reading "vectors/jobs OFF". Search
+and models stay off (they download gigabytes). Automation is not in that category and never was: it
+is `safe_write`, it schedules only `read`/`safe_write` verbs (§15 forbids anything else), and it is
+reversible with one command the intro line now prints. A system whose premise is that the day opens
+and closes without being asked cannot ship that premise behind a prompt the operator has to know to
+say yes to.
+
+It remains **one skippable prompt**; what changed is which way Enter goes, and that the prompt says
+what it is about to do. It reads the jobs and their cadences out of *this vault's*
+`jobs/registry.json` — "schedule these to run unattended — start (daily 07:30), index (every 60m), …?"
+— because a hardcoded sentence is a second statement of the schedule, and the registry is
+user-editable: someone who moved their close to 22:00 would otherwise be asked to agree to 18:30.
+
+`start` joins the registry at 07:30 in the same change. The day's **close** had been scheduled since
+§15 and its start never was, so "the day begins and ends without you asking" was true at one end.
+`plainkeep start --automated` mirrors `close --automated`: identical behaviour, and the journal's
+audit line records whether the schedule opened the day or the human did.
+
+### D4 — doctor warns, and never fails
+
+Two advisory rows, WARN-only: *rendered but not loaded* → `plainkeep job enable --all --yes`;
+*rendered plists no longer match the registry* → `plainkeep job apply`. Two causes, two different
+remedies, named per job — which is what the aggregate setup-layer row cannot say.
+
+Never a FAIL, because running plainkeep by hand is a legitimate way to run it and a health check
+that goes red for a declined optional layer is one people stop reading. And **silent when nothing is
+rendered**: `job_states()` probes launchd only for a job with something on disk, so a vault that
+declined automation costs no subprocess, and a suite that forgot the seam still cannot reach a real
+launchd session by accident.
+
+### Enforcement
+
+The seam is the deliverable, not a convenience. `PLAINKEEP_LAUNCHCTL` and
+`PLAINKEEP_LAUNCH_AGENTS_DIR` (machine-contract §9) redirect both halves of the machine surface;
+`test/lib/launchdfx.py` supplies a fake that records its argv and keeps a loaded-state directory, so
+bootout-before-bootstrap ordering, the `gui/$UID` target, the installed path, copy-not-symlink,
+drift, the confirm gate and `--dry-run` inertness are all asserted from evidence. No suite runs real
+`launchctl` or touches a real `~/Library/LaunchAgents`.
+
+The two out-of-vault writes (`agents.mkdir`, `shutil.copyfile`) and the one removal
+(`dst.unlink`) join `test/run_pathwall.py`'s exemption and pin lists with their reasons, which keeps
+this ADR's central admission visible in the ratchet rather than only here: the wall still DENIES
+this destination, and what bounds it is that neither the directory nor the filename comes from an
+argument.
+
+### Consequences
+
+- **`plainkeep setup --all --yes` now loads launch agents on macOS.** That is a real behaviour
+  change for a non-interactive caller, and it is the point of the ADR; `--dry-run` shows it, and
+  `plainkeep job disable --all --yes` undoes it.
+- **The wall's model still does not cover verb-owned writes outside the vault.** This adds a third
+  case (after `~/work` and `~/.local/bin`) rather than resolving the open question ADR-015 left.
+- **`job status`'s `loaded` column costs a subprocess per rendered job.** Bounded by a 10s timeout
+  each and skipped entirely when nothing is rendered.
+- **Off macOS nothing changed.** The layer is `not_applicable`, `enable` refuses with the reason,
+  and every job stays runnable by hand — the registry is scheduler-neutral by design.

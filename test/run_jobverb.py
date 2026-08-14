@@ -17,6 +17,7 @@ on a Linux runner as on a Mac, and no real `launchctl` is ever executed."""
 from __future__ import annotations
 import json
 import os
+import plistlib
 import subprocess
 import sys
 import tempfile
@@ -69,6 +70,172 @@ def run(home, *args):
         env.update(FAKE["fx"].env)
     return subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), *args],
                           capture_output=True, text=True, env=env)
+
+
+def render_plist(home: Path, name: str) -> str:
+    """`launchdlib.plist()` for one registry job, obtained from a child process so this suite keeps
+    its subprocess shape (and never puts `bin/lib` on its own `sys.path`)."""
+    code = ("import sys; sys.path.insert(0, %r)\n"
+            "from lib import launchdlib\n"
+            "reg = launchdlib.load_registry()\n"
+            "sys.stdout.write(launchdlib.plist(%r, reg['jobs'][%r]))\n"
+            % (str(REPO / "bin"), name, name))
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       env={**os.environ, "PLAINKEEP_HOME": str(home)})
+    return r.stdout if r.returncode == 0 else ""
+
+
+def case_plist_is_not_injectable(td: Path) -> None:
+    """THE PLIST IS DATA, NOT A STRING TEMPLATE (r1/B1).
+
+    `jobs/registry.json` is vault content: agent-writable, and it syncs between machines. Rendering it
+    into an f-string of XML meant a command could close the `<array>` and open top-level launchd keys
+    of its own — `Program` (which OVERRIDES the executable `ProgramArguments` names) and `RunAtLoad`
+    (which fires it at login instead of at 07:30). Its first two tokens were `plainkeep index`, so the
+    §15 token validation passed it, and before this branch the result was an inert file in the vault.
+    This branch installs and bootstraps it.
+
+    The check is a ROUND TRIP through `plistlib` — the same parser launchd uses — because that is the
+    only question that matters: does the document a parser sees contain exactly the argv the registry
+    named, and nothing else? Asserting on the rendered text (no `<key>Program`) would pass for an
+    escaping scheme that was merely different rather than correct."""
+    h = td / "inject"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    payload = ("plainkeep index --q</string></array>"
+               "<key>Program</key><string>/bin/sh</string>"
+               "<key>RunAtLoad</key><true/>"
+               "<key>ProgramArguments2</key><array><string>x")
+    ampersand = "plainkeep index --tag a&b<c"
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "evil": {"command": payload, "schedule": {"daily": "07:30"}, "risk": "read"},
+        "amp": {"command": ampersand, "schedule": {"daily": "07:30"}, "risk": "read"},
+    }}), encoding="utf-8")
+
+    def parsed(name: str) -> dict:
+        """Parse the render, or report an unparseable one as a failed check rather than a traceback
+        (an unescaped `&` produces invalid XML, which is its own kind of broken)."""
+        try:
+            return plistlib.loads(render_plist(h, name).encode("utf-8"))
+        except Exception as exc:
+            check(f"the rendered plist for '{name}' PARSES", False, str(exc))
+            return {}
+
+    doc = parsed("evil")
+    check("a hostile registry command renders a plist that still parses", bool(doc))
+
+    expected_keys = {"Label", "ProgramArguments", "EnvironmentVariables",
+                     "StartCalendarInterval", "StandardOutPath", "StandardErrorPath"}
+    check("registry content cannot introduce launchd keys of its own",
+          set(doc) == expected_keys, f"got {sorted(doc)}")
+    check("registry content cannot set Program (which overrides the executable)",
+          "Program" not in doc, str(sorted(doc)))
+    check("registry content cannot set RunAtLoad (fire at login, not at the scheduled time)",
+          "RunAtLoad" not in doc, str(sorted(doc)))
+    check("the payload survives as ARGUMENTS, verbatim and inert",
+          doc.get("ProgramArguments", [])[1:] == payload.split()[1:],
+          str(doc.get("ProgramArguments")))
+    check("the plist's label still names the job, not something the command supplied",
+          doc.get("Label") == "com.plainkeep.evil", str(doc.get("Label")))
+
+    amp_doc = parsed("amp")
+    check("XML metacharacters in a command round-trip exactly (& and <)",
+          amp_doc.get("ProgramArguments", [])[1:] == ["index", "--tag", "a&b<c"],
+          str(amp_doc.get("ProgramArguments")))
+
+
+def case_illegal_jobs_are_never_scheduled(td: Path) -> None:
+    """WHAT `job run` REFUSES, `job enable` MUST NOT SCHEDULE (r1/B2).
+
+    `_validate()` is the §15 legality model — one verb, no inline logic, a verb that exists, an
+    external command on the allowlist. `list` shows its warnings and `run` refuses on them. `enable`
+    and `apply` checked only the RISK CLASS, which is a self-declared field in the same file, so a
+    job the product refuses to run once by hand was installed and bootstrapped to run unattended
+    forever. That is the ratchet pointing the wrong way.
+
+    The refusal is WHOLE-COMMAND rather than per-job-skip: an illegal entry means the registry is
+    malformed, and the operator has to see that. See the report's fix-wave design decisions."""
+    h = td / "illegal"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "evil_external": {"command": "/bin/sh -c curl-evil-placeholder",
+                          "schedule": {"daily": "07:30"}, "risk": "safe_write"},
+        "xml_smuggle": {"command": "plainkeep index</string><string>--x",
+                        "schedule": {"daily": "07:30"}, "risk": "read"},
+        "ghost_verb": {"command": "plainkeep notaverb", "schedule": {"daily": "07:30"}, "risk": "read"},
+        "fine": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+
+    r = run(h, "list")
+    check("job list still flags all three illegal jobs (the model itself is unchanged)",
+          all(n in r.stdout for n in ("evil_external", "xml_smuggle", "ghost_verb"))
+          and r.stdout.count("⚠") >= 3, r.stdout)
+
+    FAKE["fx"].clear()
+    before = set(p.name for p in agents.glob("*.plist"))
+    r = run(h, "enable", "--all", "--yes")
+    after = set(p.name for p in agents.glob("*.plist"))
+    check("job enable --all refuses a registry holding illegal jobs",
+          r.returncode == 1 and "refusing" in (r.stdout + r.stderr), f"rc={r.returncode} {r.stdout}{r.stderr}")
+    check("the refusal names every offender, not just the first",
+          all(n in (r.stdout + r.stderr) for n in ("evil_external", "xml_smuggle", "ghost_verb")),
+          r.stdout + r.stderr)
+    check("a refused enable installs NOTHING and calls no launchctl",
+          after == before and not FAKE["fx"].calls(),
+          f"installed={sorted(after - before)} calls={FAKE['fx'].calls()}")
+
+    r = run(h, "enable", "ghost_verb", "--yes")
+    check("job enable <name> refuses a named illegal job",
+          r.returncode == 1 and "not a built verb" in (r.stdout + r.stderr), r.stdout + r.stderr)
+
+    r = run(h, "apply")
+    check("job apply refuses to render an illegal registry",
+          r.returncode == 1 and not (h / "jobs" / "launchd").exists(), r.stdout + r.stderr)
+
+    # And the legal case still works — a refusal that fires on everything teaches nothing.
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "fine": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    }}), encoding="utf-8")
+    r = run(h, "enable", "--all", "--yes")
+    check("a legal registry still enables normally",
+          r.returncode == 0 and (agents / "com.plainkeep.fine.plist").exists(), r.stdout + r.stderr)
+    run(h, "disable", "--all", "--yes")
+
+
+def case_enable_contains_a_mid_loop_refusal(td: Path) -> None:
+    """A REFUSAL IS ONE JOB'S FAILURE, NOT THE LOOP'S (r1/I4).
+
+    A registry key that traverses (`../../..`) is correctly refused by the path wall when the
+    VAULT-side render is attempted — that is what actually stops an escape, and it is load-bearing.
+    But the refusal used to `sys.exit(5)` from inside the loop, so any job processed earlier was
+    already installed and bootstrapped and the operator got exit 5 with no statement of what had been
+    left enabled. `enable` already collects per-job results for a failed `bootstrap`; a guardrail
+    refusal now takes the same path."""
+    h = td / "midloop"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "aaa_first": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+        "../../../../../../tmp/pk-escape": {"command": "plainkeep index",
+                                            "schedule": {"daily": "07:30"}, "risk": "read"},
+        "zzz_last": {"command": "plainkeep consolidate", "schedule": {"daily": "02:30"},
+                     "risk": "safe_write"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+    FAKE["fx"].clear()
+    r = run(h, "enable", "--all", "--yes", "--json")
+    out = r.stdout + r.stderr
+    check("a traversing registry key is still refused (nothing escapes the roots)",
+          not Path("/tmp/pk-escape.plist").exists()
+          and not (agents / "com.plainkeep.../../../../../../tmp/pk-escape.plist").exists(), out)
+    check("the loop finishes and reports the refusal as that job's failure",
+          "zzz_last" in out and ("refus" in out.lower() or "deny" in out.lower()
+                                or "escape" in out.lower()), out)
+    check("a mid-loop refusal exits nonzero but still summarizes partial state",
+          r.returncode != 0 and "aaa_first" in out, f"rc={r.returncode} {out}")
+    run(h, "disable", "--all", "--yes")
 
 
 def main() -> int:
@@ -239,6 +406,11 @@ def main() -> int:
         check("job status is back to rendered-only after disable",
               by_name.get("index", {}).get("rendered") and not by_name.get("index", {}).get("installed")
               and not by_name.get("index", {}).get("loaded"), str(by_name))
+
+        # r1 fix wave: the adversarial cases. Same fixture root, fresh vaults.
+        case_plist_is_not_injectable(Path(td))
+        case_illegal_jobs_are_never_scheduled(Path(td))
+        case_enable_contains_a_mid_loop_refusal(Path(td))
 
     print(f"{BOLD}Jobs scheduler verb (job list/run/apply/enable/disable/status) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

@@ -105,6 +105,70 @@ def case_automation_rows(tmp: Path) -> None:
     check("doctor never FAILs on an automation row", "FAIL" not in r.stdout, r.stdout)
 
 
+def case_no_suite_can_reach_a_real_launchd(tmp: Path) -> None:
+    """THE GUARANTEE IS STRUCTURAL, NOT PER-SUITE (r1/I2).
+
+    `job_states()` probed launchd when a job was rendered **or installed**, and `installed` reads the
+    real `~/Library/LaunchAgents` whenever `PLAINKEEP_LAUNCH_AGENTS_DIR` is unset. So the guard was
+    not "nothing rendered ⇒ no probe" but "nothing rendered AND nothing installed **on this host**" —
+    and `doctor` is spawned by fifteen suites, only three of which install the fake. It was dormant
+    solely because no `com.plainkeep.*` plist existed yet, i.e. it armed itself the moment the
+    developer used the feature this branch ships. Read-only probes, but a documented safety property
+    that was false.
+
+    Two things close it, and this case pins both:
+      1. `seal()` — which EVERY suite already calls — now sets inert defaults for both seam variables,
+         so a suite nobody thought about cannot reach the real binary or the real directory.
+      2. `job_states()` probes on VAULT state alone; a plist installed on the host no longer makes a
+         vault that rendered nothing go asking launchd about it.
+    """
+    fx = launchdfx.install(tmp / "probe-machine")
+    # A machine that already has plainkeep jobs installed — the state that armed the leak.
+    (fx.agents / "com.plainkeep.index.plist").write_text("<plist/>", encoding="utf-8")
+    h = tmp / "novault-render"
+    (h / "jobs").mkdir(parents=True)
+    (h / ".plainkeep").mkdir()
+    (h / ".plainkeep" / "vault.json").write_text('{"schema":"plainkeep.vault/1","id":"probe"}',
+                                                 encoding="utf-8")
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "index": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    }}), encoding="utf-8")
+    env = {**os.environ, "PLAINKEEP_HOME": str(h), **fx.env}
+    subprocess.run([sys.executable, str(REPO / "bin" / "doctor" / "run.py")],
+                   capture_output=True, text=True, env=env)
+    check("a vault that rendered nothing spawns no launchctl, even on a machine that has plists",
+          not (h / "jobs" / "launchd").exists() and not fx.calls(), str(fx.calls()))
+
+    # M5: doctor reads `job_states()` twice (the setup-layer row and check 12). Once rendering is
+    # real, that must not double the probes.
+    subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), "apply"],
+                   capture_output=True, text=True, env=env)
+    fx.clear()
+    subprocess.run([sys.executable, str(REPO / "bin" / "doctor" / "run.py")],
+                   capture_output=True, text=True, env=env)
+    check("doctor probes launchd once per job, not once per reader",
+          fx.calls() == ["print gui/%d/com.plainkeep.index" % os.getuid()], str(fx.calls()))
+
+    # And the seal itself: both variables inert by default, for every suite that calls it.
+    sealed = subprocess.run(
+        [sys.executable, "-c",
+         "import sys; sys.path.insert(0, %r)\n"
+         "from lib.hermetic import seal\n"
+         "seal()\n"
+         "import os\n"
+         "print(os.environ.get('PLAINKEEP_LAUNCHCTL', ''))\n"
+         "print(os.environ.get('PLAINKEEP_LAUNCH_AGENTS_DIR', ''))\n" % str(Path(__file__).resolve().parent)],
+        capture_output=True, text=True,
+        env={k: v for k, v in os.environ.items()
+             if k not in ("PLAINKEEP_LAUNCHCTL", "PLAINKEEP_LAUNCH_AGENTS_DIR")})
+    lines = sealed.stdout.splitlines()
+    check("seal() points PLAINKEEP_LAUNCHCTL away from the real binary",
+          len(lines) > 0 and lines[0] and not Path(lines[0]).exists(), sealed.stdout + sealed.stderr)
+    check("seal() points PLAINKEEP_LAUNCH_AGENTS_DIR away from ~/Library/LaunchAgents",
+          len(lines) > 1 and lines[1]
+          and Path(lines[1]) != Path.home() / "Library" / "LaunchAgents", sealed.stdout + sealed.stderr)
+
+
 def main() -> int:
     global FAKE
     # ---- doctor: a well-formed vault should pass (no FAIL) ----
@@ -159,6 +223,11 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         FAKE = launchdfx.install(Path(td) / "machine")
         case_automation_rows(Path(td))
+
+    # ---- the no-real-launchd guarantee (r1/I2) + one probe per job (r1/M5) ----
+    with tempfile.TemporaryDirectory() as td:
+        FAKE = None
+        case_no_suite_can_reach_a_real_launchd(Path(td))
 
     # ---- wiki: open / new / backlinks / stale / orphans ----
     with tempfile.TemporaryDirectory() as td:

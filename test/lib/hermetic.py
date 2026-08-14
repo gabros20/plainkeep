@@ -53,6 +53,20 @@ except ImportError:        # imported as top-level `hermetic` with test/lib on s
 
 ENV_CONFIG_HOME = "PLAINKEEP_CONFIG_HOME"
 ENV_HOME = "PLAINKEEP_HOME"
+# THE MACHINE SURFACE (ADR-022) IS SEALED HERE FOR THE SAME REASON THE REGISTRY IS.
+#
+# `plainkeep job enable` writes into `~/Library/LaunchAgents` and bootstraps into the operator's live
+# launchd domain, and `plainkeep doctor` asks launchd what it has loaded. Three suites install a fake
+# for both; FIFTEEN spawn `doctor`. Review r1 proved the gap was reachable rather than theoretical: a
+# vault with nothing rendered still probed launchd when a `com.plainkeep.*` plist happened to exist on
+# the host — dormant only until the developer used the feature, at which point every suite that
+# touches doctor would start querying their real login session.
+#
+# Making each suite remember is the arrangement that already failed once for the registry (see above).
+# So the defaults are inert HERE, in the call every suite makes, and a suite that wants a working fake
+# still sets its own — these never override a caller's choice.
+ENV_LAUNCHCTL = "PLAINKEEP_LAUNCHCTL"
+ENV_LAUNCH_AGENTS_DIR = "PLAINKEEP_LAUNCH_AGENTS_DIR"
 
 _sealed: str | None = None
 
@@ -69,18 +83,40 @@ def seal() -> str:
     global _sealed
     if _sealed is not None:
         os.environ[ENV_CONFIG_HOME] = _sealed
+        _seal_machine(_sealed)
         return _sealed
     chosen = os.environ.get(ENV_CONFIG_HOME)
     if chosen:                                  # inherited from run_all.py, or set by the suite
         _sealed = chosen
         os.environ[ENV_CONFIG_HOME] = chosen
+        _seal_machine(_sealed)
         return _sealed
     d = tempfile.mkdtemp(prefix="pk-hermetic-")
     os.environ[ENV_CONFIG_HOME] = d
     # Best-effort cleanup: an aborted suite leaving an empty temp dir behind is not worth a failure.
     atexit.register(shutil.rmtree, d, True)
     _sealed = d
+    _seal_machine(d)
     return d
+
+
+def _seal_machine(root: str) -> None:
+    """Point the ADR-022 machine surface at somewhere harmless, unless the caller chose otherwise.
+
+    `PLAINKEEP_LAUNCHCTL` gets a path that does not exist: `launchdlib.launchctl()` never raises, so
+    a probe through it returns rc 127 — "not loaded" — and a `bootstrap` reports a per-job failure.
+    That is the right shape for a suite that never meant to exercise activation, and it can never be
+    the real binary. `PLAINKEEP_LAUNCH_AGENTS_DIR` gets a directory under the sealed root, so
+    `installed` is False and any write lands in the throwaway tree rather than in `~/Library`.
+
+    Re-asserted on every `seal()` for the reason the docstring above gives about the memo: what is
+    cached is WHICH directory, never the fact that the variables are set."""
+    if not os.environ.get(ENV_LAUNCHCTL):
+        os.environ[ENV_LAUNCHCTL] = os.path.join(root, "no-launchctl-here")
+    if not os.environ.get(ENV_LAUNCH_AGENTS_DIR):
+        d = os.path.join(root, "LaunchAgents")
+        os.makedirs(d, exist_ok=True)
+        os.environ[ENV_LAUNCH_AGENTS_DIR] = d
 
 
 def scratch_root() -> str:

@@ -209,12 +209,19 @@ EXEMPT: dict[str, dict[str, str]] = {
     # it answers DENY for `~/.local/bin` and `~/work`: same class as the `backup init` plist this
     # verb's old printed handoff asked the operator to copy by hand, now done by the product.
     #
-    # What bounds it, since the wall cannot: the destination is derived from
-    # `launchdlib.launch_agents_dir()` and a LABEL built from a registry key
-    # (`com.plainkeep.<name>.plist`) — never from an argument, never from a path a caller supplies —
-    # and the CONTENT is a fresh render of `jobs/registry.json`, never a file copied from wherever.
-    # It is confirm-class (`--yes`, or exit 3) and previewable with `--dry-run`, which is the consent
-    # this exemption stands in for.
+    # WHAT BOUNDS IT, since the wall cannot — and this reason was WRONG in its first form, which is
+    # worth leaving visible. It said "never from an argument", which is true and beside the point: the
+    # filename is `com.plainkeep.<registry key>.plist`, and `jobs/registry.json` is VAULT CONTENT, so
+    # not caller-controlled is not the same as not attacker-controlled. Review r1 walked a traversing
+    # key straight to `vaultio`, which refused it — mid-loop, after earlier jobs were bootstrapped.
+    #
+    # The operative bound now, in order: a registry key is validated as the identifier it becomes
+    # (`bin/job/run.py`'s `_NAME_RE`, checked with the rest of §15 BEFORE anything is rendered); the
+    # vault-side render still goes through `vaultio` as an independent second answer; the directory
+    # comes from `launchdlib.launch_agents_dir()` and nothing else; the `com.plainkeep.` prefix is
+    # glued to the front of whatever survives; and the CONTENT is a fresh `plistlib` render of the
+    # registry, never a file copied from wherever. It is confirm-class (`--yes`, or exit 3) and
+    # previewable with `--dry-run`, which is the consent this exemption stands in for.
     "bin/job/run.py": {
         'agents.mkdir(parents=True, exist_ok=True)':
             "~/Library/LaunchAgents — created if the operator has never had a launch agent; the "

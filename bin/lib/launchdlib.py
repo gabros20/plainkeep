@@ -32,6 +32,7 @@ import platform
 import plistlib
 import shutil
 import subprocess
+from contextlib import contextmanager
 from pathlib import Path
 
 from lib import enginetree, paths
@@ -112,12 +113,49 @@ def launchctl(*args: str) -> subprocess.CompletedProcess:
         return subprocess.CompletedProcess([launchctl_bin(), *args], 127, "", str(exc))
 
 
+# ONE ANSWER PER LABEL, FOR THE LENGTH OF AN EXPLICIT READ-ONLY SPAN (r1/M5).
+#
+# `plainkeep doctor` reads `job_states()` twice — once for the `automation` setup-layer row, once for
+# its own per-job rows — so every rendered job cost two `launchctl print` subprocesses answering the
+# same question twice.
+#
+# The memo is OPT-IN rather than process-wide, and that is the whole design. A process-wide cache
+# looks equivalent for a short-lived verb and is not: `setuplib.status()` is also called in-process,
+# repeatedly, by callers that CHANGE the state in between, and such a caller would silently read the
+# answer from before the change. `cached_probes()` marks the span where nothing mutates launchd, so
+# the reuse is a property of that span rather than an assumption about the whole program.
+_loaded_memo: dict[str, bool] = {}
+_memo_on = False
+
+
+@contextmanager
+def cached_probes():
+    """Reuse each label's `launchctl print` answer for the duration of the block.
+
+    ONLY legal around a span that does not change what launchd has loaded — `plainkeep doctor`, which
+    never mutates anything, is the caller this exists for. The memo is cleared on both entry and exit,
+    so it can never outlive the block or inherit an earlier one."""
+    global _memo_on
+    _loaded_memo.clear()
+    outer, _memo_on = _memo_on, True
+    try:
+        yield
+    finally:
+        _memo_on = outer
+        _loaded_memo.clear()
+
+
 def is_loaded(name: str) -> bool:
     """Does launchd currently know this label? `launchctl print` exits 0 for a loaded service and
     nonzero otherwise — the one question that a rendered file on disk cannot answer."""
+    if _memo_on and name in _loaded_memo:
+        return _loaded_memo[name]
     if not launchctl_available():
         return False
-    return launchctl("print", service_target(name)).returncode == 0
+    answer = launchctl("print", service_target(name)).returncode == 0
+    if _memo_on:
+        _loaded_memo[name] = answer
+    return answer
 
 
 def load_registry() -> dict | None:
@@ -224,11 +262,19 @@ def job_states(reg: dict | None = None, *, probe_loaded: bool = True) -> list[di
     than copied. That is why `enable` renders first and never installs whatever happens to be lying
     in `jobs/launchd/`.
 
-    THE `loaded` PROBE IS CONDITIONAL ON DISK STATE, deliberately. It spawns `launchctl print` per
-    job, and a vault that has never rendered or installed anything (every test fixture, and every
-    machine where automation was declined) has nothing for launchd to know about — so nothing is
-    spawned at all. That keeps `plainkeep doctor` free on the common path, and it means a suite that
-    forgets the fake seam still cannot reach the developer's launchd session by accident.
+    THE `loaded` PROBE IS CONDITIONAL ON **VAULT** STATE, and the word matters (r1/I2). It spawns
+    `launchctl print` per job, so it is gated on whether this vault has rendered the job at all — a
+    vault that never rendered anything (every test fixture, and every machine where automation was
+    declined) asks launchd nothing.
+
+    It used to also probe when the job was INSTALLED, and that read the real `~/Library/LaunchAgents`
+    whenever the seam variable was unset. So the guard was really "nothing rendered **and** nothing
+    installed on this host", which is a property of the developer's machine rather than of the vault
+    under test: `doctor` is spawned by fifteen suites, and the moment one `com.plainkeep.*` plist
+    existed on the host they would all have begun querying the developer's live login session. The
+    disjunct bought one thing — reporting `loaded` for a job installed from somewhere else — and cost
+    a safety property that two documents asserted. The `installed` column still reveals that case;
+    only the `loaded` answer for it is now withheld.
     """
     reg = reg if reg is not None else load_registry()
     jobs = (reg or {}).get("jobs", {})
@@ -243,7 +289,7 @@ def job_states(reg: dict | None = None, *, probe_loaded: bool = True) -> list[di
                 drift = current != plist(name, job)
             except Exception:      # a malformed schedule can't be re-rendered; report it as drift
                 drift = True
-        loaded = bool(probe_loaded and (current is not None or installed) and is_loaded(name))
+        loaded = bool(probe_loaded and current is not None and is_loaded(name))
         rows.append({
             "name": name,
             "command": job.get("command", ""),

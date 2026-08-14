@@ -366,8 +366,14 @@ One file per enabled job:
 ```
 
 - `<job>` is a **key from `jobs/registry.json`**, and the directory comes from
-  `launchdlib.launch_agents_dir()`. Neither half is ever taken from an argument, so the destination
-  is not caller-controlled.
+  `launchdlib.launch_agents_dir()`. Neither half is taken from a command-line argument — but "not
+  caller-controlled" is not the bound that matters, because the registry is **vault content** and
+  therefore attacker-controllable in this system's own threat model. What actually bounds the
+  filename is that a registry key is validated as an identifier (`[A-Za-z0-9][A-Za-z0-9_.-]*`) by
+  the same §15 legality check that `job list`, `job run`, `job apply` and `job enable` all read, so
+  a traversing key is refused before anything is rendered; the vault-side render then passes through
+  `vaultio`'s path wall as a second, independent backstop; and the `com.plainkeep.` prefix is glued
+  to the front of whatever survives.
 - It is a **copy**, never a symlink. Recent macOS is unreliable about bootstrapping symlinked plists,
   and a symlink would also mean an edit inside the vault silently changes what a privileged loader
   reads.
@@ -387,8 +393,15 @@ Exactly three launchctl subcommands, always against the per-user GUI domain `gui
 | `launchctl bootstrap gui/$UID <installed plist>` | on `enable` | reported per job; the action exits `1` if any job failed |
 | `launchctl print gui/$UID/com.plainkeep.<job>` | `job status`, the `automation` setup layer, `doctor` | treated as "not loaded" on any nonzero exit or timeout |
 
-The `print` probe is issued **only for a job that has a plist rendered or installed**, so a vault
-that never rendered anything spawns no launchctl at all.
+The `print` probe is issued **only for a job this vault has rendered** — vault state alone, never
+the contents of the LaunchAgents directory — so a vault that never rendered anything spawns no
+launchctl at all, whatever is installed on the host. (It used to also probe on `installed`, which
+read the real `~/Library/LaunchAgents` when the override was unset; that made the guarantee a
+property of the developer's machine rather than of the vault under test.) A consequence worth
+knowing: a job installed but *not* rendered by this vault reports `loaded: -`. The `installed`
+column is what reveals that case.
+
+Within one `plainkeep doctor` run each label is probed **once**, not once per reader.
 
 ### How to reverse it
 
@@ -421,6 +434,12 @@ reader (the verb, the setup layer, doctor):
 | `PLAINKEEP_LAUNCHCTL` | absolute path to the binary invoked instead of `launchctl`. Also makes the activation surface *available* on a host with no `launchctl` on PATH. |
 | `PLAINKEEP_LAUNCH_AGENTS_DIR` | where plists are installed, instead of `~/Library/LaunchAgents`. |
 
-They have no role in normal operation. `test/lib/launchdfx.py` supplies both as one env dict, and
+They have no role in normal operation. The guarantee that no suite reaches the developer's launchd
+session is **structural**: `test/lib/hermetic.py`'s `seal()` — which every suite already calls, and
+`run_all.py` verifies every suite calls — sets both variables to inert defaults (a launchctl path
+that does not exist, a LaunchAgents directory inside the throwaway seal root). A suite that wants a
+working fake sets its own; `test/lib/launchdfx.py` supplies both as one env dict, and
 `test/run_jobverb.py`, `test/run_setup_layers.py` and `test/run_health.py` merge it into **every**
-invocation — no suite may reach the developer's own launchd session or LaunchAgents directory.
+invocation. Relying on each suite to remember was the arrangement that left `plainkeep doctor` — spawned
+by fifteen suites, only three of which install the fake — probing the host's real launchd whenever a
+`com.plainkeep.*` plist happened to be installed.

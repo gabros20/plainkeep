@@ -147,6 +147,12 @@ def _adapter_skills(label: str, link: Path) -> None:
          "or remove the adapter")
 
 
+# `cached_probes` as a DECORATOR, so the whole of `main` is the read-only span without re-indenting
+# it: doctor asks `job_states()` twice (the `automation` setup-layer row, and check 12 below), and
+# without this every rendered job pays two `launchctl print` subprocesses to answer one question
+# (r1/M5). Legal here precisely because doctor mutates nothing — see the policy at the top of this
+# file, and `cached_probes`' own docstring for why the memo is opt-in rather than process-wide.
+@launchdlib.cached_probes()
 def main(argv):
     _, argv = output.parse_argv(argv)
     init = "--init" in argv

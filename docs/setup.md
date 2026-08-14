@@ -121,7 +121,7 @@ plainkeep setup --wizard
 The wizard walks the layers in order with skippable prompts and safe defaults pre-selected:
 
 - `skeleton` **on** — required and safe.
-- `automation` **on** — your day starts and closes on a schedule (see [Automation](#automation-the-default) below). Reversible with one command.
+- `automation` **on** — your day starts and closes on a schedule (see [Automation](#automation-the-default) below). It installs launch agents in `~/Library/LaunchAgents`; reversible with one command.
 - `ui` **on** — a small sha256-verified binary download into the vault's own `.local/bin`.
 - `search`, `models` **off** — no vectors, no model pulls.
 
@@ -332,9 +332,15 @@ plainkeep job disable --all --yes     # unload + remove the installed copies
 plainkeep job enable --all --dry-run  # exactly what would happen; nothing written, launchctl not called
 ```
 
-`enable` and `disable` need `--yes` (they exit `3` without it). That is not ceremony: they write
-outside your vault, into `~/Library/LaunchAgents`, and they change the state of a running system
-daemon. `--dry-run` is a read and never needs `--yes`.
+`enable` and `disable` need `--yes` (they exit `3` without it), and so does `plainkeep setup
+automation` — the layer is confirm-class for the same reason the verb is. That is not ceremony: they
+write outside your vault, into `~/Library/LaunchAgents`, and they change the state of a running
+system daemon. `--dry-run` is a read and never needs `--yes`.
+
+A job whose registry entry is illegal under §15 — inline shell logic, a verb that does not exist, an
+external command that is not on the allowlist, a name that is not a plain identifier — is **refused**
+by `apply` and `enable`, not skipped. `plainkeep job list` shows you which and why. What the product
+refuses to run once by hand it will not schedule to run unattended.
 
 `enable` always **re-renders from the registry** before installing, so editing `jobs/registry.json`
 and re-running is the whole edit loop — it never installs a stale file. It unloads before it loads,

@@ -1945,10 +1945,23 @@ Two advisory rows, WARN-only: *rendered but not loaded* → `plainkeep job enabl
 remedies, named per job — which is what the aggregate setup-layer row cannot say.
 
 Never a FAIL, because running plainkeep by hand is a legitimate way to run it and a health check
-that goes red for a declined optional layer is one people stop reading. And **silent when nothing is
-rendered**: `job_states()` probes launchd only for a job with something on disk, so a vault that
-declined automation costs no subprocess, and a suite that forgot the seam still cannot reach a real
-launchd session by accident.
+that goes red for a declined optional layer is one people stop reading. And **silent when this vault
+has rendered nothing**: `job_states()` probes launchd only for a job this vault rendered, so a vault
+that declined automation costs no subprocess, and each label is probed once per doctor run rather
+than once per reader.
+
+**A correction made during review r1, recorded rather than quietly fixed.** This paragraph originally
+also claimed that "a suite that forgot the seam still cannot reach a real launchd session by
+accident". That was false. The probe fired on rendered **or installed**, and `installed` reads the
+real `~/Library/LaunchAgents` when the seam variable is unset — so the guard was really "nothing
+rendered *and* nothing installed on this host", a property of the developer's machine rather than of
+the vault under test. `doctor` is spawned by fifteen suites, three of which install the fake; it was
+dormant only until the first `com.plainkeep.*` plist existed, i.e. it armed itself the moment anyone
+used this feature. Two changes make the sentence true rather than deleting it: the disjunct is gone
+(vault state alone decides), and `test/lib/hermetic.py`'s `seal()` — the call every suite already
+makes — now sets inert defaults for BOTH seam variables, so the guarantee no longer depends on each
+suite remembering. Read-only probes throughout, so nothing was mutated; the defect was a documented
+safety property that did not hold.
 
 ### Enforcement
 
@@ -1961,9 +1974,19 @@ drift, the confirm gate and `--dry-run` inertness are all asserted from evidence
 
 The two out-of-vault writes (`agents.mkdir`, `shutil.copyfile`) and the one removal
 (`dst.unlink`) join `test/run_pathwall.py`'s exemption and pin lists with their reasons, which keeps
-this ADR's central admission visible in the ratchet rather than only here: the wall still DENIES
-this destination, and what bounds it is that neither the directory nor the filename comes from an
-argument.
+this ADR's central admission visible in the ratchet rather than only here: the wall still DENIES this
+destination.
+
+**What bounds it, corrected in review r1.** The first version of this ADR, the exemption comment and
+machine-contract §9 all said the bound was that "neither the directory nor the filename comes from an
+argument". True, and not the operative bound: the filename comes from a registry KEY, and
+`jobs/registry.json` is vault content — not caller-controlled is not the same as not
+attacker-controlled. What stopped a traversing key was `vaultio`'s path wall firing on the vault-side
+render, which is a backstop that fires *mid-loop*, after earlier jobs are already bootstrapped. So a
+registry key is now validated as the identifier it becomes (`[A-Za-z0-9][A-Za-z0-9_.-]*`) by the same
+§15 check every reader shares, before anything is rendered; the path wall remains as the independent
+second answer; and the `com.plainkeep.` prefix is glued to the front of whatever survives. The stated
+bound is now the enforced one.
 
 ### Consequences
 
@@ -1976,3 +1999,10 @@ argument.
   each and skipped entirely when nothing is rendered.
 - **Off macOS nothing changed.** The layer is `not_applicable`, `enable` refuses with the reason,
   and every job stays runnable by hand — the registry is scheduler-neutral by design.
+- **This ADR scopes to the §15 jobs registry.** `bin/backup/run.py` renders its own
+  `com.plainkeep.backup.cloud` plist and still prints the `cp` + `launchctl load` handoff this ADR
+  calls the defect — a second renderer, a second label spelling, and the deprecated `load` rather
+  than `bootstrap`. It is invisible to `job status` and to doctor's rows, so the product currently
+  tells an operator two different stories about how a plainkeep launch agent gets activated. Found
+  by review r1's cohesion sweep and left deliberately: unifying it is its own task, not a rider on
+  this one.

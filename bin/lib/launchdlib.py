@@ -357,8 +357,10 @@ def read_registry() -> dict:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
         # ENOENT ONLY. Every other `OSError` means the file is right there and this product cannot
-        # read it — a permission bit, an I/O error, a broken symlink target — which is a refusal, not
-        # an absence (r2/M6). Classifying those as missing made `registry_error()` answer None for a
+        # read it — a permission bit, an I/O error — which is a refusal, not
+        # an absence (r2/M6). (A dangling symlink raises FileNotFoundError and correctly lands in
+        # the ENOENT branch: `exists()` follows the link and there is genuinely nothing to read, so
+        # "absent" is the honest answer.) Classifying refusals as missing made `registry_error()` answer None for a
         # `chmod 000` registry, so the automation layer reported `absent` and offered the command
         # that would refuse: the exact shape this class split was introduced to close, one door over.
         # The message would also have been false on its face — the file exists.

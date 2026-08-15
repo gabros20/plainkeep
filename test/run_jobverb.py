@@ -563,7 +563,14 @@ def case_set_never_touches_launchd_but_says_the_schedule_is_stale(td: Path) -> N
     clear_log()
     r = run(h, "set", "close_nudge", "--daily", "22:00")
     out = r.stdout + r.stderr
-    check("job set calls NO launchctl, ever", not fake_log(), str(fake_log()))
+    # The invariant is MUTATION, not silence: `set` has to ask launchd whether this job is loaded in
+    # order to say the loaded schedule is stale, and `launchctl print` is that question. What it must
+    # never do is bootstrap or bootout — those are `enable`/`disable`'s, and they need `--yes`.
+    check("job set issues no MUTATING launchctl call (only the read probe)",
+          not [c for c in fake_log() if c.split()[:1] in (["bootstrap"], ["bootout"])],
+          str(fake_log()))
+    check("job set's only launchctl call is the loaded-state probe",
+          all(c.startswith("print ") for c in fake_log()), str(fake_log()))
     check("job set does not re-install the plist behind the operator's back",
           "<integer>18</integer>" in text(installed), text(installed)[:400])
     check("job set states plainly that the LOADED schedule is now stale",

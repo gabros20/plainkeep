@@ -144,7 +144,8 @@ registry currently says:
   day closes at? [18:30] 22:00
 ```
 
-Enter keeps the current time and rewrites nothing. A time it cannot use is refused with the
+Enter keeps the current time and rewrites nothing. If your registry has no `start` job — every
+vault created before it existed — answering the first question creates it, and the wizard says so. A time it cannot use is refused with the
 correction (`'7am' is not HH:MM — write 07:00`) and asked once more; a second unusable answer keeps
 the default and says so. The answers are written into `jobs/registry.json` *before* the layer
 renders and loads, so the first schedule launchd gets is already yours. They go through the same
@@ -327,7 +328,9 @@ every other field, and the order of the file, is left exactly as it was.
 `set` also **seeds a canonical job your registry never received**. `jobs/registry.json` is yours:
 `plainkeep vault init` creates it empty (`{"jobs": {}}`) and no engine update ever writes job
 definitions into it, so the jobs above reach a vault in exactly two ways — the setup wizard seeds
-them when you accept automation on a vault that has none, and `plainkeep job set` seeds one by name.
+them when you accept automation — the whole set on a vault that has no jobs at all, and any bookend
+you are asked about but do not have (a vault predating the `start` job answers *day starts at?* and
+gets one) — and `plainkeep job set` seeds any of them by name.
 A job added to plainkeep after your vault was created cannot reach you any other way. `plainkeep job set start --daily 08:00`
 in a vault with no `start` job creates the whole entry from the engine defaults, at the time you
 asked for, and says `seeded 'start' from engine defaults`. Names it neither has are refused with both

@@ -17,9 +17,10 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   all, since `jobs/registry.json` is yours: `plainkeep vault init` creates it empty and no engine
   update ever writes job definitions into it. The setup wizard's automation step now asks *day starts
   at?* / *day closes at?* and writes the answers through the same path, before the schedule is
-  rendered and loaded, so the first activation already carries them; on a vault with no jobs yet —
-  where the prompt describes the engine defaults rather than naming your own — accepting it seeds
-  that whole set, so what the prompt offered is what you get. `set` **never touches launchd** — it is a vault write, activation stays with
+  rendered and loaded, so the first activation already carries them. Anything the wizard asked about
+  and does not have, it creates: a vault predating the `start` job gets one at the time you answer,
+  and a vault with no jobs at all — where the prompt describes the engine defaults rather than naming
+  your own — gets that whole set. What the prompts offered is what you get, and nothing more. `set` **never touches launchd** — it is a vault write, activation stays with
   the confirm-class `plainkeep job enable` — and when the edited job is currently loaded it says the
   loaded schedule is stale and prints the one command that fixes it. `plainkeep setup automation
   --yes` and `--all --yes` stay non-interactive and leave existing times alone.

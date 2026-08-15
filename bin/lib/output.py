@@ -26,9 +26,28 @@ Verbs adopt this mechanically:
 from __future__ import annotations
 import json
 import os
+import re
 import sys
 
 PLAINKEEP_JSON_VERSION = 1
+
+# A REFUSAL IS ONE STRING WITH TWO AUDIENCES, and only one of them has a terminal.
+#
+# `fail(message)` renders the same text to stderr for a human and into `error.message` for a program,
+# and the house idiom for a refusal is `f"{RED}refusing to …{RESET}"` — so every coloured refusal was
+# shipping `\033[31m` inside the machine envelope. Measured at `ceff52f`: three such calls, all in
+# `bin/job/run.py`, invisible to a line-based `grep` because the colour sits on a continuation line.
+#
+# Stripped HERE rather than at the five call sites, because the property wanted is "no envelope ever
+# carries escapes", which a per-call fix cannot provide for the sixth call. Callers keep writing
+# colour and keep getting it on the channel that can render it. `test/run_json.py` polices the
+# result over every verb it can reach.
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+
+
+def strip_ansi(text: str) -> str:
+    """`text` with terminal escape sequences removed — for anything crossing the machine channel."""
+    return _ANSI_RE.sub("", text)
 
 # Exit-code protocol (single source of truth for the whole surface).
 EXIT_OK = 0
@@ -108,9 +127,9 @@ def fail(code: int, message: str, hint: str | None = None, verb: str | None = No
     """Render the error envelope (JSON, on stdout) under `--json`, else a human message on stderr,
     then exit with `code` from the protocol. Does not return."""
     if json_mode():
-        err = {"code": code, "message": message}
+        err = {"code": code, "message": strip_ansi(message)}
         if hint:
-            err["hint"] = hint
+            err["hint"] = strip_ansi(hint)
         env = {"ops_json": PLAINKEEP_JSON_VERSION, "ok": False, "verb": verb, "error": err}
         sys.stdout.write(json.dumps(env, ensure_ascii=False) + "\n")
     else:

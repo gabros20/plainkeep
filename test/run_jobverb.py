@@ -73,13 +73,16 @@ def run(home, *args):
                           capture_output=True, text=True, env=env)
 
 
-def default_jobs() -> dict:
+def default_jobs(home: Path) -> dict:
     """`launchdlib.DEFAULT_JOBS` — the engine's canonical job definitions, read from a child process
-    for the same reason `render_plist` does: this suite never puts `bin/lib` on its own `sys.path`."""
+    for the same reason `render_plist` does: this suite never puts `bin/lib` on its own `sys.path`.
+    (`lib.paths` refuses to guess a PLAINKEEP_HOME, so the child gets one even though the constant
+    does not depend on it.)"""
     code = ("import json, sys; sys.path.insert(0, %r)\n"
             "from lib import launchdlib\n"
             "sys.stdout.write(json.dumps(launchdlib.DEFAULT_JOBS))\n" % str(REPO / "bin"))
-    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       env={**os.environ, "PLAINKEEP_HOME": str(home)})
     return json.loads(r.stdout) if r.returncode == 0 else {}
 
 
@@ -520,7 +523,7 @@ def case_set_seeds_a_missing_canonical_job(td: Path) -> None:
     default entry (command, risk, writes) with the schedule the operator just asked for, and SAYS it
     did rather than pretending the entry was there."""
     h = _set_vault(td, "set_seed")
-    defaults = default_jobs()
+    defaults = default_jobs(h)
     check("the engine ships DEFAULT_JOBS for the canonical six",
           set(defaults) == {"start", "index", "consolidate", "organize_scan", "close_nudge", "backup_check"},
           str(sorted(defaults)))

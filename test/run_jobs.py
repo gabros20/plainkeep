@@ -69,7 +69,9 @@ def case_engine_defaults_match_the_shipped_registry() -> None:
     code = ("import json, sys; sys.path.insert(0, %r)\n"
             "from lib import launchdlib\n"
             "sys.stdout.write(json.dumps(launchdlib.DEFAULT_JOBS))\n" % str(REPO / "bin"))
-    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    with tempfile.TemporaryDirectory() as _td:   # lib.paths refuses to guess a PLAINKEEP_HOME
+        proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                              env={**os.environ, "PLAINKEEP_HOME": _td})
     defaults = json.loads(proc.stdout) if proc.returncode == 0 else {}
     check("the engine exposes DEFAULT_JOBS (launchdlib)", bool(defaults),
           (proc.stderr or proc.stdout).strip()[-200:])

@@ -183,6 +183,17 @@ class ScheduleError(RegistryError):
     ("'7am' is not HH:MM — write 07:00"), because the person reading it is mid-edit."""
 
 
+class RegistryMissing(RegistryError):
+    """There is no `jobs/registry.json` in this vault at all.
+
+    A separate type because ABSENCE AND REFUSAL ARE DIFFERENT ANSWERS, and collapsing them is how
+    the checker ended up greener than the product (r1/I2): a vault that never had jobs and a vault
+    whose registry this product refuses to read both arrived at the status probes as `None`, so
+    `plainkeep doctor` iterated zero jobs and certified a file `plainkeep job list` refuses. Callers
+    that only care "are there jobs" catch `RegistryError` and get both; callers that report to a
+    human distinguish them."""
+
+
 # A registry key becomes a FILENAME in two directories, one of which is outside the vault
 # (`com.plainkeep.<name>.plist`). The pathwall exemption, machine-contract §9 and ADR-022 all claimed
 # the destination was bounded because "neither the directory nor the filename comes from an argument"
@@ -342,8 +353,8 @@ def read_registry() -> dict:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise RegistryError(f"no jobs registry at "
-                            f"{_relative(path)} ({exc.strerror or exc})") from exc
+        raise RegistryMissing(f"no jobs registry at "
+                              f"{_relative(path)} ({exc.strerror or exc})") from exc
     try:
         data = json.loads(raw)
     except ValueError as exc:
@@ -351,9 +362,19 @@ def read_registry() -> dict:
     if not isinstance(data, dict) or not isinstance(data.get("jobs"), dict):
         raise RegistryError(f"{_relative(path)} has no `jobs` object — it must be "
                             '{"jobs": {"<name>": {...}}}')
-    for name in data["jobs"]:
+    for name, job in data["jobs"].items():
         if not name_ok(name):
             raise RegistryError(f"job name {name!r} {NAME_RULE}")
+        # THE OTHER SHAPE OF MALFORMED (r1/I3). The keys were validated and the values were not, so
+        # `{"jobs": {"broken": "not a dict"}}` reached every action and threw `AttributeError:
+        # 'str' object has no attribute 'get'` — from `job.get("command")` in `job_states`, which is
+        # BEFORE the per-job containment, and from `_validate` itself, which is what
+        # `_legal_or_refuse` calls to decide whether to refuse. Neither guard can catch a fault in
+        # the thing it uses to look.
+        if not isinstance(job, dict):
+            raise RegistryError(f"job {name!r} is not an object — a job is "
+                                '{"command": "plainkeep <verb>", "schedule": {…}, "risk": "read"}, '
+                                f"not {type(job).__name__}")
     return data
 
 
@@ -367,12 +388,32 @@ def _relative(path: Path) -> str:
 def load_registry() -> dict | None:
     """The §15 registry, or None when this vault has no usable jobs file. Never raises — every caller
     is a status probe (doctor's rows, the setup layer, the wizard prompt) that must report rather
-    than crash. A registry the strict reader refuses is `None` here, so a probe reports "no jobs"
-    instead of asserting things about a file the product will not act on."""
+    than crash. A registry the strict reader refuses is `None` here too, so a probe never asserts
+    things about a file the product will not act on.
+
+    A PROBE THAT REPORTS TO A HUMAN MUST ALSO CALL `registry_error()` (r1/I2). `None` alone cannot
+    tell "this vault has no jobs" from "this vault's jobs file is broken", and the second one is a
+    finding. Silence about it is how `plainkeep doctor` came to print `ok` for a registry
+    `plainkeep job list` refuses."""
     try:
         return read_registry()
     except RegistryError:
         return None
+
+
+def registry_error() -> str | None:
+    """Why `load_registry()` returned None, when the reason is a REFUSAL rather than an absence.
+
+    None means either "the registry is fine" or "there is no registry", which are the two states a
+    status probe may legitimately stay quiet about. A string means the file exists and this product
+    will not act on it — the diagnosis, ready to be surfaced as a warn."""
+    try:
+        read_registry()
+    except RegistryMissing:
+        return None
+    except RegistryError as exc:
+        return str(exc)
+    return None
 
 
 def seedable_defaults(jobs: dict | None = None) -> list[str]:

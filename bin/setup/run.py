@@ -295,6 +295,77 @@ def _ask_yes_no(prompt: str, default: bool, ask) -> bool:
     return raw in ("y", "yes")
 
 
+def _ask_time(prompt: str, default: str, ask, say) -> str:
+    """One HH:MM prompt, in `_ask_yes_no`'s exact idiom: `ask(text)->str` supplies the raw line, an
+    empty line (just Enter) or a closed stdin takes the default.
+
+    ONE RE-ASK, THEN THE DEFAULT. A time is the one wizard answer a person can get almost right —
+    `7am`, `8:00`, `20.00` — so a typo must not silently become a schedule and must not end the
+    setup either. The first bad answer prints the correction `launchdlib.parse_schedule` computed
+    ("'7am' is not HH:MM — write 07:00") and asks again; a second bad answer keeps the default and
+    says so. Never a crash, and never a value the operator did not type."""
+    for attempt in (1, 2):
+        try:
+            raw = ask(f"  {prompt} [{default}] ").strip()
+        except EOFError:
+            return default
+        if not raw:
+            return default
+        try:
+            return launchdlib.parse_schedule({"daily": raw})["daily"]
+        except launchdlib.ScheduleError as exc:
+            say(f"    {exc}")
+            if attempt == 2:
+                say(f"    keeping {default}")
+    return default
+
+
+def _wizard_times(ask, say) -> list[str]:
+    """Ask when the day starts and when it closes, and write the answers into `jobs/registry.json`.
+
+    THE TIMES WERE NEVER A QUESTION. ADR-022 made scheduling the default and left the hours as two
+    literals someone typed into the registry — so a system whose whole premise is that the day opens
+    and closes without being asked opened it at 07:30 for a person who starts at 08:00, and the only
+    way to say otherwise was to hand-edit JSON. Two prompts, at the one moment the operator is
+    already deciding about their day.
+
+    THROUGH `launchdlib.set_schedule`, the same writer `plainkeep job set` uses. `setuplib` may not
+    import a verb's `run.py`, and a second writer here would validate differently the first time
+    either changed — on a fresh machine, unattended, where a silently-ignored answer is least
+    visible. Called BEFORE the layer advances, so the very first `job enable` installs the chosen
+    times rather than the shipped ones plus a re-run.
+
+    Prompts belong to the WIZARD alone: `setup automation --yes` and `setup --all --yes` are what an
+    agent or a script runs, and they leave whatever times the registry holds exactly alone."""
+    reg = launchdlib.load_registry()
+    if reg is None:                      # no registry yet (skeleton seeds it) — nothing to write into
+        return []
+    jobs = reg.get("jobs", {})
+    changed: list[str] = []
+    for job_name, question in ((launchdlib.DAY_START_JOB, "day starts at?"),
+                               (launchdlib.DAY_CLOSE_JOB, "day closes at?")):
+        entry = jobs.get(job_name) or launchdlib.DEFAULT_JOBS.get(job_name)
+        current = (entry or {}).get("schedule", {}).get("daily")
+        if not current:
+            # A bookend this vault has re-cadenced to something that is not a daily time (weekly, an
+            # interval) is not ours to reshape into one from a yes/no wizard.
+            continue
+        answer = _ask_time(question, current, ask, say)
+        if answer == current and job_name in jobs:
+            # Nothing to write. Rewriting the file to store the value it already held would put a
+            # diff in `git status` after every wizard run, for no change.
+            continue
+        try:
+            res = launchdlib.set_schedule(job_name, {"daily": answer})
+        except (launchdlib.RegistryError, OSError) as exc:
+            say(f"    could not set {job_name}: {exc}")
+            continue
+        changed.append(job_name)
+        seeded = "seeded from engine defaults — " if res["seeded"] else ""
+        say(f"    {job_name}: {seeded}daily {answer}")
+    return changed
+
+
 def _run_wizard(rows, ask, say) -> dict:
     """The guided first-run loop (Task 11), factored so it is testable with injected I/O:
     `ask(text)->str` supplies answers (real path: `input`), `say(text)` receives each printed line
@@ -330,6 +401,9 @@ def _run_wizard(rows, ask, say) -> dict:
             say(f"  skip {lid}")
             skipped.append(lid)
             continue
+        if lid == "automation":
+            # WHEN, not just WHETHER — and before the advance, so the first enable carries the answer.
+            _wizard_times(ask, say)
         try:
             res = setuplib.advance(lid, yes=True, fake=_fake())
         except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:

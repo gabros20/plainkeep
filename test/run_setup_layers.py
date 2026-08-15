@@ -11,7 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 from lib.hermetic import seal
-from lib import launchdfx      # TEST-ONLY fake launchctl — imported HERE, above the sys.path swap
+from lib import launchdfx, vaultfx   # TEST-ONLY fake launchctl + vault marker — imported
+                                     # HERE, above the sys.path swap
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
 
 REPO = Path(__file__).resolve().parents[1]
@@ -36,6 +37,22 @@ def reload_setuplib(home: Path):
     importlib.reload(paths)
     from lib import setuplib  # noqa: E402
     return importlib.reload(setuplib)
+
+
+def reload_wall(home: Path):
+    """Re-point the PATH WALL at this fixture too.
+
+    `guardrail` snapshots the vault root at import (`PLAINKEEP_HOME = vaultroot.active_root()`),
+    which is exactly right for a verb — one process, one vault — and wrong for a suite that
+    re-points `PLAINKEEP_HOME` between fixtures and then performs a vault write IN-PROCESS: the wall
+    would still be defending the PREVIOUS fixture and refuse the write as an escape from the three
+    roots (exit 5). Only in-process writers need this; every subprocess in this file gets a fresh
+    import with the right root already."""
+    vaultfx.mark_vault(home)              # a root is a vault because of its marker, not its variable
+    reload_setuplib(home)
+    from lib import vaultroot, guardrail  # noqa: E402
+    importlib.reload(vaultroot)
+    importlib.reload(guardrail)
 
 
 def make_home(tmp: Path) -> Path:
@@ -817,7 +834,7 @@ def main() -> int:
         times_fake = launchdfx.install(tmp / "wizard-times-machine")
         times_saved = {k: os.environ.get(k) for k in times_fake.env}
         os.environ.update(times_fake.env)
-        reload_setuplib(times_home)      # re-point paths.PLAINKEEP_HOME at this vault
+        reload_wall(times_home)          # re-point paths AND the path wall at this vault
         auto_row = [{"id": "automation", "title": "Schedules", "status": "absent", "required": False,
                      "detail": "", "items": [], "next": "plainkeep setup automation"}]
         seen_at_advance: list[dict] = []
@@ -903,7 +920,7 @@ def main() -> int:
                 os.environ.pop(k, None)
             else:
                 os.environ[k] = v
-        reload_setuplib(home)
+        reload_wall(home)
 
         os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
 

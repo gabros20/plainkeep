@@ -82,8 +82,9 @@ rebuilt from the text — never the source of truth.
 
 The rhythm is five verbs — `start` → `capture` / `triage` / `task` → `close`, with `week` on
 Fridays — and by default the bookends run themselves: setup schedules `start` (07:30) and `close`
-(18:30) as launchd jobs, so the day opens with your tasks carried forward and closes with a facts
-digest whether or not you typed anything. The verbs stay as manual levers (`plainkeep job status`
+(18:30) as launchd jobs — defaults, which the setup wizard asks about and `plainkeep job set start
+--daily 08:00` changes any time — so the day opens with your tasks carried forward and closes with a
+facts digest whether or not you typed anything. The verbs stay as manual levers (`plainkeep job status`
 shows what is scheduled and loaded). Everything else is discoverable:
 
 ```sh

@@ -7,6 +7,33 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 ## [Unreleased]
 
 ### Added
+- **Schedule times are a product surface: `plainkeep job set`, and the setup wizard asks.** The
+  hours automation runs at were two literals in `jobs/registry.json` that only a hand-edit could
+  change, so a day that runs 08:00–22:00 got a system that opened it at 07:30 and closed it at
+  18:30. `plainkeep job set <name> --daily HH:MM | --weekly "Day HH:MM" | --monthly "D HH:MM" |
+  --every <minutes>` rewrites **only** that job's schedule (every other field and the file's order
+  are preserved; `--dry-run` shows the entry and writes nothing), and a name the engine knows but
+  the registry lacks is **seeded from the engine defaults** — which is how a vault created before a
+  job existed adopts it, since `jobs/registry.json` is yours and an engine update never delivers it.
+  The setup wizard's automation step now asks *day starts at?* / *day closes at?* and writes the
+  answers through the same path, before the schedule is rendered and loaded, so the first activation
+  already carries them. `set` **never touches launchd** — it is a vault write, activation stays with
+  the confirm-class `plainkeep job enable` — and when the edited job is currently loaded it says the
+  loaded schedule is stale and prints the one command that fixes it. `plainkeep setup automation
+  --yes` and `--all --yes` stay non-interactive and leave existing times alone.
+
+### Changed
+- **One validated schedule parser, and the registry-name rule moved to the read.** Schedule shapes
+  were parsed inline while rendering a plist, so an unknown weekday silently became Sunday, `"7am"`
+  surfaced as an unpacking `ValueError`, and a missing `schedule` as a `KeyError` — each contained
+  per job, none of them diagnosed. A malformed schedule is now a §15 legality warning like any
+  other: `plainkeep job list` flags it with the correction (`'7am' is not HH:MM — write 07:00`) and
+  `apply`/`enable` refuse whole-command before rendering anything. Separately, a registry **key**
+  that is not a plain identifier is refused when the registry is read rather than on the paths that
+  install — so `plainkeep job disable`, which is deliberately permissive about risk class, can no
+  longer be handed a key that resolves outside `~/Library/LaunchAgents`.
+
+### Added
 - **Automation is now the default offering, and activation is a product verb** ([`docs/DECISIONS.md`](docs/DECISIONS.md)
   ADR-022 — accepted 2026-08-14). The §15 registry gains a `start` job (daily 07:30,
   `plainkeep start --automated`), and `plainkeep job enable | disable | status` replaces the printed

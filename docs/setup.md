@@ -136,6 +136,20 @@ consolidate (daily 02:30), organize_scan (weekly Sun 03:00),
 close_nudge (daily 18:30), backup_check (weekly Fri 17:00)? [Y/n]
 ```
 
+Accept it and the wizard asks **when** — the two ends of your day, defaulted to whatever your
+registry currently says:
+
+```
+  day starts at? [07:30] 08:00
+  day closes at? [18:30] 22:00
+```
+
+Enter keeps the current time and rewrites nothing. A time it cannot use is refused with the
+correction (`'7am' is not HH:MM — write 07:00`) and asked once more; a second unusable answer keeps
+the default and says so. The answers are written into `jobs/registry.json` *before* the layer
+renders and loads, so the first schedule launchd gets is already yours. They go through the same
+path as `plainkeep job set` below — one writer, one set of rules.
+
 Already-`ready` layers are noted and skipped. `blocked` and `not_applicable` layers show their reason and next step, and are never prompted to install.
 
 Backups are never a yes/no here. The wizard prints the `plainkeep backup init` handoff (it needs human secrets) and never runs it.
@@ -294,6 +308,44 @@ without you asking, so the `automation` layer is **on by default** in the wizard
 | `organize_scan` | weekly Sun 03:00 | proposes filing moves (proposes — never applies) |
 | `backup_check` | weekly Fri 17:00 | nags if the backup is stale |
 
+Those times are **defaults, not the product**. The wizard asks about the two bookends, and any job's
+schedule can be changed at any time:
+
+```sh
+plainkeep job set start --daily 08:00           # your day starts at eight
+plainkeep job set close_nudge --daily 22:00     # and closes at ten
+plainkeep job set index --every 30              # every 30 minutes
+plainkeep job set organize_scan --weekly "Mon 04:15"
+plainkeep job set consolidate --monthly "1 04:00"
+plainkeep job set close_nudge --daily 22:00 --dry-run    # what it would write; writes nothing
+```
+
+Exactly one cadence flag per call. A time it cannot use is refused with the correction and **nothing
+is written** — validation runs before the file is opened. Only that job's `schedule` is rewritten;
+every other field, and the order of the file, is left exactly as it was.
+
+`set` also **seeds a canonical job your registry never received**. `jobs/registry.json` is yours —
+the template seeds a new vault and an engine update never overwrites it — so a job added to plainkeep
+after your vault was created cannot reach you any other way. `plainkeep job set start --daily 08:00`
+in a vault with no `start` job creates the whole entry from the engine defaults, at the time you
+asked for, and says `seeded 'start' from engine defaults`. Names it neither has are refused with both
+lists: the jobs you have, and the defaults you could seed.
+
+**`set` never touches launchd.** It is a vault write — agents may run it freely — and activation
+stays with the confirm-class `enable`, which is the one command that writes outside your vault. If
+the job you just edited is currently loaded, `set` says so and prints the one line that closes the
+gap:
+
+```
+set 'close_nudge' -> daily 22:00  (was daily 18:30)
+  wrote jobs/registry.json
+
+⚠ launchd is still running the OLD schedule for 'close_nudge' — the loaded schedule is stale
+  make it live:  plainkeep job enable close_nudge --yes
+```
+
+`plainkeep job status` reports the same fact as **drift**, and `plainkeep doctor` warns about it.
+
 Only `read` and `safe_write` jobs may be scheduled (§15). A `confirm`-class verb — anything that
 transmits, or that moves your files without asking — can never run unattended, and both
 `plainkeep job list` and `plainkeep doctor` flag a registry that tries.
@@ -338,8 +390,10 @@ write outside your vault, into `~/Library/LaunchAgents`, and they change the sta
 system daemon. `--dry-run` is a read and never needs `--yes`.
 
 A job whose registry entry is illegal under §15 — inline shell logic, a verb that does not exist, an
-external command that is not on the allowlist, a name that is not a plain identifier — is **refused**
-by `apply` and `enable`, not skipped. `plainkeep job list` shows you which and why. What the product
+external command that is not on the allowlist, a schedule that is not one of the four cadences — is
+**refused** by `apply` and `enable`, not skipped. A job **name** that is not a plain identifier is
+refused earlier still: it becomes a plist filename outside your vault, so it is checked when the
+registry is read, before any action sees it. `plainkeep job list` shows you which and why. What the product
 refuses to run once by hand it will not schedule to run unattended.
 
 `enable` always **re-renders from the registry** before installing, so editing `jobs/registry.json`

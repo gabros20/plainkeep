@@ -649,12 +649,6 @@ working repo). Blockers and importants were fixed in-branch; this is the deferre
   Measured: `grep` puts the second template at `bin/backup/run.py:303-352`; ADR-022 scopes itself
   to §15 in a Consequences bullet rather than claiming it. Fix: render through `launchdlib`,
   activate through `job enable`, or register it as a §15 job.
-- **Registry keys are validated as filesystem names only where `enable`/`apply` run** (r2/M6).
-  `_NAME_RE` gates the mutating-install path, but `disable` deliberately stays permissive and does
-  `unlink` on a path built from the key: with a hand-made `com.plainkeep...` directory inside the
-  LaunchAgents dir and a traversing key, `job disable --all --yes` deleted a file outside it
-  (demonstrated in a throwaway tree; nothing in plainkeep creates that hop directory, so it is an
-  unenforced invariant, not a live exploit). Fix where the rule belongs: `load_registry()`.
 - **`setup automation` without `--yes` prints the generic confirm line** — "installs downloads and
   local dependencies" — which is false for this layer and omits the launchd facts that made it
   confirm-class (r2/M7). The wizard prompt says the right thing; `_confirm_message()` needs the

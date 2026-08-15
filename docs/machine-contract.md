@@ -369,11 +369,14 @@ One file per enabled job:
   `launchdlib.launch_agents_dir()`. Neither half is taken from a command-line argument — but "not
   caller-controlled" is not the bound that matters, because the registry is **vault content** and
   therefore attacker-controllable in this system's own threat model. What actually bounds the
-  filename is that a registry key is validated as an identifier (`[A-Za-z0-9][A-Za-z0-9_.-]*`) by
-  the same §15 legality check that `job list`, `job run`, `job apply` and `job enable` all read, so
-  a traversing key is refused before anything is rendered; the vault-side render then passes through
-  `vaultio`'s path wall as a second, independent backstop; and the `com.plainkeep.` prefix is glued
-  to the front of whatever survives.
+  filename is that a registry key is validated as an identifier (`[A-Za-z0-9][A-Za-z0-9_.-]*`) when
+  the registry is **read** (`launchdlib.read_registry()`), which is upstream of every action — so a
+  traversing key is refused before the verb has an action at all, `disable` included. That placement
+  is the fix for the one gap the rule had while it lived on the install path: `disable` is
+  deliberately permissive about risk class (a job whose class was tightened after it was enabled is
+  exactly the one you most need to turn off) and `unlink`ed a path built from the key. The
+  vault-side render then passes through `vaultio`'s path wall as a second, independent backstop, and
+  the `com.plainkeep.` prefix is glued to the front of whatever survives.
 - It is a **copy**, never a symlink. Recent macOS is unreliable about bootstrapping symlinked plists,
   and a symlink would also mean an edit inside the vault silently changes what a privileged loader
   reads.
@@ -423,6 +426,12 @@ rm ~/Library/LaunchAgents/com.plainkeep.<job>.plist
 `enable` and `disable` are **confirm-class**: without `--yes` they exit `3` (§2) and write nothing.
 `--dry-run` prints the exact files and service targets that would be touched, needs no `--yes`, and
 calls launchctl zero times.
+
+`plainkeep job set` — which changes a job's schedule — is **not** part of this surface and is
+`safe_write`: it edits `jobs/registry.json` inside the vault and issues no `bootstrap` or `bootout`.
+Its only contact with launchd is the same read-only `print` probe above, for the one job it edited,
+so that it can tell the operator the loaded schedule has gone stale and name the `enable` that
+fixes it. Consent for the machine stays where it was.
 
 ### The two test/override variables
 

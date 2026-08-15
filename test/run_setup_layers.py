@@ -1013,8 +1013,13 @@ def main() -> int:
                   row["status"] == "blocked", str(row))
             check("…the detail carries the diagnosis, naming the offending key",
                   "my job" in row["detail"], str(row))
-            check("…and `next` is the repair, not a command that will refuse",
-                  "plainkeep setup automation" not in (row.get("next") or ""), str(row.get("next")))
+            # The property is that the operator is told to FIX THE FILE FIRST — not that the layer's
+            # own command is unmentionable. `next` may still name it, after the repair and in that
+            # order, because that is the command to run once the registry parses.
+            nxt = row.get("next") or ""
+            check("…and `next` leads with the repair, not with a command that will refuse",
+                  "jobs/registry.json" in nxt
+                  and not nxt.startswith("plainkeep setup automation"), str(nxt))
             adv = mod_r.advance("automation", yes=True, fake=True)
             check("advance skips a blocked-by-refusal layer and surfaces the remedy",
                   not adv["ran"] and "automation" in adv["skipped"] and adv["handoff"], str(adv))

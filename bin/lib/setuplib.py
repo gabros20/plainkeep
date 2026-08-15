@@ -386,6 +386,18 @@ def _status_automation(layer: Layer) -> dict:
     if _platform_system() != "Darwin":
         return _row(layer, "not_applicable", "launchd scheduling is macOS-only (no plists on this host)",
                     [{"id": "launchd", "title": "jobs/launchd/*.plist", "ok": False, "advisory": True}], "")
+    # A REFUSED REGISTRY IS BLOCKED, NOT ABSENT (r1/I2). `job_states()` reads through the tolerant
+    # `load_registry()`, which returns None for a registry the product refuses as readily as for one
+    # that does not exist — so a vault with an illegal job key reported `absent` ("job plists have
+    # not been rendered") and handed the operator `plainkeep setup automation`, which runs
+    # `job apply` and exits 1 with the very diagnosis this row declined to show. `blocked` is the
+    # status for a layer that cannot be advanced until something outside it is fixed, and `advance`
+    # already skips one rather than crashing partway through it.
+    refusal = launchdlib.registry_error()
+    if refusal:
+        return _row(layer, "blocked", f"jobs registry is not usable: {refusal}",
+                    [{"id": "registry", "title": "jobs/registry.json is readable", "ok": False}],
+                    "fix jobs/registry.json, then: plainkeep setup automation --yes")
     sched = [s for s in launchdlib.job_states() if s["schedulable"]]
     rendered = bool(sched) and all(s["rendered"] and not s["drift"] for s in sched)
     loaded = bool(sched) and all(s["loaded"] for s in sched)

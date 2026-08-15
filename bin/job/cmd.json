@@ -1,7 +1,7 @@
 {
   "verb": "job",
-  "summary": "list | run <name> | apply | enable | disable | status \u2014 scheduler-neutral jobs (\u00a715); apply renders launchd plists, enable activates them",
-  "usage": "plainkeep job [list|run <name>|apply|status|enable [<name>\u2026|--all] --yes|disable [<name>\u2026|--all] --yes]",
+  "summary": "list | run <name> | apply | set <name> | enable | disable | status — scheduler-neutral jobs (§15); apply renders launchd plists, enable activates them, set changes the times",
+  "usage": "plainkeep job [list|run <name>|apply|set <name> --daily HH:MM|status|enable [<name>…|--all] --yes|disable [<name>…|--all] --yes]",
   "risk": "safe_write",
   "args": [
     {
@@ -19,7 +19,7 @@
     ".logs/jobs/",
     "journal/"
   ],
-  "hints": "Scheduler-neutral jobs: list/run/apply/enable/disable/status. Only read/safe_write may be scheduled. `apply` renders the plists; `enable` installs + loads them into launchd (confirm-class \u2014 needs --yes); `status` shows rendered/installed/loaded per job. Common mistake: a job with inline shell logic \u2014 a job calls exactly ONE verb.",
+  "hints": "Scheduler-neutral jobs: list/run/apply/set/enable/disable/status. Only read/safe_write may be scheduled. `apply` renders the plists; `enable` installs + loads them into launchd (confirm-class — needs --yes); `set` edits jobs/registry.json (a vault write — agents may run it freely) and NEVER touches launchd, so a changed time needs `plainkeep job enable <name> --yes` to go live; `status` shows rendered/installed/loaded per job. Common mistake: a job with inline shell logic — a job calls exactly ONE verb.",
   "output": {
     "mode": "rows",
     "fields": {
@@ -58,6 +58,44 @@
       "risk": "safe_write",
       "dry_run": true,
       "args": []
+    },
+    {
+      "name": "set",
+      "summary": "change a job's schedule in jobs/registry.json (seeds a missing engine default); never touches launchd",
+      "risk": "safe_write",
+      "dry_run": true,
+      "args": [
+        {
+          "name": "name",
+          "type": "string",
+          "required": true,
+          "help": "the job name from `plainkeep job list`, or an engine default to seed (start, index, consolidate, organize_scan, close_nudge, backup_check)"
+        },
+        {
+          "name": "--daily",
+          "type": "string",
+          "required": false,
+          "help": "HH:MM, 24-hour and zero-padded (e.g. 08:00)"
+        },
+        {
+          "name": "--weekly",
+          "type": "string",
+          "required": false,
+          "help": "\"Day HH:MM\" (e.g. \"Sun 03:00\")"
+        },
+        {
+          "name": "--monthly",
+          "type": "string",
+          "required": false,
+          "help": "\"D HH:MM\", day-of-month 1-28 (e.g. \"1 04:00\")"
+        },
+        {
+          "name": "--every",
+          "type": "string",
+          "required": false,
+          "help": "run every N minutes (e.g. 60)"
+        }
+      ]
     },
     {
       "name": "status",

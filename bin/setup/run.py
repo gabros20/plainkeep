@@ -252,6 +252,15 @@ def _advance_all(*, yes: bool, dry: bool = False) -> int:
 WIZARD_DEFAULTS = {"skeleton": True, "search": False, "models": False, "automation": True, "ui": True}
 
 
+def _promised_jobs(jobs: dict) -> list[str]:
+    """The jobs the automation prompt NAMES for this registry — its schedulable entries.
+
+    Shared by the prompt and by the wizard's write step so the two cannot disagree about what was
+    promised. Empty means the prompt falls back to its static sentence, which describes the engine
+    defaults; see `_wizard_times` for why that specific case is the one that seeds."""
+    return [n for n, j in jobs.items() if isinstance(j, dict) and launchdlib.schedulable(j)]
+
+
 def _automation_prompt() -> str:
     """The automation prompt, built from THIS vault's registry when it can be read.
 
@@ -262,8 +271,9 @@ def _automation_prompt() -> str:
     describes the shipped defaults it is about to create."""
     reg = launchdlib.load_registry()
     jobs = (reg or {}).get("jobs", {})
-    listed = [f"{name} ({launchdlib.schedule_str(job.get('schedule', {}))})"
-              for name, job in jobs.items() if launchdlib.schedulable(job)]
+    promised = _promised_jobs(jobs)      # computed once; it walks the whole registry
+    listed = [f"{name} ({launchdlib.schedule_str(jobs[name].get('schedule', {}))})"
+              for name in promised]
     # The prompt names WHERE it writes, not only what it schedules (r1/I1). "schedule your day?" and
     # "install launch agents into ~/Library/LaunchAgents?" are different questions, and the second is
     # the one being answered — it is the fact that makes this layer confirm-class.
@@ -293,6 +303,118 @@ def _ask_yes_no(prompt: str, default: bool, ask) -> bool:
     if not raw:
         return default
     return raw in ("y", "yes")
+
+
+def _ask_time(prompt: str, default: str, ask, say) -> str:
+    """One HH:MM prompt, in `_ask_yes_no`'s exact idiom: `ask(text)->str` supplies the raw line, an
+    empty line (just Enter) or a closed stdin takes the default.
+
+    ONE RE-ASK, THEN THE DEFAULT. A time is the one wizard answer a person can get almost right —
+    `7am`, `8:00`, `20.00` — so a typo must not silently become a schedule and must not end the
+    setup either. The first bad answer prints the correction `launchdlib.parse_schedule` computed
+    ("'7am' is not HH:MM — write 07:00") and asks again; a second bad answer keeps the default and
+    says so. Never a crash, and never a value the operator did not type."""
+    for attempt in (1, 2):
+        try:
+            raw = ask(f"  {prompt} [{default}] ").strip()
+        except EOFError:
+            return default
+        if not raw:
+            return default
+        try:
+            return launchdlib.parse_schedule({"daily": raw})["daily"]
+        except launchdlib.ScheduleError as exc:
+            say(f"    {exc}")
+            if attempt == 2:
+                say(f"    keeping {default}")
+    return default
+
+
+def _wizard_times(ask, say) -> list[str]:
+    """Ask when the day starts and when it closes, and write the answers into `jobs/registry.json`.
+
+    THE TIMES WERE NEVER A QUESTION. ADR-022 made scheduling the default and left the hours as two
+    literals someone typed into the registry — so a system whose whole premise is that the day opens
+    and closes without being asked opened it at 07:30 for a person who starts at 08:00, and the only
+    way to say otherwise was to hand-edit JSON. Two prompts, at the one moment the operator is
+    already deciding about their day.
+
+    THROUGH `launchdlib.set_schedule`, the same writer `plainkeep job set` uses. `setuplib` may not
+    import a verb's `run.py`, and a second writer here would validate differently the first time
+    either changed — on a fresh machine, unattended, where a silently-ignored answer is least
+    visible. Called BEFORE the layer advances, so the very first `job enable` installs the chosen
+    times rather than the shipped ones plus a re-run.
+
+    Prompts belong to the WIZARD alone: `setup automation --yes` and `setup --all --yes` are what an
+    agent or a script runs, and they leave whatever times the registry holds exactly alone.
+
+    IT DELIVERS WHAT THE PROMPTS PROMISED, AND ONLY THAT (r1/M3, r2/B1) — and there are TWO prompts.
+
+    The yes/no prompt promises a SET. `plainkeep vault init` writes `jobs/registry.json` as
+    `{"jobs": {}}` and nothing ever copies the repo's registry into a new vault, so on a real fresh
+    vault `_automation_prompt` falls back to its static sentence naming six jobs; when the registry
+    has jobs of its own, it names those instead. `seeding` is that branch, and it governs the jobs
+    nobody was asked about individually: seed the canonical set when the static sentence promised it,
+    and otherwise add nothing, because scheduling four jobs a two-job prompt never mentioned is the
+    mirror failure.
+
+    The TIME prompts promise a JOB EACH, by name, and that promise does not depend on the branch
+    above. Keying the whole write on `seeding` meant that on a vault with jobs but no `start` — the
+    pre-ADR-022 migration shape, which is the case this seed path exists for — the wizard asked "day
+    starts at?", took `08:00`, and discarded it in silence because the registry had some other
+    schedulable job. A question asked by name is answered by writing it."""
+    reg = launchdlib.load_registry()
+    if reg is None:                      # no registry yet (skeleton seeds it) — nothing to write into
+        return []
+    jobs = reg.get("jobs", {})
+    answers: dict[str, str] = {}
+    for job_name, question in ((launchdlib.DAY_START_JOB, "day starts at?"),
+                               (launchdlib.DAY_CLOSE_JOB, "day closes at?")):
+        entry = jobs.get(job_name) or launchdlib.DEFAULT_JOBS.get(job_name)
+        current = (entry or {}).get("schedule", {}).get("daily")
+        if not current:
+            # A bookend this vault has re-cadenced to something that is not a daily time (weekly, an
+            # interval) is not ours to reshape into one from a yes/no wizard.
+            continue
+        answers[job_name] = _ask_time(question, current, ask, say)
+
+    # PLAINKEEP_SETUP_FAKE KEEPS SETUP INERT, AND THAT HAS TO INCLUDE THIS (r1/M4). The seam is
+    # documented as "the display string is recorded, nothing runs"; a vault write through it is a
+    # real edit to a real file. Asked-then-discarded rather than not asked, so the preview still
+    # walks the flow it is previewing — and it SAYS the answer went nowhere, because an answer
+    # silently dropped is worse than a question not asked.
+    if _fake():
+        say("    (PLAINKEEP_SETUP_FAKE — nothing written)")
+        return []
+
+    # What the YES/NO prompt promised: this registry's own schedulable jobs, or — when it had none to
+    # name and fell back to describing the engine defaults — the canonical set.
+    seeding = not _promised_jobs(jobs)
+    changed: list[str] = []
+    for job_name, default in launchdlib.DEFAULT_JOBS.items():
+        answer = answers.get(job_name)
+        if job_name not in jobs:
+            # Seeded if the operator was asked about this job BY NAME (a time prompt names one job,
+            # and its answer is that job's promise), or if the yes/no prompt promised the whole set.
+            # Never otherwise: a job neither prompt mentioned is `plainkeep job set`'s to add.
+            if answer is None and not seeding:
+                continue
+            schedule = {"daily": answer} if answer else default["schedule"]
+        elif answer and answer != jobs[job_name].get("schedule", {}).get("daily"):
+            schedule = {"daily": answer}
+        else:
+            # Nothing to write. Rewriting the file to store the value it already held would put a
+            # diff in `git status` after every wizard run, for no change.
+            continue
+        try:
+            res = launchdlib.set_schedule(job_name, schedule)
+        except (launchdlib.RegistryError, OSError) as exc:
+            say(f"    could not set {job_name}: {exc}")
+            continue
+        changed.append(job_name)
+        seeded = "seeded from engine defaults — " if res["seeded"] else ""
+        say(f"    {job_name}: {seeded}{launchdlib.schedule_str(res['schedule'])}")
+    return changed
 
 
 def _run_wizard(rows, ask, say) -> dict:
@@ -330,6 +452,9 @@ def _run_wizard(rows, ask, say) -> dict:
             say(f"  skip {lid}")
             skipped.append(lid)
             continue
+        if lid == "automation":
+            # WHEN, not just WHETHER — and before the advance, so the first enable carries the answer.
+            _wizard_times(ask, say)
         try:
             res = setuplib.advance(lid, yes=True, fake=_fake())
         except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:

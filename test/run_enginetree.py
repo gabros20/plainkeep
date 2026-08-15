@@ -229,11 +229,18 @@ def case_persisted_paths_name_current(tmp: Path) -> None:
     # correct there) while `_plist` writes it into a launchd job that outlives the invocation. A
     # file-wide grep would conflate exactly the two things this separation keeps apart. Asked FIRST,
     # so it is answered even if the runtime probe below cannot run at all.
-    for rel, func in (("bin/job/run.py", "_plist"), ("bin/mcp/run.py", "_dispatcher_bin")):
+    # The renderer moved to launchdlib (ADR-022: one implementation for the verb, the setup layer
+    # and doctor), so the persisting function this pin reads is `launchdlib.plist`, not the verb's
+    # thin `_plist` delegate. The delegate is still read — with a weaker assertion — so a future
+    # edit cannot quietly route the persisted path through `launcher()` on the way past.
+    for rel, func in (("bin/lib/launchdlib.py", "plist"), ("bin/mcp/run.py", "_dispatcher_bin")):
         src = _function_source(REPO / rel, func)
         check(f"{rel}:{func}() persists stable_launcher(), not launcher()",
               src is not None and "enginetree.stable_launcher()" in src
               and "enginetree.launcher()" not in src, (src or "<not found>")[:200])
+    dsrc = _function_source(REPO / "bin/job/run.py", "_plist")
+    check("bin/job/run.py:_plist() delegates without touching launcher()",
+          dsrc is not None and "enginetree.launcher()" not in dsrc, (dsrc or "<not found>")[:200])
 
     root = tmp / "stable"
     healthy(root)

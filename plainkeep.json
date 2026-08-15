@@ -690,8 +690,8 @@
     },
     {
       "verb": "job",
-      "summary": "list | run <name> | apply | enable | disable | status \u2014 scheduler-neutral jobs (\u00a715); apply renders launchd plists, enable activates them",
-      "usage": "plainkeep job [list|run <name>|apply|status|enable [<name>\u2026|--all] --yes|disable [<name>\u2026|--all] --yes]",
+      "summary": "list | run <name> | apply | set <name> | enable | disable | status \u2014 scheduler-neutral jobs (\u00a715); apply renders launchd plists, enable activates them, set changes the times",
+      "usage": "plainkeep job [list|run <name>|apply|set <name> --daily HH:MM|status|enable [<name>\u2026|--all] --yes|disable [<name>\u2026|--all] --yes]",
       "risk": "safe_write",
       "args": [
         {
@@ -709,7 +709,7 @@
         ".logs/jobs/",
         "journal/"
       ],
-      "hints": "Scheduler-neutral jobs: list/run/apply/enable/disable/status. Only read/safe_write may be scheduled. `apply` renders the plists; `enable` installs + loads them into launchd (confirm-class \u2014 needs --yes); `status` shows rendered/installed/loaded per job. Common mistake: a job with inline shell logic \u2014 a job calls exactly ONE verb.",
+      "hints": "Scheduler-neutral jobs: list/run/apply/set/enable/disable/status. Only read/safe_write may be scheduled. `apply` renders the plists; `enable` installs + loads them into launchd (confirm-class \u2014 needs --yes); `set` edits jobs/registry.json (a vault write \u2014 agents may run it freely) and NEVER touches launchd, so a changed time needs `plainkeep job enable <name> --yes` to go live; `status` shows rendered/installed/loaded per job. Common mistake: a job with inline shell logic \u2014 a job calls exactly ONE verb.",
       "output": {
         "mode": "rows",
         "fields": {
@@ -748,6 +748,44 @@
           "risk": "safe_write",
           "dry_run": true,
           "args": []
+        },
+        {
+          "name": "set",
+          "summary": "change a job's schedule in jobs/registry.json (seeds a missing engine default); never touches launchd",
+          "risk": "safe_write",
+          "dry_run": true,
+          "args": [
+            {
+              "name": "name",
+              "type": "string",
+              "required": true,
+              "help": "the job name from `plainkeep job list`, or an engine default to seed (start, index, consolidate, organize_scan, close_nudge, backup_check)"
+            },
+            {
+              "name": "--daily",
+              "type": "string",
+              "required": false,
+              "help": "HH:MM, 24-hour and zero-padded (e.g. 08:00)"
+            },
+            {
+              "name": "--weekly",
+              "type": "string",
+              "required": false,
+              "help": "\"Day HH:MM\" (e.g. \"Sun 03:00\")"
+            },
+            {
+              "name": "--monthly",
+              "type": "string",
+              "required": false,
+              "help": "\"D HH:MM\", day-of-month 1-28 (e.g. \"1 04:00\")"
+            },
+            {
+              "name": "--every",
+              "type": "string",
+              "required": false,
+              "help": "run every N minutes (e.g. 60)"
+            }
+          ]
         },
         {
           "name": "status",
@@ -1562,7 +1600,7 @@
     {
       "verb": "share",
       "summary": "capability-URL share: publish a note (or tag collection) as one unguessable link; browser gets HTML, <url>.md is raw markdown for agents",
-      "usage": "plainkeep share <slug> [--expires 7d] [--gist] [--dry-run|--yes] | collection <tag> | list | pull <url> | revoke <id> --yes | init",
+      "usage": "plainkeep share <slug> [--expires 7d] [--gist] [--dry-run|--yes] | collection <tag> | list | pull <url> | revoke <id> --yes | prune [--yes] | init",
       "risk": "safe_write",
       "args": [
         {
@@ -1578,7 +1616,7 @@
         ".share/",
         "journal/"
       ],
-      "hints": "Share a note or `collection <tag>` as ONE self-contained OPSX bundle (raw markdown + rendered HTML), published PLAINTEXT to a Cloudflare Worker+KV under a 24-char unguessable token (~124 bits) -- no encryption, no key. Secrecy = link secrecy + TTL, same trust model as a secret gist; the worker can technically read published content (accepted tradeoff, see ADR-008). ONE link for everyone: the bare URL renders HTML in a browser; append `.md` (or paste the printed `agents:` line) and any chat/coding agent's fetch tool gets raw wiki markdown -- content negotiation also serves markdown to non-browser Accept headers on the bare URL. `plainkeep share pull <url>` fetches + unpacks the same markdown locally. Legacy encrypted links from the old zero-knowledge model return 410 -- re-publish. Transmitting subactions (share/collection/revoke) self-gate --yes -> EXIT_CONFIRM(3) because a PUT is a transmission; `list` and `pull` are free reads. `--dry-run` renders locally and stops before the PUT. `--gist` = secret gist fallback (same trust model, hosted by GitHub). `plainkeep share init` deploys the worker and provisions the `X-Publish-Token` (`--yes` runs `wrangler deploy` + `wrangler secret put PUBLISH_TOKEN`). Common mistake: expecting it to send the link \u2014 output is a DRAFT link, the human sends it.",
+      "hints": "Share a note or `collection <tag>` as ONE self-contained OPSX bundle (raw markdown + rendered HTML), published PLAINTEXT to a Cloudflare Worker+KV under a 24-char unguessable token (~124 bits) -- no encryption, no key. Secrecy = link secrecy + TTL, same trust model as a secret gist; the worker can technically read published content (accepted tradeoff, see ADR-008). ONE link for everyone: the bare URL renders HTML in a browser; append `.md` (or paste the printed `agents:` line) and any chat/coding agent's fetch tool gets raw wiki markdown -- content negotiation also serves markdown to non-browser Accept headers on the bare URL. `plainkeep share pull <url>` fetches + unpacks the same markdown locally. Legacy encrypted links from the old zero-knowledge model return 410 -- re-publish. Transmitting subactions (share/collection/revoke) self-gate --yes -> EXIT_CONFIRM(3) because a PUT is a transmission; `list` and `pull` are free reads. `--dry-run` renders locally and stops before the PUT. `--gist` = secret gist fallback (same trust model, hosted by GitHub). `plainkeep share init` deploys the worker and provisions the `X-Publish-Token` (`--yes` runs `wrangler deploy` + `wrangler secret put PUBLISH_TOKEN`). `plainkeep share prune` drops ledger entries whose share is revoked or past its expiry, and clears the `share:` frontmatter they left on the note; a dry run without `--yes`. Common mistake: expecting it to send the link \u2014 output is a DRAFT link, the human sends it.",
       "output": {
         "mode": "rows",
         "fields": {
@@ -1700,6 +1738,13 @@
               "help": "the share id from `plainkeep share list`"
             }
           ]
+        },
+        {
+          "name": "prune",
+          "summary": "drop ledger entries for revoked/expired shares; needs --yes to write",
+          "risk": "safe_write",
+          "dry_run": true,
+          "args": []
         },
         {
           "name": "init",
@@ -2023,7 +2068,7 @@
     {
       "verb": "vault",
       "summary": "register, name and re-point plainkeep vaults (marker + registry)",
-      "usage": "plainkeep vault list | status | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
+      "usage": "plainkeep vault list | status | init <path> [--name <slug>] [--default] --yes | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
       "risk": "safe_write",
       "reads": [
         ".plainkeep/vault.json",
@@ -2070,8 +2115,36 @@
           "args": []
         },
         {
+          "name": "init",
+          "summary": "create a DATA-ONLY vault (content dirs, plugins/, plainkeep.json, marker, registry entry \u2014 no engine code); needs --yes",
+          "risk": "confirm",
+          "dry_run": false,
+          "args": [
+            {
+              "name": "path",
+              "type": "string",
+              "required": true,
+              "help": "where the new vault goes; created if absent, refused if it already carries a marker or engine code",
+              "example": "~/notes"
+            },
+            {
+              "name": "--name",
+              "type": "string",
+              "required": false,
+              "help": "registry name (lowercase slug); defaults to the directory name",
+              "example": "notes"
+            },
+            {
+              "name": "--default",
+              "type": "flag",
+              "required": false,
+              "help": "also make it the default vault"
+            }
+          ]
+        },
+        {
           "name": "register",
-          "summary": "mark a directory as a vault (if unmarked) and add it to the registry; needs --yes",
+          "summary": "adopt an EXISTING directory as a vault: mark it (if unmarked) and add it to the registry; needs --yes",
           "risk": "confirm",
           "dry_run": false,
           "args": [

@@ -105,6 +105,62 @@ def case_automation_rows(tmp: Path) -> None:
     check("doctor never FAILs on an automation row", "FAIL" not in r.stdout, r.stdout)
 
 
+def case_doctor_never_certifies_a_registry_the_VERB_refuses(tmp: Path) -> None:
+    """THE CHECKER MUST NOT BE GREENER THAN THE PRODUCT (r1/I2).
+
+    Moving the registry-key rule to `read_registry()` was right, and it was carried through to the
+    strict readers only. `load_registry()` — the tolerant wrapper every status probe uses — collapsed
+    a refusal and an absence into the same `None`, so on a vault whose registry `plainkeep job list`
+    refuses with exit 1, `plainkeep doctor` iterated zero jobs, passed check 11 vacuously, and printed
+    `ok  jobs registry schedules only read/safe_write verbs`. The one command whose job is to find
+    problems certified the file as fine.
+
+    The second half is worse than the false green: the automation row reported `absent` and handed
+    the operator `plainkeep setup automation` as the next step — which runs `job apply` and exits 1
+    with the refusal doctor had just declined to mention. The diagnosis existed; it was reachable
+    only from the surface the operator was not sent to.
+
+    Doctor stays WARN-only here, for the same reason every other automation row is: a malformed jobs
+    registry is not a broken vault. It simply has to SAY so."""
+    def vault_with(leaf: str, body: str) -> Path:
+        h = tmp / leaf
+        h.mkdir()
+        wellformed(h)
+        (h / "jobs").mkdir(exist_ok=True)
+        (h / "jobs" / "registry.json").write_text(body, encoding="utf-8")
+        return h
+
+    bad_key = vault_with("doctor-badkey", json.dumps({"external_allowlist": [], "jobs": {
+        "my job": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    }}))
+    r = run(bad_key, "doctor")
+    out = r.stdout + r.stderr
+    check("doctor does not report OK for a registry the job verb refuses",
+          "jobs registry schedules only" not in out, out[-400:])
+    check("doctor WARNs and names the offending key",
+          "warn" in out and "my job" in out, out[-400:])
+    check("the registry refusal is advisory (doctor still exits 0)", r.returncode == 0,
+          f"rc={r.returncode}")
+    check("doctor no longer sends the operator at a command that will refuse",
+          "next: plainkeep setup automation" not in out, out[-400:])
+
+    # The same hole, through the other door: a registry that is not valid JSON at all was swallowed
+    # by `except Exception: jobs = {}` and also passed vacuously.
+    broken = vault_with("doctor-brokenjson", '{"jobs": {"a": ')
+    r = run(broken, "doctor")
+    out = r.stdout + r.stderr
+    check("doctor does not report OK for a registry that is not valid JSON",
+          "jobs registry schedules only" not in out and "warn" in out, out[-400:])
+
+    # And the control: a good registry still gets its green row, or the warning teaches nothing.
+    good = vault_with("doctor-goodreg", json.dumps({"external_allowlist": [], "jobs": {
+        "index": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+    }}))
+    r = run(good, "doctor")
+    check("a legal registry still gets its ok row",
+          "jobs registry schedules only read/safe_write verbs" in r.stdout, r.stdout[-300:])
+
+
 def case_no_suite_can_reach_a_real_launchd(tmp: Path) -> None:
     """THE GUARANTEE IS STRUCTURAL, NOT PER-SUITE (r1/I2).
 
@@ -223,6 +279,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         FAKE = launchdfx.install(Path(td) / "machine")
         case_automation_rows(Path(td))
+        case_doctor_never_certifies_a_registry_the_VERB_refuses(Path(td))
 
     # ---- the no-real-launchd guarantee (r1/I2) + one probe per job (r1/M5) ----
     with tempfile.TemporaryDirectory() as td:

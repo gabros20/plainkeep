@@ -202,8 +202,12 @@ Discover the live, authoritative set with `plainkeep help`; this is the working 
   (layered installer; paired with `plainkeep doctor` as checker; see
   [`docs/setup.md`](../../docs/setup.md)) · `plainkeep vault status|list` (which vault am I on,
   which engine is running, how was it chosen) · `plainkeep backup` · `plainkeep index` · `plainkeep sweep`
-  · `plainkeep job list|status|run <name>|apply|enable|disable` — the §15 schedule. `status` is a
-  read (rendered / installed / loaded / drift); `run <name>` is the manual fallback for any job.
+  · `plainkeep job list|status|run <name>|apply|set <name>|enable|disable` — the §15 schedule.
+  `status` is a read (rendered / installed / loaded / drift); `run <name>` is the manual fallback
+  for any job. `set <name> --daily HH:MM|--weekly "Day HH:MM"|--monthly "D HH:MM"|--every <min>`
+  changes a job's time in `jobs/registry.json` (and seeds a canonical job the vault never received);
+  it is a VAULT WRITE that never touches launchd, so run it freely — the human's consent still gates
+  activation, and `set` prints the `enable` line when the loaded schedule goes stale.
   `enable`/`disable` MUTATE THE HUMAN'S LAUNCHD SESSION (`~/Library/LaunchAgents`) and are
   confirm-class (`--yes`): never run them on your own initiative — only on the human's explicit
   ask, and prefer showing them `--dry-run` output first. Doctor WARNs (never fails) on a

@@ -596,22 +596,37 @@ def main(argv):
     # 11. jobs registry (Part 4.4): only read/safe_write verbs may be scheduled — a confirm/deny-class
     # verb in the registry is a data-loss/transmit risk (e.g. `plainkeep organize apply` must NEVER be
     # scheduled; the weekly `plainkeep organize scan` is safe_write and fine). WARN-only.
+    #
+    # THE CHECKER MUST NOT BE GREENER THAN THE PRODUCT (r1/I2). This read its own `json.loads` with
+    # `except Exception: jobs = {}`, so a registry that does not parse — and, once the key rule moved
+    # to `read_registry()`, one the job verb refuses outright — iterated zero jobs and passed
+    # vacuously: `ok  jobs registry schedules only read/safe_write verbs` for a file
+    # `plainkeep job list` exits 1 on. The one command whose job is finding problems certified it.
+    #
+    # It now reads through the SAME strict reader every action uses, and surfaces the refusal as the
+    # warn it is. Still WARN-only, for the reason every automation row is: a malformed jobs registry
+    # is not a broken vault. It simply has to be said out loud.
     reg = paths.PLAINKEEP_HOME / "jobs" / "registry.json"
     if reg.exists():
+        jobs, refusal = {}, None
         try:
-            jobs = json.loads(reg.read_text(encoding="utf-8")).get("jobs", {})
-        except Exception:
-            jobs = {}
-        offenders = []
-        for name, job in jobs.items():
-            toks = str(job.get("command", "")).split()
-            verb = toks[1] if len(toks) > 1 and toks[0] == "plainkeep" else None
-            vr = guardrail.risk_of(verb) if verb else None
-            if job.get("risk") not in ("read", "safe_write") or vr in ("confirm", "deny"):
-                offenders.append(f"{name} ({job.get('command')})")
-        (warn if offenders else ok)(
-            f"{len(offenders)} confirm/deny-class job(s) scheduled (must never be): {offenders}" if offenders
-            else "jobs registry schedules only read/safe_write verbs")
+            jobs = launchdlib.read_registry()["jobs"]
+        except launchdlib.RegistryError as exc:
+            refusal = str(exc)
+        if refusal:
+            warn(f"jobs registry is not usable: {refusal} "
+                 "(nothing in it is scheduled until this is fixed)")
+        else:
+            offenders = []
+            for name, job in jobs.items():
+                toks = str(job.get("command", "")).split()
+                verb = toks[1] if len(toks) > 1 and toks[0] == "plainkeep" else None
+                vr = guardrail.risk_of(verb) if verb else None
+                if job.get("risk") not in ("read", "safe_write") or vr in ("confirm", "deny"):
+                    offenders.append(f"{name} ({job.get('command')})")
+            (warn if offenders else ok)(
+                f"{len(offenders)} confirm/deny-class job(s) scheduled (must never be): {offenders}" if offenders
+                else "jobs registry schedules only read/safe_write verbs")
 
     # 12. ACTIVATION (ADR-022): is the schedule the operator asked for actually running? Three facts,
     # two of which nothing checked before — a plist under `jobs/launchd/` proves a file was written,

@@ -258,6 +258,49 @@ def main() -> int:
               r.returncode == 2 and errs and errs[0].get("ok") is False and errs[0]["error"].get("code") == 2,
               f"rc={r.returncode} {r.stdout[:160]}")
 
+        # --- NO TERMINAL ESCAPES ON THE MACHINE CHANNEL ---
+        #
+        # `output.fail(message)` renders the SAME string to stderr for a human and into the `--json`
+        # error envelope for a program, so a refusal built as `f"{RED}…{RESET}"` ships ANSI to an
+        # agent parsing `error.message`. Colour belongs in the `human=` renderer, which is the only
+        # place that knows it is talking to a terminal.
+        #
+        # Policed as a CLASS, over every envelope this suite can produce, rather than as the two
+        # calls that happened to have it: `json.dumps` encodes an ESC byte as ``, so grepping
+        # the wire bytes reports clean on exactly the envelopes that are not — the question is what a
+        # consumer sees AFTER parsing.
+        def _escaped_strings(doc) -> list[str]:
+            found: list[str] = []
+
+            def walk(node):
+                if isinstance(node, str):
+                    if "\033" in node:
+                        found.append(node[:120])
+                elif isinstance(node, dict):
+                    for v in node.values():
+                        walk(v)
+                elif isinstance(node, list):
+                    for v in node:
+                        walk(v)
+            walk(doc)
+            return found
+
+        ansi_offenders = []
+        # (verb, args, expect_error) — the ok path and the refusal path of every verb whose refusals
+        # this branch touched, plus a spread of the rest.
+        for verb, args in [("job", ["list"]), ("job", ["status"]), ("job", ["nosuchaction"]),
+                           ("job", ["run", "nosuchjob"]), ("job", ["enable", "--all"]),
+                           ("job", ["set"]), ("job", ["set", "nosuchjob", "--daily", "08:00"]),
+                           ("job", ["set", "index", "--daily", "7am"]),
+                           ("search", []), ("task", ["done", "T-nope"]), ("wiki", ["open", "nope"]),
+                           ("setup", ["nosuchlayer"]), ("backup", []), ("status", [])]:
+            r = run(env, verb, *args, "--json")
+            for doc in (parse_ndjson(r.stdout) if r.stdout.strip() else []):
+                for s in _escaped_strings(doc):
+                    ansi_offenders.append(f"{verb} {' '.join(args)}: {s!r}")
+        check("no --json envelope carries terminal escape sequences (ok or error path)",
+              not ansi_offenders, "; ".join(ansi_offenders)[:400])
+
         # human rendering unchanged when --json is absent (spot check)
         r = run(env, "task", "list")
         check("human mode still renders (no envelope)", "active/" in r.stdout and "ops_json" not in r.stdout, r.stdout[:160])

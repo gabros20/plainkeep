@@ -915,6 +915,117 @@ def main() -> int:
                   "day starts at" not in r.stdout and "day closes at" not in r.stdout, r.stdout[:300])
             check(f"`setup {' '.join(args)}` leaves the registry's times untouched",
                   times_reg.read_bytes() == before_bytes, times_reg.read_text(encoding="utf-8")[:200])
+        # (d) r1/M4 — `PLAINKEEP_SETUP_FAKE` is documented to keep setup INERT, and the time write
+        # ignored it: a wizard run under the seam still rewrote the real `jobs/registry.json`.
+        # Contained today (the wizard needs a tty, and the suites point PLAINKEEP_HOME at fixtures),
+        # but a documented-inert path must not perform a real vault write.
+        os.environ["PLAINKEEP_SETUP_FAKE"] = "1"
+        before_bytes = times_reg.read_bytes()
+        fake_prompts: list[str] = []
+        fake_lines: list[str] = []
+        _saved_f = setup_run.setuplib.advance
+        setup_run.setuplib.advance = times_advance
+        try:
+            setup_run._run_wizard(auto_row, scripted(fake_prompts, iter(["y", "07:00", "23:00"])),
+                                  fake_lines.append)
+        finally:
+            setup_run.setuplib.advance = _saved_f
+        check("under PLAINKEEP_SETUP_FAKE the wizard still ASKS (the preview is of the real flow)",
+              any("day starts at" in p for p in fake_prompts), str(fake_prompts))
+        check("…and writes NOTHING to the registry",
+              times_reg.read_bytes() == before_bytes, times_reg.read_text(encoding="utf-8")[:200])
+        check("…and says so, rather than silently discarding the answer",
+              any("nothing written" in ln.lower() for ln in fake_lines), str(fake_lines))
+        os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
+
+        # --- r1/M3: the wizard's promise has to be TRUE on the vault shape that actually exists. ---
+        #
+        # `plainkeep vault init` writes `jobs/registry.json` as `{"jobs": {}}` and nothing ever copies
+        # the repo's registry into a new vault — so "the template seeds a new vault" was not true, and
+        # the automation prompt's static fallback named six jobs while the wizard created two. Either
+        # the prompt stops promising or the wizard delivers; the wizard delivers, because scheduling
+        # the day IS the product's default offering and two of six is not that offering.
+        empty_home = make_home(tmp / "wizard-empty")
+        (empty_home / "jobs").mkdir(parents=True)
+        empty_reg = empty_home / "jobs" / "registry.json"
+        empty_reg.write_text(json.dumps({
+            "description": "as `plainkeep vault init` writes it", "external_allowlist": [], "jobs": {},
+        }, indent=2), encoding="utf-8")
+        empty_fake = launchdfx.install(tmp / "wizard-empty-machine")
+        empty_saved = {k: os.environ.get(k) for k in empty_fake.env}
+        os.environ.update(empty_fake.env)
+        reload_wall(empty_home)
+        from lib import launchdlib as _ld  # noqa: E402  (bin/lib — the sys.path swap is above)
+        importlib.reload(_ld)
+        seen_empty: list[dict] = []
+
+        def empty_advance(layer_id, *, yes, fake):
+            seen_empty.append(json.loads(empty_reg.read_text(encoding="utf-8"))["jobs"])
+            r = mod._result()
+            r["ran"].append(f"did {layer_id}")
+            return r
+
+        e_prompts: list[str] = []
+        _saved_e = setup_run.setuplib.advance
+        setup_run.setuplib.advance = empty_advance
+        try:
+            setup_run._run_wizard(auto_row, scripted(e_prompts, iter(["y", "08:00", "22:00"])),
+                                  lambda s: None)
+        finally:
+            setup_run.setuplib.advance = _saved_e
+        seeded = seen_empty[-1] if seen_empty else {}
+        check("an EMPTY registry gets the full canonical set, not just the two bookends",
+              list(seeded) == list(_ld.DEFAULT_JOBS), f"{list(seeded)} != {list(_ld.DEFAULT_JOBS)}")
+        check("the two answered times land on the bookends",
+              seeded.get("start", {}).get("schedule") == {"daily": "08:00"}
+              and seeded.get("close_nudge", {}).get("schedule") == {"daily": "22:00"}, str(seeded))
+        check("the other four are seeded at their engine-default schedules",
+              all(seeded.get(n, {}) == _ld.DEFAULT_JOBS[n]
+                  for n in ("index", "consolidate", "organize_scan", "backup_check")), str(seeded))
+        check("everything the prompt promised now exists, before the layer advances",
+              all(n in seeded for n in _ld.DEFAULT_JOBS) and bool(seen_empty), str(list(seeded)))
+        check("the registry's own non-job keys survive the seed",
+              json.loads(empty_reg.read_text(encoding="utf-8")).get("description", "").startswith("as `plainkeep vault init`"),
+              empty_reg.read_text(encoding="utf-8")[:120])
+        for k, v in empty_saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+        # --- r1/I2, the setup half: a registry `read_registry()` refuses must not read as `absent`
+        # with `plainkeep setup automation` as the remedy — that command runs `job apply`, which
+        # refuses. A layer that cannot advance is `blocked`, and its `next` is the actual repair. ---
+        refused_home = make_home(tmp / "layer-refused")
+        (refused_home / "jobs").mkdir(parents=True)
+        (refused_home / "jobs" / "registry.json").write_text(json.dumps({
+            "external_allowlist": [], "jobs": {
+                "my job": {"command": "plainkeep index", "schedule": {"interval_minutes": 60},
+                           "risk": "read"}}}), encoding="utf-8")
+        refused_fake = launchdfx.install(tmp / "layer-refused-machine")
+        refused_saved = {k: os.environ.get(k) for k in refused_fake.env}
+        os.environ.update(refused_fake.env)
+        mod_r = reload_setuplib(refused_home)
+        old_r = patch_probe(mod_r, _platform_system=lambda: "Darwin")
+        try:
+            row = mod_r.status("automation")[0]
+            check("a REFUSED registry blocks the automation layer instead of reading as absent",
+                  row["status"] == "blocked", str(row))
+            check("…the detail carries the diagnosis, naming the offending key",
+                  "my job" in row["detail"], str(row))
+            check("…and `next` is the repair, not a command that will refuse",
+                  "plainkeep setup automation" not in (row.get("next") or ""), str(row.get("next")))
+            adv = mod_r.advance("automation", yes=True, fake=True)
+            check("advance skips a blocked-by-refusal layer and surfaces the remedy",
+                  not adv["ran"] and "automation" in adv["skipped"] and adv["handoff"], str(adv))
+        finally:
+            restore(mod_r, old_r)
+            for k, v in refused_saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
         for k, v in times_saved.items():
             if v is None:
                 os.environ.pop(k, None)

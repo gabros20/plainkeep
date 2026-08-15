@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import resource
 import shutil
 import subprocess
 import sys
@@ -71,6 +72,23 @@ def run(home, *args):
         env.update(FAKE["fx"].env)
     return subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), *args],
                           capture_output=True, text=True, env=env)
+
+
+def run_limited(home, fsize: int, *args):
+    """`run()` under an `RLIMIT_FSIZE` — a resource limit standing in for a full disk.
+
+    The interrupted-write case is exercised for REAL rather than by patching a function: the child
+    process gets a hard file-size ceiling, so the write inside `vaultio.write_text` fails with a
+    genuine `OSError` at a genuine point, mid-file. Pipes are not subject to the limit, so the
+    process can still report what happened; `PYTHONDONTWRITEBYTECODE` keeps the interpreter from
+    tripping the ceiling on a `.pyc` before it reaches the code under test."""
+    def limit():
+        resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
+    env = {**os.environ, "PLAINKEEP_HOME": str(home), "PYTHONDONTWRITEBYTECODE": "1"}
+    if FAKE:
+        env.update(FAKE["fx"].env)
+    return subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), *args],
+                          capture_output=True, text=True, env=env, preexec_fn=limit)
 
 
 def default_jobs(home: Path) -> dict:
@@ -706,6 +724,191 @@ def case_a_bad_registry_key_is_refused_at_LOAD(td: Path) -> None:
     victim.unlink(missing_ok=True)
 
 
+# ---------------------------------------------------------------------------------------------
+# r1 fix wave. Every case below fails at 9293eca; each is on the CONTRACT this branch introduced
+# ("a malformed registry is refused at the read with a diagnosis, not thrown") rather than on the
+# feature, which is why they read as edges.
+# ---------------------------------------------------------------------------------------------
+
+
+def case_a_non_dict_job_entry_is_refused_at_LOAD(td: Path) -> None:
+    """THE OTHER SHAPE OF MALFORMED (r1/I3).
+
+    `read_registry()` validated the document, the `jobs` container and the KEYS, and never that a job
+    VALUE is an object. `{"jobs": {"broken": "not a dict"}}` therefore sailed through the reader and
+    threw `AttributeError: 'str' object has no attribute 'get'` out of every action — including
+    `status`, whose per-job containment cannot help because the crash happens in
+    `job.get("command", "")` before the contained render, and `enable`, where `_legal_or_refuse`
+    cannot help because `_validate` itself is what throws.
+
+    Not a regression (at base it was a `TypeError` from the same registry), but this branch is what
+    says in the CHANGELOG, in `launchdlib`'s header and in `_load`'s docstring that a malformed
+    registry is diagnosed rather than thrown. One of the two obvious shapes was covered."""
+    h = td / "nondict"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "ok_one": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+        "broken": "not a dict",
+    }}), encoding="utf-8")
+    for args in (("list",), ("status",), ("apply",), ("enable", "--all", "--yes"),
+                 ("set", "broken", "--daily", "08:00")):
+        r = run(h, *args)
+        out = r.stdout + r.stderr
+        label = " ".join(args)
+        check(f"job {label} refuses a non-object job entry instead of throwing",
+              r.returncode != 0 and "Traceback" not in r.stderr and "is not an object" in out,
+              f"rc={r.returncode} {r.stderr[-200:] or out[-200:]}")
+    check("the refusal names the offending job", "'broken'" in run(h, "list").stderr, "")
+
+
+def case_an_interrupted_set_is_contained_and_names_the_way_back(td: Path) -> None:
+    """A MUTATING PATH NEVER HANDS THE OPERATOR A TRACEBACK (r1/I1, the containment half).
+
+    `_set` caught `RegistryError` only, so an `OSError` from the write itself — a full disk, a
+    read-only mount, a quota — escaped as a stack trace over a half-written registry. `_wizard_times`,
+    the same writer one file over, already caught `(RegistryError, OSError)`; the verb must not be
+    less careful than the wizard, and the post-r2/I5 house rule is that a mutating path reports.
+
+    The write is still not atomic — that is a registered follow-up, not this fix — so the honest
+    thing for the refusal to say is that the file may be half-written, and to name the way back.
+    Everything is in git; that IS the recovery, and a `job set` that cannot re-read its own output
+    is exactly the moment an operator needs telling."""
+    h = _set_vault(td, "set_interrupted")
+    reg_file = h / "jobs" / "registry.json"
+    r = run_limited(h, 1, "set", "close_nudge", "--daily", "22:00")
+    out = r.stdout + r.stderr
+    check("an interrupted registry write is not a traceback",
+          "Traceback" not in r.stderr, r.stderr[-300:])
+    check("it is reported as a failure that names the file and the reason",
+          r.returncode != 0 and "jobs/registry.json" in out and "27" in out,
+          f"rc={r.returncode} {out[-300:]}")
+    check("the refusal says the file may be half-written and names the way back (git)",
+          "git" in out and reg_file.exists(), out[-300:])
+    # The --json channel has to survive it too: an envelope, not a stack trace on stdout.
+    r = run_limited(h, 1, "set", "close_nudge", "--daily", "22:00", "--json")
+    env = {}
+    try:
+        env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    except ValueError:
+        pass
+    check("--json still gets a well-formed error envelope after a failed write",
+          env.get("ok") is False and bool(env.get("error", {}).get("message")),
+          r.stdout[:200] + r.stderr[-200:])
+
+
+def case_the_machine_channel_carries_no_terminal_escapes(td: Path) -> None:
+    """ANSI IS FOR A TERMINAL (r1/M1).
+
+    Two refusals were built as `output.fail(f"{RED}…{RESET}")`, and `output.fail` renders the SAME
+    string into the `--json` error envelope — so an agent parsing the machine channel got
+    `\\033[31m` inside `error.message`. `git grep "output.fail(.*RED" ceff52f -- bin` returns nothing,
+    so the pattern arrived with this branch. Colour belongs in the `human=` renderer, which is the
+    only place that knows it is talking to a terminal."""
+    h = _set_vault(td, "set_ansi")
+    bad_key = td / "ansi_badkey"
+    (bad_key / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(bad_key)
+    (bad_key / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "my job": {"command": "plainkeep index", "schedule": {"daily": "07:30"}, "risk": "read"},
+    }}), encoding="utf-8")
+    # DECODED, not raw: `json.dumps` escapes an ESC byte as `\\u001b`, so grepping the wire bytes for
+    # "\033" reports clean on exactly the envelopes that are not. The question is what a consumer
+    # gets after parsing.
+    def escapes_in(blob: str) -> list[str]:
+        try:
+            doc = json.loads(blob.splitlines()[0]) if blob.strip() else {}
+        except ValueError:
+            return ["<unparseable envelope>"]
+        found = []
+
+        def walk(node):
+            if isinstance(node, str) and "\033" in node:
+                found.append(node)
+            elif isinstance(node, dict):
+                [walk(v) for v in node.values()]
+            elif isinstance(node, list):
+                [walk(v) for v in node]
+        walk(doc)
+        return found
+
+    for home, args in ((h, ("set", "close_nudge", "--daily", "7am", "--json")),
+                       (h, ("set", "nope", "--daily", "08:00", "--json")),
+                       (bad_key, ("list", "--json"))):
+        r = run(home, *args)
+        label = " ".join(a for a in args if a != "--json")
+        check(f"`job {label} --json` emits no escape sequences anywhere in the envelope",
+              not escapes_in(r.stdout), str(escapes_in(r.stdout))[:200])
+    # …and the human channel keeps its colour, because that is what the split is for.
+    r = run(h, "set", "close_nudge", "--daily", "7am")
+    check("the human refusal still colours (the split is human vs machine, not colour vs none)",
+          "\033[31m" in (r.stdout + r.stderr), repr((r.stdout + r.stderr)[:120]))
+
+
+def case_the_stale_statement_matches_what_the_probe_ANSWERED(td: Path) -> None:
+    """THE PROBE'S ANSWER IS THE CLAIM, NOT THE FILE'S EXISTENCE (r1/M2).
+
+    `stale = installed or loaded` meant `set` said "launchd is still running the OLD schedule" for a
+    vault whose plist is installed but which launchd has booted out — one command after `job status`
+    said `installed, not loaded` about the same job. The probe IS issued and correctly answers "not
+    loaded"; its answer was then discarded. Two surfaces contradicting each other about one fact is
+    worse than either being silent, and the whole reason `status` has three columns is that these
+    are three different states."""
+    h = _set_vault(td, "set_stale_states")
+    agents = FAKE["fx"].agents
+    run(h, "enable", "close_nudge", "--yes")
+
+    r = run(h, "set", "close_nudge", "--daily", "21:00")
+    out = r.stdout + r.stderr
+    check("LOADED: set says launchd is running the old schedule",
+          r.returncode == 0 and "launchd is still running" in out
+          and "plainkeep job enable close_nudge --yes" in out, out)
+
+    # Boot it out behind the verb's back — the state a `launchctl bootout` from anywhere leaves.
+    (FAKE["fx"].state / "com.plainkeep.close_nudge").unlink()
+    r = run(h, "set", "close_nudge", "--daily", "20:00")
+    out = r.stdout + r.stderr
+    check("INSTALLED, NOT LOADED: set does not claim launchd is running anything",
+          r.returncode == 0 and "launchd is still running" not in out, out)
+    check("…it says the INSTALLED copy is out of date, and still names the remedy",
+          "installed" in out.lower() and "plainkeep job enable close_nudge --yes" in out, out)
+    status = run(h, "status")
+    check("…and `job status` and `job set` now agree about the same job",
+          "installed, not loaded" in status.stdout, status.stdout)
+
+    (agents / "com.plainkeep.close_nudge.plist").unlink()
+    r = run(h, "set", "close_nudge", "--daily", "19:00")
+    check("NEITHER: no probe, no claim",
+          r.returncode == 0 and "stale" not in (r.stdout + r.stderr).lower(), r.stdout)
+
+
+def case_set_accepts_the_flag_equals_value_form(td: Path) -> None:
+    """`--daily=08:00` (r1/M5). It contains no space, so borrowing the unquoted-`Sun 03:00` message
+    for it told the operator something untrue about their own input. `--flag=value` is the house
+    form for a value flag — `plugin sync --find-links=<dir>` is the only other one in the repo and
+    it accepts ONLY that spelling — so both are taken here."""
+    h = _set_vault(td, "set_equals")
+    r = run(h, "set", "close_nudge", "--daily=21:15")
+    check("job set accepts --daily=HH:MM",
+          r.returncode == 0 and registry_of(h)["jobs"]["close_nudge"]["schedule"] == {"daily": "21:15"},
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    r = run(h, "set", "index", "--every=45")
+    check("job set accepts --every=<minutes>",
+          r.returncode == 0 and registry_of(h)["jobs"]["index"]["schedule"] == {"interval_minutes": 45},
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    r = run(h, "set", "organize_scan", "--weekly=Mon 06:00")
+    check("job set accepts --weekly=<Day HH:MM>",
+          r.returncode == 0 and registry_of(h)["jobs"]["organize_scan"]["schedule"] == {"weekly": "Mon 06:00"},
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    r = run(h, "set", "close_nudge", "--daily=7am")
+    out = r.stdout + r.stderr
+    check("an unusable time in the = form gets the TIME diagnosis, not the two-names one",
+          r.returncode == 2 and "07:00" in out and "ONE job name" not in out, out)
+    r = run(h, "set", "close_nudge", "--daily=")
+    check("an empty = value is refused as a value, not swallowed",
+          r.returncode == 2 and "Traceback" not in r.stderr, f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         # The vault and the "machine" (LaunchAgents + the fake launchctl's log/state) are SIBLINGS,
@@ -894,6 +1097,13 @@ def main() -> int:
         case_set_is_declared_on_the_machine_surface(Path(td))
         case_a_malformed_schedule_is_DIAGNOSED(Path(td))
         case_a_bad_registry_key_is_refused_at_LOAD(Path(td))
+
+        # r1 fix wave: the edges of the contract this branch introduced.
+        case_a_non_dict_job_entry_is_refused_at_LOAD(Path(td))
+        case_an_interrupted_set_is_contained_and_names_the_way_back(Path(td))
+        case_the_machine_channel_carries_no_terminal_escapes(Path(td))
+        case_the_stale_statement_matches_what_the_probe_ANSWERED(Path(td))
+        case_set_accepts_the_flag_equals_value_form(Path(td))
 
     print(f"{BOLD}Jobs scheduler verb (job list/run/apply/enable/disable/status) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

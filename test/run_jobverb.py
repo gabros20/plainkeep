@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -70,6 +71,20 @@ def run(home, *args):
         env.update(FAKE["fx"].env)
     return subprocess.run([sys.executable, str(REPO / "bin" / "job" / "run.py"), *args],
                           capture_output=True, text=True, env=env)
+
+
+def default_jobs() -> dict:
+    """`launchdlib.DEFAULT_JOBS` — the engine's canonical job definitions, read from a child process
+    for the same reason `render_plist` does: this suite never puts `bin/lib` on its own `sys.path`."""
+    code = ("import json, sys; sys.path.insert(0, %r)\n"
+            "from lib import launchdlib\n"
+            "sys.stdout.write(json.dumps(launchdlib.DEFAULT_JOBS))\n" % str(REPO / "bin"))
+    r = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    return json.loads(r.stdout) if r.returncode == 0 else {}
+
+
+def registry_of(home: Path) -> dict:
+    return json.loads(text(home / "jobs" / "registry.json") or "{}")
 
 
 def render_plist(home: Path, name: str) -> str:
@@ -214,7 +229,10 @@ def case_traversing_key_is_refused_before_anything_runs(td: Path) -> None:
     vault-side render, which is a backstop that fires MID-LOOP, after earlier jobs are bootstrapped.
 
     Now it is a legality rule, checked with the rest of §15 before anything is rendered — so the
-    refusal is whole-command and nothing at all is installed."""
+    refusal is whole-command and nothing at all is installed. It moved once more since: the rule now
+    lives at `load_registry()` (r2/M6), UPSTREAM of every reader rather than on the paths that
+    install, so the refusal below arrives before the verb has an action at all. Its message is on
+    stderr for the same reason every other refusal's is."""
     h = td / "traverse"
     (h / "jobs").mkdir(parents=True)
     vaultfx.mark_vault(h)
@@ -234,8 +252,10 @@ def case_traversing_key_is_refused_before_anything_runs(td: Path) -> None:
           not Path("/tmp/pk-escape.plist").exists()
           and set(p.name for p in agents.glob("*.plist")) == before
           and not FAKE["fx"].calls(), f"calls={FAKE['fx'].calls()}")
-    check("job list flags the bad key too (one legality model, all readers)",
-          "not a plain identifier" in run(h, "list").stdout, "")
+    lst = run(h, "list")
+    check("job list refuses the bad key too (one legality model, all readers)",
+          lst.returncode != 0 and "not a plain identifier" in (lst.stdout + lst.stderr),
+          f"rc={lst.returncode} {lst.stdout}{lst.stderr}")
 
 
 def case_enable_contains_a_per_job_failure(td: Path) -> None:
@@ -283,7 +303,15 @@ def case_enable_contains_a_per_job_failure(td: Path) -> None:
 _MALFORMED_REGISTRY = {"external_allowlist": [], "jobs": {
     # aaa/zzz sort either side of the malformed entry, so the loop provably continues past it.
     "aaa_ok": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
-    "mmm_noschedule": {"command": "plainkeep index", "risk": "read"},
+    # A CONTROL CHARACTER IN THE COMMAND, and the choice is deliberate. This entry used to be a
+    # missing `schedule`, which is now caught EARLIER — `_validate()` reads the shared schedule parser,
+    # so a malformed schedule is a §15 legality warning and `apply`/`enable` refuse whole-command
+    # before the loop is reached (`case_a_malformed_schedule_is_DIAGNOSED`). The containment r2/I5
+    # asked for is still the thing under test here, so the injected fault has to be one the legality
+    # model legitimately does NOT model: `plistlib` refuses a control character in a string, the §15
+    # token rules have no opinion about one, and the first two tokens are a real verb.
+    "mmm_unrenderable": {"command": "plainkeep index --tag \x01", "risk": "read",
+                         "schedule": {"daily": "07:30"}},
     "zzz_ok": {"command": "plainkeep consolidate", "schedule": {"daily": "02:30"}, "risk": "safe_write"},
 }}
 
@@ -291,12 +319,17 @@ _MALFORMED_REGISTRY = {"external_allowlist": [], "jobs": {
 def case_enable_contains_a_malformed_entry(td: Path) -> None:
     """A MALFORMED ENTRY IS THAT JOB'S FAILURE, NOT THE LOOP'S CRASH (r2/I5).
 
-    r1/I4's containment caught only OSError, but `launchdlib.plist()` raises KeyError for a missing
-    `schedule` and ValueError for an unparseable one (or a control character in the command, since
-    the plistlib rewrite) — all of which escaped `_enable` as a raw traceback AFTER earlier jobs
-    were already bootstrapped: the exact complaint I4 was commissioned to close, through a
-    different door. The read path (`job_states`) already treats "can't re-render" as data; the
-    mutating path must not be less careful."""
+    r1/I4's containment caught only OSError, but `launchdlib.plist()` raises for a registry entry it
+    cannot render — which escaped `_enable` as a raw traceback AFTER earlier jobs were already
+    bootstrapped: the exact complaint I4 was commissioned to close, through a different door. The
+    read path (`job_states`) already treats "can't re-render" as data; the mutating path must not be
+    less careful.
+
+    The malformed SCHEDULE that used to stand in for this is now diagnosed and refused up front
+    (`case_a_malformed_schedule_is_DIAGNOSED`), so the fault injected here is one the §15 legality
+    model does not claim to model at all — see `_MALFORMED_REGISTRY`. The containment must survive
+    the diagnosis being added, not be replaced by it: it is the backstop for every fault nobody has
+    thought of yet."""
     h = td / "malformed_enable"
     (h / "jobs").mkdir(parents=True)
     vaultfx.mark_vault(h)
@@ -308,10 +341,10 @@ def case_enable_contains_a_malformed_entry(td: Path) -> None:
     env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
     results_by = {d["name"]: d for d in env.get("data", {}).get("results", [])}
     check("the loop finishes past the malformed entry: every job is reported",
-          set(results_by) == {"aaa_ok", "mmm_noschedule", "zzz_ok"}, str(sorted(results_by)))
+          set(results_by) == {"aaa_ok", "mmm_unrenderable", "zzz_ok"}, str(sorted(results_by)))
     check("the malformed entry is its own recorded failure, with the reason",
-          results_by.get("mmm_noschedule", {}).get("ok") is False
-          and results_by["mmm_noschedule"]["error"], str(results_by.get("mmm_noschedule")))
+          results_by.get("mmm_unrenderable", {}).get("ok") is False
+          and results_by["mmm_unrenderable"]["error"], str(results_by.get("mmm_unrenderable")))
     check("the job sorting AFTER the malformed one was still bootstrapped",
           any(c.startswith("bootstrap ") and "zzz_ok" in c for c in fake_log()), str(fake_log()))
     check("a malformed entry still exits nonzero from enable", r.returncode == 1, f"rc={r.returncode}")
@@ -334,9 +367,324 @@ def case_apply_contains_a_malformed_entry(td: Path) -> None:
           set(data.get("rendered", [])) == {"com.plainkeep.aaa_ok.plist", "com.plainkeep.zzz_ok.plist"},
           str(data.get("rendered")))
     check("apply reports the malformed entry as that job's failure, with the reason",
-          [f["name"] for f in data.get("failed", [])] == ["mmm_noschedule"]
+          [f["name"] for f in data.get("failed", [])] == ["mmm_unrenderable"]
           and data["failed"][0].get("error"), str(data.get("failed")))
     check("a malformed entry still exits nonzero from apply", r.returncode == 1, f"rc={r.returncode}")
+
+
+# ---------------------------------------------------------------------------------------------
+# `plainkeep job set` — the schedule times as a PRODUCT SURFACE.
+#
+# The registry stays the single source of truth (engine.txt calls it "yours"), so the times have to
+# be editable through the surface rather than by hand-editing JSON — and editable WITHOUT activating
+# anything: `set` is a vault write, and consent for launchd stays with the confirm-class `enable`.
+# ---------------------------------------------------------------------------------------------
+
+_SET_REGISTRY = {
+    "description": "fixture registry — key order is asserted, so this literal order is the contract",
+    "external_allowlist": ["restic"],
+    "jobs": {
+        # NOTE: no `start` — the seed-from-engine-defaults case needs a canonical job to be MISSING,
+        # which is the state every vault created before ADR-022 is actually in.
+        "index": {"command": "plainkeep index", "schedule": {"interval_minutes": 60},
+                  "risk": "read", "writes": ["~/plainkeep/.index"]},
+        "close_nudge": {"command": "plainkeep close --automated", "schedule": {"daily": "18:30"},
+                        "risk": "safe_write", "writes": ["~/plainkeep/journal"]},
+        "organize_scan": {"command": "plainkeep organize scan", "schedule": {"weekly": "Sun 03:00"},
+                          "risk": "safe_write", "writes": ["~/plainkeep/inbox/organize"]},
+    },
+}
+
+
+def _set_vault(td: Path, leaf: str) -> Path:
+    h = td / leaf
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps(_SET_REGISTRY, indent=2), encoding="utf-8")
+    return h
+
+
+def case_set_edits_only_the_schedule(td: Path) -> None:
+    """A READ-MODIFY-WRITE OF THE PARSED JSON, NOT A REGENERATION.
+
+    `jobs/registry.json` is vault content the human also edits: it carries a `description`, an
+    `external_allowlist`, per-job `writes` declarations and a deliberate job order. A `set` that
+    rebuilt the file from a model would silently drop whatever the model does not know about, which
+    is the failure mode that makes people stop trusting a config-editing command. So the assertion
+    is not "the schedule changed" — it is "the schedule changed AND nothing else did"."""
+    h = _set_vault(td, "set_happy")
+    reg_file = h / "jobs" / "registry.json"
+
+    r = run(h, "set", "close_nudge", "--daily", "22:00")
+    reg = registry_of(h)
+    check("job set <name> --daily rewrites that job's schedule",
+          r.returncode == 0 and reg.get("jobs", {}).get("close_nudge", {}).get("schedule") == {"daily": "22:00"},
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    check("job set preserves every other field of the edited job",
+          {k: v for k, v in reg.get("jobs", {}).get("close_nudge", {}).items() if k != "schedule"}
+          == {k: v for k, v in _SET_REGISTRY["jobs"]["close_nudge"].items() if k != "schedule"},
+          str(reg.get("jobs", {}).get("close_nudge")))
+    check("job set preserves the registry's top-level keys and job ORDER",
+          list(reg) == list(_SET_REGISTRY)
+          and list(reg.get("jobs", {})) == list(_SET_REGISTRY["jobs"]), str(list(reg.get("jobs", {}))))
+    check("job set leaves the OTHER jobs untouched",
+          reg.get("jobs", {}).get("index") == _SET_REGISTRY["jobs"]["index"]
+          and reg.get("jobs", {}).get("organize_scan") == _SET_REGISTRY["jobs"]["organize_scan"],
+          str(reg.get("jobs")))
+    check("job set names the new schedule and the file it wrote",
+          "22:00" in r.stdout and "jobs/registry.json" in r.stdout, r.stdout)
+
+    r = run(h, "set", "organize_scan", "--weekly", "Mon 04:15")
+    check("job set --weekly takes a 'Day HH:MM'",
+          r.returncode == 0 and registry_of(h)["jobs"]["organize_scan"]["schedule"] == {"weekly": "Mon 04:15"},
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    r = run(h, "set", "index", "--every", "30")
+    check("job set --every takes a minute interval",
+          r.returncode == 0 and registry_of(h)["jobs"]["index"]["schedule"] == {"interval_minutes": 30},
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    r = run(h, "set", "close_nudge", "--monthly", "1 04:00")
+    check("job set --monthly takes a 'D HH:MM'",
+          r.returncode == 0 and registry_of(h)["jobs"]["close_nudge"]["schedule"] == {"monthly": "1 04:00"},
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    # --dry-run is a READ: it prints the entry it WOULD write and touches nothing.
+    before = reg_file.read_bytes()
+    r = run(h, "set", "close_nudge", "--daily", "06:00", "--dry-run")
+    check("job set --dry-run prints the resulting entry and writes NOTHING",
+          r.returncode == 0 and reg_file.read_bytes() == before and "06:00" in r.stdout,
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    # Exactly one schedule flag, always: no flag is a question with no answer, two is an ambiguity.
+    before = reg_file.read_bytes()
+    r = run(h, "set", "close_nudge")
+    check("job set with no schedule flag refuses and names all four forms",
+          r.returncode == 2 and reg_file.read_bytes() == before
+          and all(f in (r.stdout + r.stderr) for f in ("--daily", "--weekly", "--monthly", "--every")),
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+    r = run(h, "set", "close_nudge", "--daily", "08:00", "--every", "30")
+    check("job set with TWO schedule flags refuses, naming both (one cadence per job)",
+          r.returncode == 2 and "--daily" in (r.stdout + r.stderr) and "--every" in (r.stdout + r.stderr)
+          and reg_file.read_bytes() == before, f"rc={r.returncode} {r.stdout}{r.stderr}")
+    r = run(h, "set")
+    check("job set with no name refuses and lists the job names",
+          r.returncode == 2 and "close_nudge" in (r.stdout + r.stderr), f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+
+def case_set_refuses_and_teaches(td: Path) -> None:
+    """REFUSALS TEACH, and a schedule is exactly where that pays: `7am` is what a person types and
+    `07:00` is what launchd needs. The refusal has to carry the correction, and it has to leave the
+    file alone — a validation that fires AFTER the write is a corruption with a good error message."""
+    h = _set_vault(td, "set_refuse")
+    reg_file = h / "jobs" / "registry.json"
+    before = reg_file.read_bytes()
+
+    r = run(h, "set", "close_nudge", "--daily", "7am")
+    out = r.stdout + r.stderr
+    check("job set refuses a non-HH:MM time and shows the correction",
+          r.returncode == 2 and "07:00" in out and "7am" in out, f"rc={r.returncode} {out}")
+    check("a refused job set writes NOTHING — validation runs BEFORE the write",
+          reg_file.read_bytes() == before, "")
+
+    for bad, why in (("24:00", "hour out of range"), ("08:60", "minute out of range"), ("8:00", "unpadded hour")):
+        r = run(h, "set", "close_nudge", "--daily", bad)
+        check(f"job set refuses {bad!r} ({why}), quoting it back",
+              r.returncode == 2 and bad in (r.stdout + r.stderr) and reg_file.read_bytes() == before,
+              f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    r = run(h, "set", "organize_scan", "--weekly", "Funday 03:00")
+    out = r.stdout + r.stderr
+    check("job set refuses an unknown weekday and names the seven it takes",
+          r.returncode == 2 and "Sun" in out and "Sat" in out and reg_file.read_bytes() == before,
+          f"rc={r.returncode} {out}")
+
+    r = run(h, "set", "index", "--every", "0")
+    check("job set refuses a non-positive interval, naming the flag",
+          r.returncode == 2 and "--every" in (r.stdout + r.stderr) and reg_file.read_bytes() == before,
+          f"rc={r.returncode} {r.stdout}{r.stderr}")
+
+    r = run(h, "set", "nope", "--daily", "08:00")
+    out = r.stdout + r.stderr
+    check("job set refuses an unknown name, listing the known jobs AND the seedable defaults",
+          r.returncode == 2 and "close_nudge" in out and "start" in out
+          and reg_file.read_bytes() == before, f"rc={r.returncode} {out}")
+
+
+def case_set_seeds_a_missing_canonical_job(td: Path) -> None:
+    """HOW AN EXISTING VAULT ADOPTS A NEW CANONICAL JOB.
+
+    `jobs/registry.json` is vault content, so the template's copy seeds NEW vaults only — an engine
+    update never delivers it. Every vault created before ADR-022 therefore has no `start` entry, and
+    no amount of `plainkeep setup` will give it one. `set` on a name the engine knows seeds the whole
+    default entry (command, risk, writes) with the schedule the operator just asked for, and SAYS it
+    did rather than pretending the entry was there."""
+    h = _set_vault(td, "set_seed")
+    defaults = default_jobs()
+    check("the engine ships DEFAULT_JOBS for the canonical six",
+          set(defaults) == {"start", "index", "consolidate", "organize_scan", "close_nudge", "backup_check"},
+          str(sorted(defaults)))
+
+    r = run(h, "set", "start", "--daily", "08:00")
+    entry = registry_of(h).get("jobs", {}).get("start", {})
+    check("job set seeds a missing canonical job from the engine defaults",
+          r.returncode == 0 and entry == {**defaults.get("start", {}), "schedule": {"daily": "08:00"}},
+          f"rc={r.returncode} entry={entry} default={defaults.get('start')}")
+    check("the seed says so, rather than pretending the entry was already there",
+          "seeded" in r.stdout and "engine defaults" in r.stdout, r.stdout)
+    check("the seeded job is appended without disturbing the existing order",
+          list(registry_of(h).get("jobs", {})) == [*_SET_REGISTRY["jobs"], "start"],
+          str(list(registry_of(h).get("jobs", {}))))
+    # And it is a REAL job from that moment: legal, renderable, schedulable.
+    r = run(h, "apply")
+    check("the seeded job renders like any other",
+          r.returncode == 0 and (h / "jobs" / "launchd" / "com.plainkeep.start.plist").exists(),
+          r.stdout + r.stderr)
+
+
+def case_set_never_touches_launchd_but_says_the_schedule_is_stale(td: Path) -> None:
+    """`set` IS A VAULT WRITE; ACTIVATION STAYS WITH `enable` (ADR-022).
+
+    The tempting thing is to re-enable after a successful `set` — the operator clearly wants the new
+    time to be live. That would make a safe_write action install plists outside the vault and mutate
+    a running launchd domain WITHOUT the `--yes` that `enable` exists to demand, which is precisely
+    the confirm-class boundary the automation task was commissioned to fix. So `set` calls no
+    launchctl at all, and instead states the gap it has just opened and names the one command that
+    closes it."""
+    h = _set_vault(td, "set_stale")
+    agents = FAKE["fx"].agents
+    run(h, "enable", "close_nudge", "--yes")
+    installed = agents / "com.plainkeep.close_nudge.plist"
+    check("fixture: the job is installed and loaded before the edit", installed.exists(), "")
+
+    clear_log()
+    r = run(h, "set", "close_nudge", "--daily", "22:00")
+    out = r.stdout + r.stderr
+    check("job set calls NO launchctl, ever", not fake_log(), str(fake_log()))
+    check("job set does not re-install the plist behind the operator's back",
+          "<integer>18</integer>" in text(installed), text(installed)[:400])
+    check("job set states plainly that the LOADED schedule is now stale",
+          r.returncode == 0 and "stale" in out.lower(), out)
+    check("job set names the remedy, and it is the confirm-class verb",
+          "plainkeep job enable close_nudge --yes" in out, out)
+
+    r = run(h, "status", "--json")
+    rows = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
+    by_name = {row["name"]: row for row in rows[1:]}
+    check("the existing drift machinery surfaces the edit with no new plumbing",
+          by_name.get("close_nudge", {}).get("drift") is True, str(by_name.get("close_nudge")))
+
+    # A job nobody has enabled has no stale schedule to warn about — a warning that always fires is
+    # a warning nobody reads.
+    r = run(h, "set", "organize_scan", "--weekly", "Tue 05:00")
+    check("job set says nothing about launchd for a job that was never enabled",
+          r.returncode == 0 and "stale" not in (r.stdout + r.stderr).lower(), r.stdout)
+    run(h, "disable", "--all", "--yes")
+
+
+def case_set_is_declared_on_the_machine_surface(td: Path) -> None:
+    """The `--json` envelope and the cmd.json action entry — `run_json.py`/`run_completion.py` police
+    well-formedness, this pins that `set` actually carries its own facts on the machine channel."""
+    h = _set_vault(td, "set_json")
+    r = run(h, "set", "close_nudge", "--daily", "21:45", "--json")
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    data = env.get("data", {})
+    check("job set --json emits a well-formed envelope carrying the new schedule",
+          env.get("ok") is True and data.get("name") == "close_nudge"
+          and data.get("schedule") == {"daily": "21:45"} and data.get("seeded") is False,
+          r.stdout[:300])
+    acts = json.loads((REPO / "bin" / "job" / "cmd.json").read_text(encoding="utf-8")).get("actions", [])
+    by_name = {a["name"]: a for a in acts}
+    check("cmd.json declares the `set` action",
+          "set" in by_name and by_name["set"].get("risk") == "safe_write"
+          and by_name["set"].get("dry_run") is True, str(sorted(by_name)))
+    check("the declared `set` action takes a name and the four schedule flags",
+          {a["name"] for a in by_name.get("set", {}).get("args", [])}
+          >= {"name", "--daily", "--weekly", "--monthly", "--every"},
+          str(by_name.get("set", {}).get("args")))
+
+
+def case_a_malformed_schedule_is_DIAGNOSED(td: Path) -> None:
+    """r2/I5 LEFT THE LOOP HALF-CLOSED: contained, but never diagnosed.
+
+    A malformed schedule was survivable — `_enable`/`apply` caught it per job and reported
+    `KeyError: 'schedule'` or `ValueError: not enough values to unpack` as that job's error string.
+    That is an exception leaking through a containment, not a product telling an operator what is
+    wrong with their file. Schedule parsing is now ONE validated implementation
+    (`launchdlib.parse_schedule`), `_validate()` reads it like every other §15 rule, and a malformed
+    schedule is therefore flagged by `job list` and refused whole-command by `apply`/`enable` —
+    before anything is rendered — with the correction spelled out."""
+    h = td / "malformed_schedule"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "aaa_ok": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
+        "mmm_noschedule": {"command": "plainkeep index", "risk": "read"},
+        "sss_7am": {"command": "plainkeep index", "schedule": {"daily": "7am"}, "risk": "read"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+
+    r = run(h, "list")
+    check("job list flags a malformed schedule as a §15 legality warning",
+          r.returncode == 0 and "mmm_noschedule" in r.stdout and "sss_7am" in r.stdout
+          and r.stdout.count("⚠") >= 2, r.stdout)
+    check("the flag is the DIAGNOSIS, not a raw exception repr",
+          "07:00" in r.stdout and "KeyError" not in r.stdout and "Traceback" not in r.stdout, r.stdout)
+
+    clear_log()
+    before = set(p.name for p in agents.glob("*.plist"))
+    r = run(h, "enable", "--all", "--yes")
+    out = r.stdout + r.stderr
+    check("job enable refuses a registry with a malformed schedule, naming both offenders",
+          r.returncode == 1 and "refusing" in out
+          and "mmm_noschedule" in out and "sss_7am" in out, f"rc={r.returncode} {out}")
+    check("the refused enable installs nothing and calls no launchctl",
+          set(p.name for p in agents.glob("*.plist")) == before and not fake_log(),
+          f"calls={fake_log()}")
+    r = run(h, "apply")
+    check("job apply refuses it at the same bar, rendering nothing",
+          r.returncode == 1 and not (h / "jobs" / "launchd").exists(), r.stdout + r.stderr)
+
+
+def case_a_bad_registry_key_is_refused_at_LOAD(td: Path) -> None:
+    """WHERE THE RULE BELONGS (closes followups r2/M6).
+
+    `_NAME_RE` gated the mutating INSTALL path, so `disable` — which stays deliberately permissive,
+    because a job whose risk class was tightened is exactly the one you most need to turn off — did
+    `unlink` on a path built from an unvalidated registry key. With a hop directory inside the
+    LaunchAgents dir, `job disable --all --yes` deleted a file OUTSIDE it. Nothing in plainkeep
+    creates that hop directory, so it was an unenforced invariant rather than a live exploit; the fix
+    is to enforce it once, at `load_registry()`, which is upstream of EVERY reader."""
+    h = td / "badkey"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    agents = FAKE["fx"].agents
+    # The hop: `com.plainkeep.<key>.plist` with key `x/../../victim` resolves out of the agents dir.
+    (agents / "com.plainkeep.x").mkdir(exist_ok=True)
+    victim = agents.parent / "victim.plist"
+    victim.write_text("someone else's file\n", encoding="utf-8")
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "x/../../victim": {"command": "plainkeep index", "schedule": {"daily": "07:30"}, "risk": "read"},
+    }}), encoding="utf-8")
+
+    r = run(h, "disable", "--all", "--yes")
+    out = r.stdout + r.stderr
+    check("job disable refuses a registry whose KEY is not a plain identifier",
+          r.returncode != 0 and "not a plain identifier" in out, f"rc={r.returncode} {out}")
+    check("the refusal names the offending key",
+          "x/../../victim" in out, out)
+    check("nothing outside the LaunchAgents dir was unlinked", victim.exists(), str(victim))
+    # Every reader, not just the mutating ones: the refusal is at load.
+    for action in ("list", "status", "apply"):
+        r = run(h, action)
+        check(f"job {action} refuses the same registry at load",
+              r.returncode != 0 and "not a plain identifier" in (r.stdout + r.stderr),
+              f"rc={r.returncode} {r.stdout}{r.stderr}")
+    # Tolerant teardown: at the commit this case was written red against, the unlink it is about
+    # ACTUALLY HAPPENS, so the victim is gone. Cleaning up defensively keeps the red run reporting
+    # failed checks instead of a traceback that would hide every check after it.
+    shutil.rmtree(agents / "com.plainkeep.x", ignore_errors=True)
+    victim.unlink(missing_ok=True)
 
 
 def main() -> int:
@@ -517,6 +865,16 @@ def main() -> int:
         # r2 fix: I5 — containment must cover more than OSError.
         case_enable_contains_a_malformed_entry(Path(td))
         case_apply_contains_a_malformed_entry(Path(td))
+
+        # `job set`: schedule times as a product surface, and the two loops the shared schedule
+        # parser closes behind it (I5's diagnosis, M6's registry-key rule).
+        case_set_edits_only_the_schedule(Path(td))
+        case_set_refuses_and_teaches(Path(td))
+        case_set_seeds_a_missing_canonical_job(Path(td))
+        case_set_never_touches_launchd_but_says_the_schedule_is_stale(Path(td))
+        case_set_is_declared_on_the_machine_surface(Path(td))
+        case_a_malformed_schedule_is_DIAGNOSED(Path(td))
+        case_a_bad_registry_key_is_refused_at_LOAD(Path(td))
 
     print(f"{BOLD}Jobs scheduler verb (job list/run/apply/enable/disable/status) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

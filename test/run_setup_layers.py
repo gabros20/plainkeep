@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -776,6 +777,133 @@ def main() -> int:
         check("the wizard prompt is READ from the vault's registry, not a hardcoded sentence",
               "22:00" in moved_prompt and "18:30" not in moved_prompt and "07:30" not in moved_prompt,
               moved_prompt)
+
+        # --- Configurable day bookends: the wizard asks WHEN, not just WHETHER. ---
+        #
+        # ADR-022 made scheduling the default; the times stayed the two literals someone typed into
+        # `jobs/registry.json`. For a human whose day runs 08:00–22:00 that is a system that opens the
+        # day an hour before they exist and closes it three and a half hours early, and the only way to
+        # say so was to hand-edit JSON. The wizard asks, and writes the answers through the SAME
+        # `launchdlib` helper `plainkeep job set` uses — setuplib may not import a verb's run.py, and a
+        # second writer would validate differently the first time either changed.
+        check("_ask_time takes the default on Enter",
+              setup_run._ask_time("t", "07:30", lambda p: "", lambda s: None) == "07:30")
+        check("_ask_time takes the default on a closed stdin (EOF)",
+              setup_run._ask_time("t", "18:30", lambda p: (_ for _ in ()).throw(EOFError()),
+                                  lambda s: None) == "18:30")
+        check("_ask_time accepts a typed HH:MM",
+              setup_run._ask_time("t", "07:30", lambda p: "08:00", lambda s: None) == "08:00")
+        _reask = iter(["7am", "08:15"])
+        _reask_notes: list[str] = []
+        check("_ask_time re-asks ONCE on invalid input, and teaches the correction",
+              setup_run._ask_time("t", "07:30", lambda p: next(_reask), _reask_notes.append) == "08:15"
+              and any("07:00" in n for n in _reask_notes), str(_reask_notes))
+        _reask2 = iter(["7am", "still not a time"])
+        _reask2_notes: list[str] = []
+        check("_ask_time falls back to the default with a note, never a crash",
+              setup_run._ask_time("t", "07:30", lambda p: next(_reask2), _reask2_notes.append) == "07:30"
+              and any("07:30" in n for n in _reask2_notes), str(_reask2_notes))
+
+        times_home = make_home(tmp / "wizard-times")
+        (times_home / "jobs").mkdir(parents=True)
+        _times_registry = {"external_allowlist": [], "jobs": {
+            "start": {"command": "plainkeep start --automated", "schedule": {"daily": "07:30"},
+                      "risk": "safe_write", "writes": ["~/plainkeep/journal"]},
+            "close_nudge": {"command": "plainkeep close --automated", "schedule": {"daily": "18:30"},
+                            "risk": "safe_write", "writes": ["~/plainkeep/journal"]},
+        }}
+        times_reg = times_home / "jobs" / "registry.json"
+        times_reg.write_text(json.dumps(_times_registry, indent=2), encoding="utf-8")
+        times_fake = launchdfx.install(tmp / "wizard-times-machine")
+        times_saved = {k: os.environ.get(k) for k in times_fake.env}
+        os.environ.update(times_fake.env)
+        reload_setuplib(times_home)      # re-point paths.PLAINKEEP_HOME at this vault
+        auto_row = [{"id": "automation", "title": "Schedules", "status": "absent", "required": False,
+                     "detail": "", "items": [], "next": "plainkeep setup automation"}]
+        seen_at_advance: list[dict] = []
+
+        def times_advance(layer_id, *, yes, fake):
+            """Records the registry AS THE LAYER SEES IT. The ordering is the whole point: the answers
+            must be written BEFORE the advance renders and enables, or the first `job enable` installs
+            the old times and the operator has to run the activation step twice."""
+            seen_at_advance.append(json.loads(times_reg.read_text(encoding="utf-8"))["jobs"])
+            r = mod._result()
+            r["ran"].append(f"did {layer_id}")
+            return r
+
+        def scripted(prompts, answers):
+            def ask(prompt):
+                prompts.append(prompt)
+                return next(answers)
+            return ask
+
+        # (a) Enter on both keeps the shipped times — and rewrites nothing. A wizard that rewrites a
+        # file to store the value it already held puts a diff in `git status` for no reason.
+        before_bytes = times_reg.read_bytes()
+        t_prompts: list[str] = []
+        _saved_t = setup_run.setuplib.advance
+        setup_run.setuplib.advance = times_advance
+        try:
+            setup_run._run_wizard(auto_row, scripted(t_prompts, iter(["y", "", ""])), lambda s: None)
+        finally:
+            setup_run.setuplib.advance = _saved_t
+        check("the wizard asks when the day STARTS and when it CLOSES",
+              any("day starts at" in p for p in t_prompts) and any("day closes at" in p for p in t_prompts),
+              str(t_prompts))
+        check("each prompt offers this registry's current time as the default",
+              any("starts" in p and "07:30" in p for p in t_prompts)
+              and any("closes" in p and "18:30" in p for p in t_prompts), str(t_prompts))
+        check("Enter on both keeps 07:30/18:30 and leaves the registry byte-identical",
+              times_reg.read_bytes() == before_bytes, times_reg.read_text(encoding="utf-8")[:200])
+
+        # (b) Typed times land in the registry BEFORE the layer advances, and the plist launchd is
+        # handed carries them — the end-to-end claim, asserted from the FAKE launchctl's install dir.
+        t2_prompts: list[str] = []
+        seen_at_advance.clear()
+        _saved_t2 = setup_run.setuplib.advance
+        setup_run.setuplib.advance = times_advance
+        try:
+            setup_run._run_wizard(auto_row, scripted(t2_prompts, iter(["y", "08:00", "22:00"])),
+                                  lambda s: None)
+        finally:
+            setup_run.setuplib.advance = _saved_t2
+        at_advance = seen_at_advance[-1] if seen_at_advance else {}
+        check("typed times are in the registry BEFORE the automation layer advances",
+              at_advance.get("start", {}).get("schedule") == {"daily": "08:00"}
+              and at_advance.get("close_nudge", {}).get("schedule") == {"daily": "22:00"}, str(at_advance))
+        check("the wizard rewrites ONLY the schedule of the two bookend jobs",
+              all({k: v for k, v in at_advance.get(n, {}).items() if k != "schedule"}
+                  == {k: v for k, v in _times_registry["jobs"][n].items() if k != "schedule"}
+                  for n in ("start", "close_nudge")), str(at_advance))
+        enable = subprocess.run(
+            [sys.executable, str(REPO / "bin" / "job" / "run.py"), "enable", "--all", "--yes"],
+            capture_output=True, text=True,
+            env={**os.environ, "PLAINKEEP_HOME": str(times_home), "PYTHONPATH": str(REPO / "bin")})
+        installed = {}
+        for name in ("start", "close_nudge"):
+            p = times_fake.agents / f"com.plainkeep.{name}.plist"
+            installed[name] = plistlib.loads(p.read_bytes()) if p.exists() else {}
+        check("the FIRST enable already carries the chosen times (Hour 8 / Hour 22)",
+              installed["start"].get("StartCalendarInterval", {}).get("Hour") == 8
+              and installed["close_nudge"].get("StartCalendarInterval", {}).get("Hour") == 22,
+              f"rc={enable.returncode} {enable.stdout}{enable.stderr} {installed}")
+
+        # (c) Prompts are the WIZARD's, and only the wizard's. `setup automation --yes` and
+        # `setup --all --yes` are what an agent or a script runs; they must never block on a question,
+        # and they must leave whatever times the registry already holds exactly alone.
+        before_bytes = times_reg.read_bytes()
+        for args in (["automation", "--yes"], ["--all", "--yes"]):
+            r = run_setup(args, times_home, fake=True)
+            check(f"`setup {' '.join(args)}` never prompts for a time",
+                  "day starts at" not in r.stdout and "day closes at" not in r.stdout, r.stdout[:300])
+            check(f"`setup {' '.join(args)}` leaves the registry's times untouched",
+                  times_reg.read_bytes() == before_bytes, times_reg.read_text(encoding="utf-8")[:200])
+        for k, v in times_saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+        reload_setuplib(home)
 
         os.environ.pop("PLAINKEEP_SETUP_FAKE", None)
 

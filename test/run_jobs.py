@@ -55,6 +55,40 @@ def case_day_bookends_are_scheduled() -> None:
           start.get("risk") == "safe_write" and start.get("writes") == ["~/plainkeep/journal"], str(start))
 
 
+def case_engine_defaults_match_the_shipped_registry() -> None:
+    """THE PARITY PIN: two copies of the canonical jobs, one file apart.
+
+    `plainkeep job set` can SEED a canonical job an existing vault never received (`jobs/registry.json`
+    is vault content, so an engine update never delivers it), which means the engine now carries its
+    own copy of those definitions — `launchdlib.DEFAULT_JOBS`. A second copy of anything drifts, and
+    this one drifts SILENTLY and asymmetrically: a new vault gets the template's registry, an old one
+    gets the seed, and nothing compares them. So they are compared here, exactly — same names, same
+    definitions, same order — and the design-model fixture (`test/world/jobs.json`, which the §15
+    invariants above are run against) must agree about every job it shares with them."""
+    shipped = json.loads((REPO / "jobs" / "registry.json").read_text(encoding="utf-8"))["jobs"]
+    code = ("import json, sys; sys.path.insert(0, %r)\n"
+            "from lib import launchdlib\n"
+            "sys.stdout.write(json.dumps(launchdlib.DEFAULT_JOBS))\n" % str(REPO / "bin"))
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    defaults = json.loads(proc.stdout) if proc.returncode == 0 else {}
+    check("the engine exposes DEFAULT_JOBS (launchdlib)", bool(defaults),
+          (proc.stderr or proc.stdout).strip()[-200:])
+    check("DEFAULT_JOBS names exactly the shipped registry's jobs, in the same order",
+          list(defaults) == list(shipped), f"{list(defaults)} != {list(shipped)}")
+    differing = sorted(n for n in set(defaults) | set(shipped) if defaults.get(n) != shipped.get(n))
+    check("every DEFAULT_JOBS definition is identical to the shipped one", not differing, str(differing))
+
+    model = json.loads((HERE / "world" / "jobs.json").read_text(encoding="utf-8"))["jobs"]
+    # The model fixture is adversarial by design (it holds jobs the product does not ship, to exercise
+    # the §15 rules), so the pin is on the OVERLAP: where both describe the same job, they agree.
+    shared = sorted(set(model) & set(defaults))
+    drifted = [n for n in shared if model[n].get("schedule") != defaults[n].get("schedule")
+               or model[n].get("command") != defaults[n].get("command")
+               or model[n].get("risk") != defaults[n].get("risk")]
+    check("the design-model fixture agrees with the engine defaults where they overlap",
+          not drifted, f"shared={shared} drifted={drifted}")
+
+
 def case_start_automated_marks_the_journal() -> None:
     """`plainkeep start --automated` must behave EXACTLY like `plainkeep start` except for the audit
     line, which says who asked. That is the same contract `close --automated` already keeps, and it
@@ -123,6 +157,7 @@ def main() -> int:
         print()
 
     case_day_bookends_are_scheduled()
+    case_engine_defaults_match_the_shipped_registry()
     case_start_automated_marks_the_journal()
     print(f"{BOLD}The automated day (ADR-022) — {len(extra)} checks{RESET}\n")
     for name, ok, detail in extra:

@@ -993,6 +993,113 @@ def main() -> int:
             else:
                 os.environ[k] = v
 
+        # --- r2/B1: THE SHAPE BETWEEN "EMPTY" AND "COMPLETE" — a vault that has jobs but is missing
+        # a bookend. This is the pre-ADR-022 migration case, which is the case the whole task was
+        # commissioned for: "every vault made before ADR-022 schedules the day's close and not its
+        # start, and no amount of `plainkeep setup` fixes it."
+        #
+        # The M3 fix keyed the write on the YES/NO prompt's branch (`seeding`) alone, and there are
+        # TWO prompts. A registry holding `close_nudge` and `index` has schedulable jobs, so
+        # `seeding` is False, so a missing `start` was skipped — after the wizard had asked "day
+        # starts at?" BY NAME and been answered. The answer went nowhere, silently.
+        #
+        # The time question IS the promise for the job it names. `seeding` governs only the jobs
+        # nobody was asked about. Both halves of the M3 property still hold: nothing is written that
+        # neither prompt promised. ---
+        partial_home = make_home(tmp / "wizard-partial")
+        (partial_home / "jobs").mkdir(parents=True)
+        partial_reg = partial_home / "jobs" / "registry.json"
+        partial_reg.write_text(json.dumps({"external_allowlist": [], "jobs": {
+            "close_nudge": {"command": "plainkeep close --automated", "schedule": {"daily": "18:30"},
+                            "risk": "safe_write", "writes": ["~/plainkeep/journal"]},
+            "index": {"command": "plainkeep index", "schedule": {"interval_minutes": 60},
+                      "risk": "read", "writes": ["~/plainkeep/.index"]},
+        }}, indent=2), encoding="utf-8")
+        partial_fake = launchdfx.install(tmp / "wizard-partial-machine")
+        partial_saved = {k: os.environ.get(k) for k in partial_fake.env}
+        os.environ.update(partial_fake.env)
+        reload_wall(partial_home)
+        importlib.reload(_ld)
+        seen_partial: list[dict] = []
+
+        def partial_advance(layer_id, *, yes, fake):
+            seen_partial.append(json.loads(partial_reg.read_text(encoding="utf-8"))["jobs"])
+            r = mod._result()
+            r["ran"].append(f"did {layer_id}")
+            return r
+
+        p_prompts: list[str] = []
+        p_lines: list[str] = []
+        _saved_p = setup_run.setuplib.advance
+        setup_run.setuplib.advance = partial_advance
+        try:
+            setup_run._run_wizard(auto_row, scripted(p_prompts, iter(["y", "08:00", "22:00"])),
+                                  p_lines.append)
+        finally:
+            setup_run.setuplib.advance = _saved_p
+        after = seen_partial[-1] if seen_partial else {}
+        check("the wizard asks about a bookend the registry does not have",
+              any("day starts at" in p for p in p_prompts), str(p_prompts))
+        check("…and the answer is WRITTEN: a missing bookend is seeded at the time given",
+              after.get("start", {}).get("schedule") == {"daily": "08:00"},
+              f"start={after.get('start')} jobs={list(after)}")
+        check("…seeded whole, from the engine defaults",
+              {k: v for k, v in after.get("start", {}).items() if k != "schedule"}
+              == {k: v for k, v in _ld.DEFAULT_JOBS["start"].items() if k != "schedule"},
+              str(after.get("start")))
+        check("…and the wizard SAYS it created it (a silent seed is half the bug)",
+              any("start" in ln for ln in p_lines), str(p_lines))
+        check("the bookend that WAS present is updated in place",
+              after.get("close_nudge", {}).get("schedule") == {"daily": "22:00"}, str(after.get("close_nudge")))
+        check("the vault's other job is untouched",
+              after.get("index", {}).get("schedule") == {"interval_minutes": 60}, str(after.get("index")))
+        # The other half of M3 still holds: a prompt that named two jobs must not create four more.
+        check("no job NEITHER prompt named is created (the M3 property survives the fix)",
+              not ({"consolidate", "organize_scan", "backup_check"} & set(after)), str(list(after)))
+        for k, v in partial_saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+        # --- r2/M6: an UNREADABLE registry is not an ABSENT one. `read_registry()` raised
+        # `RegistryMissing` for any OSError from `read_text`, so a present-but-unreadable file
+        # reported as an absence — and the two surfaces r1/I2 was fixed across then disagreed about
+        # it: doctor said "not usable" (it catches the parent class) while the layer, which goes
+        # through `registry_error()`, said `absent` and offered the command that would refuse. Same
+        # class the split was introduced to fix, one door over. ---
+        unreadable_home = make_home(tmp / "layer-unreadable")
+        (unreadable_home / "jobs").mkdir(parents=True)
+        unreadable_reg = unreadable_home / "jobs" / "registry.json"
+        unreadable_reg.write_text(json.dumps({"external_allowlist": [], "jobs": {
+            "index": {"command": "plainkeep index", "schedule": {"interval_minutes": 60},
+                      "risk": "read"}}}), encoding="utf-8")
+        unreadable_fake = launchdfx.install(tmp / "layer-unreadable-machine")
+        unreadable_saved = {k: os.environ.get(k) for k in unreadable_fake.env}
+        os.environ.update(unreadable_fake.env)
+        mod_u = reload_setuplib(unreadable_home)
+        importlib.reload(_ld)
+        old_u = patch_probe(mod_u, _platform_system=lambda: "Darwin")
+        os.chmod(unreadable_reg, 0o000)
+        try:
+            check("an unreadable registry is reported as a refusal, not as None",
+                  bool(_ld.registry_error()), str(_ld.registry_error()))
+            row_u = mod_u.status("automation")[0]
+            check("…so the automation layer blocks instead of claiming nothing is rendered",
+                  row_u["status"] == "blocked", str(row_u))
+            check("…and does not offer a command that would refuse",
+                  not (row_u.get("next") or "").startswith("plainkeep setup automation"),
+                  str(row_u.get("next")))
+        finally:
+            # Restore before anything else, so the suite stays re-runnable even on a failure.
+            os.chmod(unreadable_reg, 0o644)
+            restore(mod_u, old_u)
+            for k, v in unreadable_saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
         # --- r1/I2, the setup half: a registry `read_registry()` refuses must not read as `absent`
         # with `plainkeep setup automation` as the remedy — that command runs `job apply`, which
         # refuses. A layer that cannot advance is `blocked`, and its `next` is the actual repair. ---

@@ -126,20 +126,31 @@ def _schedule_flags(argv):
     schedule, seen, rest, i = None, [], [], 0
     while i < len(argv):
         tok = argv[i]
-        if tok not in _SET_FLAGS:
+        # BOTH SPELLINGS. `--daily=08:00` contains no space, so falling through to the positional
+        # branch made it a "second job name" and borrowed the unquoted-`Sun 03:00` message for it —
+        # telling the operator something untrue about their own input. `--flag=value` is the house
+        # form for a value flag (`plugin sync --find-links=<dir>` is the only other one in the repo,
+        # and it accepts ONLY that spelling), so both are taken here.
+        flag, eq, inline = tok.partition("=")
+        if flag not in _SET_FLAGS:
             rest.append(tok); i += 1
             continue
-        if i + 1 >= len(argv):
+        if eq:
+            value, step = inline, 1
+            if not value:
+                output.fail(output.EXIT_USAGE, f"{flag}= needs a value.   {_SET_USAGE}", verb="job")
+        elif i + 1 >= len(argv):
             output.fail(output.EXIT_USAGE, f"{tok} needs a value.   {_SET_USAGE}", verb="job")
-        seen.append(tok)
-        value = argv[i + 1]
-        key = _SET_FLAGS[tok]
+        else:
+            value, step = argv[i + 1], 2
+        seen.append(flag)
+        key = _SET_FLAGS[flag]
         # `--every` is the only one whose value is a number rather than a time string. A
         # non-numeric value is handed to `parse_schedule` as-is so the refusal comes from the one
         # place that owns what a schedule may be.
         schedule = {key: int(value) if (key == "interval_minutes" and value.lstrip("-").isdigit())
                     else value}
-        i += 2
+        i += step
     if len(seen) > 1:
         output.fail(output.EXIT_USAGE,
                     f"a job has exactly ONE cadence — you gave {', '.join(seen)}.   {_SET_USAGE}",
@@ -189,18 +200,43 @@ def _set(names, schedule, jobs, dry) -> int:
         # Exit 2, not 1: the value came from the command line, so this is a usage error the operator
         # can fix by retyping — and the message carries the correction rather than the fault.
         output.fail(output.EXIT_USAGE, f"{RED}{exc}{RESET}", hint=_SET_USAGE, verb="job")
+    except OSError as exc:
+        # A MUTATING PATH NEVER HANDS THE OPERATOR A TRACEBACK (r1/I1, the post-r2/I5 house rule).
+        # A full disk, a read-only mount or a quota escaped from the write itself as a stack trace —
+        # while `_wizard_times`, the same writer one file over, already contained it. The verb must
+        # not be less careful than the wizard.
+        #
+        # The write is not atomic (a registered follow-up, not this fix), so the honest thing to say
+        # is that the file may be half-written, and to name the way back. Everything here is in git,
+        # and a `job set` that can no longer re-read its own output is exactly the moment an operator
+        # needs telling that — otherwise the surface that exists to stop them hand-editing JSON has
+        # left them hand-editing JSON.
+        output.fail(output.EXIT_UNEXPECTED,
+                    f"{RED}could not write jobs/registry.json: {exc}{RESET}",
+                    hint="the write is not atomic, so jobs/registry.json may be incomplete — restore "
+                         "it with `git -C \"$PLAINKEEP_HOME\" checkout -- jobs/registry.json` "
+                         "(everything in the vault is in git), then retry",
+                    verb="job")
 
-    # "The loaded schedule is now stale" is only true if launchd has this job. Probed for the ONE
-    # job, not the whole registry, so `set` costs at most one `launchctl print` — and under
-    # `--dry-run` too, because "this edit would leave a stale schedule loaded" is exactly what a
-    # preview is for. Reading launchd's state is not mutating it; `bootstrap`/`bootout` stay with
-    # `enable`/`disable`, which is what makes this action safe_write rather than confirm.
+    # WHAT THE PROBE ANSWERED IS THE CLAIM (r1/M2). Probed for the ONE job, not the whole registry,
+    # so `set` costs at most one `launchctl print` — and under `--dry-run` too, because "this edit
+    # would leave a stale schedule loaded" is exactly what a preview is for. Reading launchd's state
+    # is not mutating it; `bootstrap`/`bootout` stay with `enable`/`disable`, which is what makes
+    # this action safe_write rather than confirm.
+    #
+    # `installed` and `loaded` are two different facts and were collapsed into one sentence: on a
+    # vault whose plist is installed but which launchd has booted out, `set` said "launchd is still
+    # running the OLD schedule" one command after `job status` said `installed, not loaded` about
+    # the same job. The probe was issued, answered correctly, and its answer discarded. Two surfaces
+    # contradicting each other about one fact is worse than either staying quiet — and the three
+    # columns exist precisely because these are three different states.
     row = launchdlib.job_states({"jobs": {name: res["job"]}})[0]
-    stale = bool(row.get("installed") or row.get("loaded"))
+    installed, loaded = bool(row.get("installed")), bool(row.get("loaded"))
+    stale = installed or loaded
     remedy = f"plainkeep job enable {name} --yes" if stale else ""
     data = {"action": "set", "name": name, "schedule": res["schedule"], "previous": res["previous"],
             "seeded": res["seeded"], "job": res["job"], "stale": stale, "remedy": remedy,
-            "registry": "jobs/registry.json"}
+            "installed": installed, "loaded": loaded, "registry": "jobs/registry.json"}
     if dry:
         data["dry_run"] = True
 
@@ -216,7 +252,7 @@ def _set(names, schedule, jobs, dry) -> int:
         else:
             print(f"set '{name}' -> {_sched_str(res['schedule'])}{was}")
         print(f"  {'would write' if dry else 'wrote'} jobs/registry.json")
-        if stale:
+        if loaded:
             # Named plainly rather than hinted at: the schedule launchd is running and the schedule
             # the file now says are two different things until someone re-enables.
             print(f"\n{YEL}⚠ launchd is {'still ' if not dry else ''}running the "
@@ -224,6 +260,13 @@ def _set(names, schedule, jobs, dry) -> int:
                   f"{'the loaded schedule is stale' if not dry else 'this edit would leave it stale'}"
                   f"{RESET}")
             print(f"  make it live:  {remedy}")
+        elif installed:
+            # Installed but NOT loaded — what `job status` calls `installed, not loaded`. The file in
+            # ~/Library/LaunchAgents is out of date; nothing is running it. Same remedy (`enable`
+            # re-renders and re-bootstraps), different fact.
+            print(f"\n{YEL}⚠ the installed launch agent for '{name}' is now out of date "
+                  f"(launchd has not loaded it){RESET}")
+            print(f"  install the new schedule and load it:  {remedy}")
         else:
             print(f"\n  schedule it:  plainkeep job enable {name} --yes"
                   "     see what's live:  plainkeep job status")

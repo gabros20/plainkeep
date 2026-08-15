@@ -663,3 +663,29 @@ working repo). Blockers and importants were fixed in-branch; this is the deferre
   only in `.logs/jobs/<name>.log`; `launchctl print` carries the data.
 - **Drift names two remedies in two surfaces** (OQ6): the setup layer says `plainkeep setup
   automation`, doctor says `plainkeep job apply`. Both converge, measured; it reads as noise.
+
+## Configurable schedule times (`plainkeep job set`, the wizard's day bookends)
+
+Found by the review of the job-set task (r1 PASS_WITH_FOLLOWUPS, 2026-08-15;
+`.orchestrate/review-task-jobset-r1.md` in the working repo). The importants and minors were fixed
+in-branch; this is what was deliberately deferred.
+
+- **JSON config writes are not atomic** (r1/I1, part 3). `vaultio.write_text` is
+  `p.write_text(text)` — truncate-then-write, no temp file, no rename — so an interrupted write
+  leaves a half file. Measured with `ulimit -f 1` on a 963-byte `jobs/registry.json`: the write dies
+  mid-file and the registry comes back 512 bytes, after which every `job` action refuses it as
+  invalid JSON, `plainkeep job set` (the surface that repairs a schedule) included. The failure is
+  now CONTAINED and names `git checkout` as the way back, which is the in-branch half; the write
+  itself is still not atomic. This is house-wide, not job-specific — `share/run.py` (config +
+  ledger), `backup/run.py` (config), `plugin/run.py` (lock) and `lib/manifest.py` write JSON the
+  same way — and the repo already has the correct pattern twice, at `enginetree.py:446` and
+  `migrate.py:968` (write `tmp`, then `os.replace`). Fix: a `vaultio.write_text_atomic` those five
+  callers use. `jobs/registry.json` is the one now written *programmatically*, from two callers, one
+  of which runs on a fresh machine — so it is the one that raised the question.
+- **`parse_schedule`'s registry-borne refusals are pinned only where a CLI flag can reach them**
+  (r1 test-gap 6). A non-dict `schedule`, two cadences in one entry and a boolean
+  `interval_minutes` can all arrive from the FILE, where no flag parser has normalised them first;
+  the suite exercises those shapes through `job set`'s flags, which can only produce a string or an
+  int. Measured by hand during the review (`schedule names 2 cadences (daily, interval_minutes)`)
+  and correct — just not pinned. Fix: a fixture registry per shape in `run_jobverb.py`, asserted on
+  `job list` (warn text) and `job enable` (whole-command refusal).

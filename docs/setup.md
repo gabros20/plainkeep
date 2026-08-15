@@ -324,9 +324,11 @@ Exactly one cadence flag per call. A time it cannot use is refused with the corr
 is written** — validation runs before the file is opened. Only that job's `schedule` is rewritten;
 every other field, and the order of the file, is left exactly as it was.
 
-`set` also **seeds a canonical job your registry never received**. `jobs/registry.json` is yours —
-the template seeds a new vault and an engine update never overwrites it — so a job added to plainkeep
-after your vault was created cannot reach you any other way. `plainkeep job set start --daily 08:00`
+`set` also **seeds a canonical job your registry never received**. `jobs/registry.json` is yours:
+`plainkeep vault init` creates it empty (`{"jobs": {}}`) and no engine update ever writes job
+definitions into it, so the jobs above reach a vault in exactly two ways — the setup wizard seeds
+them when you accept automation on a vault that has none, and `plainkeep job set` seeds one by name.
+A job added to plainkeep after your vault was created cannot reach you any other way. `plainkeep job set start --daily 08:00`
 in a vault with no `start` job creates the whole entry from the engine defaults, at the time you
 asked for, and says `seeded 'start' from engine defaults`. Names it neither has are refused with both
 lists: the jobs you have, and the defaults you could seed.

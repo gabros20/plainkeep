@@ -315,11 +315,13 @@ def parse_schedule(schedule: object) -> dict:
 
 # THE ENGINE'S COPY OF THE CANONICAL JOBS, and why one has to exist.
 #
-# `jobs/registry.json` is VAULT content: the template's copy seeds a NEW vault and an engine update
-# never delivers it (that is the point — it is the operator's file). So a canonical job added after a
-# vault was created can never reach that vault, and `start` is exactly that case: every vault made
-# before ADR-022 schedules the day's close and not its start, and no amount of `plainkeep setup`
-# fixes it. `plainkeep job set <name>` seeds from here when the name is one the engine knows.
+# `jobs/registry.json` is VAULT content, and NOTHING SEEDS IT WITH JOBS. `plainkeep vault init`
+# writes it as `{"jobs": {}}`, no engine update ever delivers job definitions into a vault (that is
+# the point — it is the operator's file), and the repo's own registry is not copied anywhere. So a
+# canonical job simply has no route into a vault except this constant: a fresh vault starts with an
+# empty registry, and every vault created before ADR-022 schedules the day's close and not its start.
+# `plainkeep job set <name>` seeds from here when the name is one the engine knows, and the setup
+# wizard seeds the whole set when it offered the whole set (see `_wizard_times`).
 #
 # It is a SECOND copy of the definitions in `jobs/registry.json`, which is a thing to be nervous
 # about, so it is pinned: `test/run_jobs.py` asserts these are byte-for-byte the shipped registry's

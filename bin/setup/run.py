@@ -271,8 +271,9 @@ def _automation_prompt() -> str:
     describes the shipped defaults it is about to create."""
     reg = launchdlib.load_registry()
     jobs = (reg or {}).get("jobs", {})
-    listed = [f"{name} ({launchdlib.schedule_str(job.get('schedule', {}))})"
-              for name, job in jobs.items() if name in _promised_jobs(jobs)]
+    promised = _promised_jobs(jobs)      # computed once; it walks the whole registry
+    listed = [f"{name} ({launchdlib.schedule_str(jobs[name].get('schedule', {}))})"
+              for name in promised]
     # The prompt names WHERE it writes, not only what it schedules (r1/I1). "schedule your day?" and
     # "install launch agents into ~/Library/LaunchAgents?" are different questions, and the second is
     # the one being answered — it is the fact that makes this layer confirm-class.
@@ -347,15 +348,21 @@ def _wizard_times(ask, say) -> list[str]:
     Prompts belong to the WIZARD alone: `setup automation --yes` and `setup --all --yes` are what an
     agent or a script runs, and they leave whatever times the registry holds exactly alone.
 
-    IT DELIVERS WHAT THE PROMPT PROMISED, AND ONLY THAT (r1/M3). `plainkeep vault init` writes
-    `jobs/registry.json` as `{"jobs": {}}` and nothing ever copies the repo's registry into a new
-    vault, so on a real fresh vault the automation prompt fell back to its static sentence — naming
-    six jobs — and the wizard then created two. The registry-derived prompt and the static fallback
-    are the two halves of one promise, so the write follows the same split: when the prompt NAMED
-    this vault's jobs, only the bookends among them are touched; when it fell back to describing the
-    engine defaults, the full canonical set is seeded, because that is what the operator said yes to.
-    Seeding everything unconditionally would be the mirror failure — scheduling four jobs a prompt
-    listing two never mentioned."""
+    IT DELIVERS WHAT THE PROMPTS PROMISED, AND ONLY THAT (r1/M3, r2/B1) — and there are TWO prompts.
+
+    The yes/no prompt promises a SET. `plainkeep vault init` writes `jobs/registry.json` as
+    `{"jobs": {}}` and nothing ever copies the repo's registry into a new vault, so on a real fresh
+    vault `_automation_prompt` falls back to its static sentence naming six jobs; when the registry
+    has jobs of its own, it names those instead. `seeding` is that branch, and it governs the jobs
+    nobody was asked about individually: seed the canonical set when the static sentence promised it,
+    and otherwise add nothing, because scheduling four jobs a two-job prompt never mentioned is the
+    mirror failure.
+
+    The TIME prompts promise a JOB EACH, by name, and that promise does not depend on the branch
+    above. Keying the whole write on `seeding` meant that on a vault with jobs but no `start` — the
+    pre-ADR-022 migration shape, which is the case this seed path exists for — the wizard asked "day
+    starts at?", took `08:00`, and discarded it in silence because the registry had some other
+    schedulable job. A question asked by name is answered by writing it."""
     reg = launchdlib.load_registry()
     if reg is None:                      # no registry yet (skeleton seeds it) — nothing to write into
         return []
@@ -380,15 +387,18 @@ def _wizard_times(ask, say) -> list[str]:
         say("    (PLAINKEEP_SETUP_FAKE — nothing written)")
         return []
 
-    # What the prompt promised: this registry's own schedulable jobs, or — when it had none to name
-    # and fell back to describing the engine defaults — the canonical set.
+    # What the YES/NO prompt promised: this registry's own schedulable jobs, or — when it had none to
+    # name and fell back to describing the engine defaults — the canonical set.
     seeding = not _promised_jobs(jobs)
     changed: list[str] = []
     for job_name, default in launchdlib.DEFAULT_JOBS.items():
         answer = answers.get(job_name)
         if job_name not in jobs:
-            if not seeding:
-                continue                  # the prompt did not name it; it is `job set`'s to add
+            # Seeded if the operator was asked about this job BY NAME (a time prompt names one job,
+            # and its answer is that job's promise), or if the yes/no prompt promised the whole set.
+            # Never otherwise: a job neither prompt mentioned is `plainkeep job set`'s to add.
+            if answer is None and not seeding:
+                continue
             schedule = {"daily": answer} if answer else default["schedule"]
         elif answer and answer != jobs[job_name].get("schedule", {}).get("daily"):
             schedule = {"daily": answer}

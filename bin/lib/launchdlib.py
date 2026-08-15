@@ -27,6 +27,7 @@ exist so that "this never touches your machine" is a property of the code rather
 """
 from __future__ import annotations
 import copy
+import errno
 import json
 import os
 import platform
@@ -355,8 +356,15 @@ def read_registry() -> dict:
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
-        raise RegistryMissing(f"no jobs registry at "
-                              f"{_relative(path)} ({exc.strerror or exc})") from exc
+        # ENOENT ONLY. Every other `OSError` means the file is right there and this product cannot
+        # read it — a permission bit, an I/O error, a broken symlink target — which is a refusal, not
+        # an absence (r2/M6). Classifying those as missing made `registry_error()` answer None for a
+        # `chmod 000` registry, so the automation layer reported `absent` and offered the command
+        # that would refuse: the exact shape this class split was introduced to close, one door over.
+        # The message would also have been false on its face — the file exists.
+        if exc.errno == errno.ENOENT:
+            raise RegistryMissing(f"no jobs registry at {_relative(path)}") from exc
+        raise RegistryError(f"cannot read {_relative(path)}: {exc.strerror or exc}") from exc
     try:
         data = json.loads(raw)
     except ValueError as exc:

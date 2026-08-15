@@ -507,6 +507,15 @@ def case_set_refuses_and_teaches(td: Path) -> None:
           r.returncode == 2 and "--every" in (r.stdout + r.stderr) and reg_file.read_bytes() == before,
           f"rc={r.returncode} {r.stdout}{r.stderr}")
 
+    # The commonest real mistake: an unquoted `--weekly Sun 03:00`. The shell splits it, the flag
+    # takes "Sun", and "03:00" arrives looking like a second job name — so say THAT, rather than
+    # acting on the first name with half a schedule.
+    r = run(h, "set", "organize_scan", "--weekly", "Sun", "03:00")
+    out = r.stdout + r.stderr
+    check("job set names the quoting when a schedule arrives unquoted",
+          r.returncode == 2 and "quoted" in out and reg_file.read_bytes() == before,
+          f"rc={r.returncode} {out}")
+
     r = run(h, "set", "nope", "--daily", "08:00")
     out = r.stdout + r.stderr
     check("job set refuses an unknown name, listing the known jobs AND the seedable defaults",

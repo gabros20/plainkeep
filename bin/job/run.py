@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
-plainkeep job list | run <name> | apply | enable | disable | status — the §15 scheduler-neutral jobs
-surface. Definitions live in jobs/registry.json; `run` executes any job manually (the universal
-fallback); `apply` renders launchd plists into jobs/launchd/. Jobs call ONE verb, log to .logs/jobs/,
-and only read/safe_write may be scheduled.
+plainkeep job list | run <name> | apply | set <name> | enable | disable | status — the §15
+scheduler-neutral jobs surface. Definitions live in jobs/registry.json; `run` executes any job
+manually (the universal fallback); `apply` renders launchd plists into jobs/launchd/; `set` changes
+a job's schedule (see `_set`). Jobs call ONE verb, log to .logs/jobs/, and only read/safe_write may
+be scheduled.
 
 ACTIVATION IS A VERB NOW (ADR-022). `apply` used to end by PRINTING a `ln -sf` and a `launchctl
 load` for the operator to paste, on the principle that the privileged, out-of-vault step was theirs.
@@ -22,7 +23,6 @@ macOS is unreliable about symlinked plists (bootstrap intermittently refuses the
 also means editing a vault file silently changes what a privileged loader reads. The vault artefact
 stays the record; the LaunchAgents file is an installed copy of it.
 """
-import json
 import shutil
 import subprocess
 import sys
@@ -147,7 +147,7 @@ def _schedule_flags(argv):
     return schedule, rest
 
 
-def _set(name, schedule, jobs, dry) -> int:
+def _set(names, schedule, jobs, dry) -> int:
     """`plainkeep job set <name>` — the schedule times as a product surface.
 
     The times used to be two literals in `jobs/registry.json` that only a hand-edit could change. For
@@ -161,8 +161,18 @@ def _set(name, schedule, jobs, dry) -> int:
     that `enable` exists to demand. So a `set` on a job launchd is already running says so, and names
     the one command that closes the gap. `job status`'s drift column and doctor's advisory row report
     the same fact from the other side, with no new plumbing."""
-    if name is None:
+    if not names:
         output.fail(output.EXIT_USAGE, f"{_SET_USAGE}   (one of: {', '.join(jobs)})", verb="job")
+    if len(names) > 1:
+        # Almost always an unquoted `--weekly Sun 03:00`: the shell split it, the flag took `Sun`,
+        # and `03:00` arrived here looking like a second job name. Say that, rather than silently
+        # acting on the first name with half a schedule.
+        output.fail(output.EXIT_USAGE,
+                    f"plainkeep job set takes ONE job name — got: {', '.join(names)}",
+                    hint='a schedule containing a space must be quoted: '
+                         '--weekly "Sun 03:00"   --monthly "1 04:00"',
+                    verb="job")
+    name = names[0]
     if schedule is None:
         output.fail(output.EXIT_USAGE, f"plainkeep job set needs a schedule.   {_SET_USAGE}",
                     verb="job")
@@ -181,8 +191,11 @@ def _set(name, schedule, jobs, dry) -> int:
         output.fail(output.EXIT_USAGE, f"{RED}{exc}{RESET}", hint=_SET_USAGE, verb="job")
 
     # "The loaded schedule is now stale" is only true if launchd has this job. Probed for the ONE
-    # job, not the whole registry, so `set` costs at most one `launchctl print`.
-    row = launchdlib.job_states({"jobs": {name: res["job"]}})[0] if not dry else {}
+    # job, not the whole registry, so `set` costs at most one `launchctl print` — and under
+    # `--dry-run` too, because "this edit would leave a stale schedule loaded" is exactly what a
+    # preview is for. Reading launchd's state is not mutating it; `bootstrap`/`bootout` stay with
+    # `enable`/`disable`, which is what makes this action safe_write rather than confirm.
+    row = launchdlib.job_states({"jobs": {name: res["job"]}})[0]
     stale = bool(row.get("installed") or row.get("loaded"))
     remedy = f"plainkeep job enable {name} --yes" if stale else ""
     data = {"action": "set", "name": name, "schedule": res["schedule"], "previous": res["previous"],
@@ -206,8 +219,10 @@ def _set(name, schedule, jobs, dry) -> int:
         if stale:
             # Named plainly rather than hinted at: the schedule launchd is running and the schedule
             # the file now says are two different things until someone re-enables.
-            print(f"\n{YEL}⚠ launchd is still running the OLD schedule for '{name}' — the loaded "
-                  f"schedule is stale{RESET}")
+            print(f"\n{YEL}⚠ launchd is {'still ' if not dry else ''}running the "
+                  f"{'OLD' if not dry else 'CURRENT'} schedule for '{name}' — "
+                  f"{'the loaded schedule is stale' if not dry else 'this edit would leave it stale'}"
+                  f"{RESET}")
             print(f"  make it live:  {remedy}")
         else:
             print(f"\n  schedule it:  plainkeep job enable {name} --yes"
@@ -418,7 +433,7 @@ def main(argv):
         return r.returncode
 
     elif action == "set":
-        return _set(argv[1] if len(argv) > 1 else None, schedule, jobs, dry)
+        return _set(argv[1:], schedule, jobs, dry)
 
     elif action == "apply":
         skipped = [n for n, j in jobs.items() if j.get("risk") not in SCHEDULABLE]

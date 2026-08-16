@@ -1,0 +1,519 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script>document.documentElement.classList.add('js');</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plainkeep features — everything it does, with real commands</title>
+<meta name="description" content="Every plainkeep capability, explained plainly: the automatic daily schedule, capture and triage, tasks, the personal wiki, search, turning documents into notes, backups, sharing, plugins, the guided terminal UI, and safe engine updates.">
+<link rel="canonical" href="https://plainkeep.vercel.app/features">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://plainkeep.vercel.app/features">
+<meta property="og:title" content="plainkeep features — everything it does, with real commands">
+<meta property="og:description" content="The automatic daily schedule, capture, tasks, wiki, search, documents-to-notes, backups, plugins, and more — each explained in plain words with the real command.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="plainkeep features — everything it does, with real commands">
+<meta name="twitter:description" content="The automatic daily schedule, capture, tasks, wiki, search, documents-to-notes, backups, plugins, and more.">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="visually-hidden" href="#main">Skip to content</a>
+
+<nav class="prompt-gutter" aria-label="Section progress">
+  <div class="prompt-gutter__line" aria-hidden="true"><div class="prompt-gutter__fill" id="gutter-fill"></div></div>
+  <div class="prompt-gutter__rail" id="gutter-rail"></div>
+  <div class="prompt-gutter__markers">
+    <button class="prompt-marker" data-target="intro" aria-label="Jump to top">❯</button>
+    <button class="prompt-marker" data-target="schedule" aria-label="Jump to Schedule">❯</button>
+    <button class="prompt-marker" data-target="capture" aria-label="Jump to Capture">❯</button>
+    <button class="prompt-marker" data-target="tasks" aria-label="Jump to Tasks">❯</button>
+    <button class="prompt-marker" data-target="wiki" aria-label="Jump to Wiki">❯</button>
+    <button class="prompt-marker" data-target="search" aria-label="Jump to Search">❯</button>
+    <button class="prompt-marker" data-target="documents" aria-label="Jump to Documents">❯</button>
+    <button class="prompt-marker" data-target="backup" aria-label="Jump to Backup">❯</button>
+    <button class="prompt-marker" data-target="plugins" aria-label="Jump to Plugins">❯</button>
+    <button class="prompt-marker" data-target="ui" aria-label="Jump to Terminal UI">❯</button>
+    <button class="prompt-marker" data-target="health" aria-label="Jump to Health and updates">❯</button>
+  </div>
+</nav>
+
+<div class="page">
+
+  <header class="site-header" id="site-header">
+    <div class="container site-header__bar">
+      <a class="site-header__brand" href="/">
+        <svg class="site-header__logo" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="5.5" y="5.5" width="53" height="53" rx="14" fill="none" class="lg-frame" stroke-width="5.5"/>
+          <rect x="36" y="17" width="7.5" height="30" rx="3.75" class="lg-slot"/>
+        </svg>
+        plainkeep
+      </a>
+      <nav class="site-header__nav" aria-label="Primary">
+        <a href="/how-it-works">How it works</a>
+        <a href="/features" aria-current="page">Features</a>
+        <a href="/agents">For AI agents</a>
+        <a href="https://github.com/gabros20/plainkeep/tree/main/docs">Docs</a>
+      </nav>
+      <div class="site-header__actions">
+        <a class="site-header__github" href="https://github.com/gabros20/plainkeep">GitHub</a>
+        <a class="btn btn-primary" href="/#quickstart">Install</a>
+      </div>
+    </div>
+    <div class="mobile-anchor-nav-wrap">
+      <nav class="mobile-anchor-nav" aria-label="Sections">
+        <a href="#schedule">Schedule</a>
+        <a href="#capture">Capture</a>
+        <a href="#tasks">Tasks</a>
+        <a href="#wiki">Wiki</a>
+        <a href="#search">Search</a>
+        <a href="#documents">Documents</a>
+        <a href="#backup">Backup</a>
+        <a href="#plugins">Plugins</a>
+        <a href="#ui">Terminal UI</a>
+        <a href="#health">Health</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ================= INTRO ================= -->
+    <section class="page-hero" id="intro">
+      <div class="container">
+        <div class="reveal">
+          <span class="page-hero__kicker">features</span>
+          <h1 class="t-display-xl">Everything it does.</h1>
+          <p class="t-body-lg page-hero__lede">One section per capability, in plain words, with the real command next to it. Nothing here is a mockup — every panel shows the tool as it actually behaves.</p>
+          <nav class="toc-chips" aria-label="On this page">
+            <a href="#schedule">your day, on schedule</a>
+            <a href="#capture">capture &amp; triage</a>
+            <a href="#tasks">tasks</a>
+            <a href="#wiki">wiki</a>
+            <a href="#search">search</a>
+            <a href="#documents">documents in</a>
+            <a href="#bookmarks">save links</a>
+            <a href="#backup">backup &amp; share</a>
+            <a href="#plugins">your own commands</a>
+            <a href="#ui">the guided menu</a>
+            <a href="#health">health &amp; updates</a>
+          </nav>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SCHEDULE ================= -->
+    <section class="feature-section" id="schedule">
+      <div class="container">
+        <div class="section-heading reveal">
+          <span class="feature-section__kicker">plainkeep job</span>
+          <h2 class="t-display-lg">Your day runs itself.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">This is the premise of the whole system: your day should open and close whether or not you remember to type. When you install, the setup wizard offers a schedule — on by default — and asks one human question: <em>when does your day start, and when does it close?</em> From then on, the morning journal opens itself and the evening digest writes itself.</p>
+        </div>
+
+        <div class="data-table reveal">
+          <table>
+            <thead><tr><th>job</th><th>when (yours to change)</th><th>what it does</th></tr></thead>
+            <tbody>
+              <tr><td>start</td><td>daily 07:30</td><td>opens today's journal, carries unfinished tasks forward</td></tr>
+              <tr><td>close_nudge</td><td>daily 18:30</td><td>writes the day's digest, flags loose ends for tomorrow</td></tr>
+              <tr><td>index</td><td>every 60 min</td><td>keeps search current</td></tr>
+              <tr><td>consolidate</td><td>daily 02:30</td><td>the nightly tidy-up digest</td></tr>
+              <tr><td>organize_scan</td><td>weekly Sun 03:00</td><td>proposes filing improvements — proposes, never applies</td></tr>
+              <tr><td>backup_check</td><td>weekly Fri 17:00</td><td>nags if your backup is getting stale</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="panels-2 reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>change any time — no ceremony</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep job set close_nudge --daily 22:00
+set 'close_nudge' -&gt; daily 22:00  <span class="tk-dim">(was daily 18:30)</span>
+  wrote jobs/registry.json
+
+<span class="tk-warn">⚠</span> the schedule still runs the OLD time for 'close_nudge'
+  make it live:  <span class="tk-str">plainkeep job enable close_nudge --yes</span></pre>
+          </div>
+          </div>
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>always know what's live</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep job status
+6 job(s) — rendered / installed / loaded:
+
+  start          yes  yes  <span class="tk-ok">yes</span>  <span class="tk-ok">loaded</span>
+  close_nudge    yes  yes  <span class="tk-ok">yes</span>  <span class="tk-ok">loaded</span>
+  index          yes  yes  -    <span class="tk-warn">installed, not loaded</span>
+  consolidate    yes  -    -    <span class="tk-dim">rendered only</span></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="states-strip reveal">
+          <div class="state-card">
+            <span class="state-card__name">rendered</span>
+            <p>The schedule is written down in your vault. Changing a time (<code>job set</code>) is a free, ordinary file edit — no permission needed.</p>
+          </div>
+          <div class="state-card">
+            <span class="state-card__name">installed</span>
+            <p>A copy has been handed to your Mac's scheduler. Turning that on (<code>job enable --yes</code>) asks you first, because it writes outside your vault.</p>
+          </div>
+          <div class="state-card">
+            <span class="state-card__name">loaded</span>
+            <p>The scheduler is actually running it. All three are reported separately, so a schedule can never <em>quietly</em> fail to exist — mismatches show up as "drift" with the one command that fixes it.</p>
+          </div>
+        </div>
+
+        <ul class="feature-section__copy reveal" style="margin-top:2rem; max-width: var(--measure);">
+          <li>Only harmless job types can be scheduled — anything that would need your yes can never run unattended.</li>
+          <li>Nothing is lost by declining: every job is a normal command you can run by hand (<code>plainkeep job run start</code>).</li>
+          <li>One command turns it all off: <code>plainkeep job disable --all --yes</code>. (Scheduling is macOS for now; on Linux the jobs stay runnable by hand or from any scheduler you already use.)</li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ================= CAPTURE ================= -->
+    <section class="feature-section" id="capture">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep capture · triage</span>
+          <h2>A thought lands in seconds. Filing comes later.</h2>
+          <p>Capture takes whatever's in your head and drops it in the inbox — zero decisions, zero friction, so you actually do it. Later, <code>triage</code> walks the inbox with you and <em>proposes</em> a home for each item: a wiki note? a task? skip it? You approve; it files. The system never decides where your thoughts belong — it just makes deciding cheap.</p>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>capture now, decide later</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep capture "ask Anna about the licensing deadline"
+<span class="tk-ok">✓</span> saved to <span class="tk-str">inbox/</span>
+
+<span class="tk-dim"># …later that day…</span>
+<span class="tk-prompt">$</span> plainkeep triage
+1 of 2 · <span class="tk-str">"ask Anna about the licensing deadline"</span>
+  proposes: <span class="tk-cyan">a task</span> — sounds like something to do, not something to know
+  [y] file it   [n] other   [s] skip</pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= TASKS ================= -->
+    <section class="feature-section" id="tasks">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep task</span>
+          <h2>A to-do list that's just folders.</h2>
+          <p>Each task is one text file, and the folder it sits in <em>is</em> its status: <code>inbox</code>, <code>active</code>, <code>waiting</code>, <code>done</code>. Finish something and the file moves — no app state, no sync, nothing to corrupt. You can manage tasks entirely by command, entirely by menu, or by literally dragging files around; all three are the same thing.</p>
+          <ul>
+            <li><code>task add "…"</code> · <code>task list</code> · <code>task done T-…</code></li>
+            <li>Open tasks carry forward into each morning's journal automatically.</li>
+          </ul>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>tasks</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep task list
+active
+  <span class="tk-ok">T-20260816-01</span>  Fix the Acme webhook
+  <span class="tk-ok">T-20260814-02</span>  Draft the workshop outline
+waiting
+  <span class="tk-dim">T-20260812-04  Invoice approval — client side</span>
+
+<span class="tk-prompt">$</span> plainkeep task done T-20260816-01
+<span class="tk-ok">✓</span> moved to <span class="tk-str">tasks/done/</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= WIKI ================= -->
+    <section class="feature-section" id="wiki">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep wiki</span>
+          <h2>Notes that know each other.</h2>
+          <p>Durable knowledge goes in the wiki: one idea per note, connected with <code>[[links]]</code>. Bigger things — a client, a project — get a <em>hub</em> note: a short, current summary that links out to everything about that thing. Ask a note who links to it, find notes going stale, find orphans nothing points to. It's a knowledge graph, but every node is a file you can read in anything.</p>
+          <ul>
+            <li><code>wiki new</code> · <code>wiki open</code> · <code>wiki backlinks</code> · <code>wiki stale</code> · <code>wiki orphans</code></li>
+            <li>Works beautifully with Obsidian as a free viewer/editor — plainkeep doesn't care what you open the files with.</li>
+          </ul>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>the graph, queried</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep wiki backlinks acme-webhook
+linked from:
+  <span class="tk-str">wiki/clients/acme.md</span>          <span class="tk-dim">the client hub</span>
+  <span class="tk-str">wiki/projects/acme-portal.md</span>  <span class="tk-dim">the project hub</span>
+  <span class="tk-str">journal/2026/08/2026-08-14.md</span>
+
+<span class="tk-prompt">$</span> plainkeep wiki stale
+untouched 90+ days:
+  <span class="tk-str">wiki/notes/pricing-model-v2.md</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SEARCH ================= -->
+    <section class="feature-section" id="search">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep search · index</span>
+          <h2>Find anything you've ever kept.</h2>
+          <p>Search runs entirely on your machine, in stages. Keyword search works out of the box and returns ranked hits pointing at the exact heading, with a snippet. Want "find it by meaning, not wording"? Switch on the optional semantic stage — local embeddings, no cloud — and the same command understands <em>what you meant</em>.</p>
+          <ul>
+            <li>The index is a disposable cache: <code>rm -rf .index &amp;&amp; plainkeep index</code> rebuilds it from your text. Your files are always the truth.</li>
+            <li>An optional enrichment step gives imported documents useful descriptions and keywords — using a small local model, degrading gracefully without one.</li>
+          </ul>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>ask in your own words</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep search "how do I stop a runaway agent"
+1. <span class="tk-str">wiki/notes/agent-guardrails.md#kill-switch</span>
+   <span class="tk-dim">…deny-class calls refuse before they run…</span>
+2. <span class="tk-str">wiki/notes/plainkeep-rules.md#hard-rules</span>
+   <span class="tk-dim">…never transmits without a human…</span>
+
+<span class="tk-dim"># local keyword + link graph by default;
+# semantic + reranking are one opt-in away</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= DOCUMENTS ================= -->
+    <section class="feature-section" id="documents">
+      <div class="container">
+        <div class="section-heading reveal">
+          <span class="feature-section__kicker">plainkeep files</span>
+          <h2 class="t-display-lg">PDFs, recordings, screenshots — in. Searchable notes — out.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Heavy files get filed into <code class="t-mono-sm">~/files</code> with a small text "shadow note" in your vault, so search can find them. Then, step by step and always on your machine: <code class="t-mono-sm">extract</code> turns a PDF into readable text, audio into a transcript, an image into OCR'd words; <code class="t-mono-sm">distill</code> drafts concept notes from the extract; <code class="t-mono-sm">organize</code> proposes filing and linking improvements — each with its exact diff, applied only after you approve.</p>
+        </div>
+
+        <div class="terminal-panel session-panel reveal">
+          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>the pipeline</div>
+          <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep files ingest talk.pdf --research --extract  <span class="tk-dim"># file it + make it readable text</span>
+<span class="tk-prompt">$</span> plainkeep files distill talk                          <span class="tk-dim"># draft concept notes from it</span>
+<span class="tk-prompt">$</span> plainkeep organize                                    <span class="tk-dim"># scan for links/dupes → proposals only</span>
+<span class="tk-prompt">$</span> plainkeep organize review                             <span class="tk-dim"># page through each diff yourself</span>
+<span class="tk-prompt">$</span> plainkeep organize apply --yes                        <span class="tk-dim"># apply ONLY what you approved</span></pre>
+          </div>
+        </div>
+
+        <div class="planes reveal">
+          <div class="plane-card"><span class="plane-card__name t-mono-sm">you wrote it</span><p>Your own notes. The default author, and what search trusts most.</p></div>
+          <div class="plane-card"><span class="plane-card__name t-mono-sm">a machine extracted it</span><p>Transcripts and extractions — always labeled with the source file and the tool that made them.</p></div>
+          <div class="plane-card"><span class="plane-card__name t-mono-sm">an AI drafted it</span><p>Model-written notes stay marked <em>draft</em> until you promote them. Machine text can never quietly become your truth.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= BOOKMARKS ================= -->
+    <section class="feature-section" id="bookmarks">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep bookmark</span>
+          <h2>Save the article, not just the link.</h2>
+          <p>A saved URL becomes a real note: the readable text is pulled in, so it's searchable next year even if the page changes or dies. Add <code>--archive</code> and the full page is snapshotted to your files too — your own private copy, immune to link-rot.</p>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>against link-rot</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep bookmark https://example.com/essay --archive
+<span class="tk-ok">✓</span> saved as a note in <span class="tk-str">wiki/bookmarks/</span>
+  readable text pulled in · page snapshot archived
+
+<span class="tk-dim"># a year later:</span>
+<span class="tk-prompt">$</span> plainkeep search "that essay about slow software"
+1. <span class="tk-str">wiki/bookmarks/example-essay.md</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= BACKUP & SHARE ================= -->
+    <section class="feature-section" id="backup">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep backup · share · invoice</span>
+          <h2>Safe copies. Careful sharing.</h2>
+          <p>Backups are encrypted and go off-machine with a key that can only <em>add</em> — so even a compromised laptop can't erase your history. Your code repos get swept into compact bundles on the same rhythm. And when you need to show someone a note, <code>share</code> makes an expiring link — which <em>you</em> send. The system itself never transmits anything, anywhere, ever: even invoices come out as drafts for you to send.</p>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>durability, gated</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep backup run
+<span class="tk-err">✗</span> backing up needs your explicit yes
+  <span class="tk-dim">re-run:</span> <span class="tk-str">plainkeep backup run --yes</span>
+
+<span class="tk-prompt">$</span> plainkeep backup run --yes
+<span class="tk-ok">✓</span> encrypted snapshot uploaded <span class="tk-dim">(append-only key)</span>
+
+<span class="tk-prompt">$</span> plainkeep share wiki/notes/rrf.md
+<span class="tk-ok">✓</span> expiring link created — <span class="tk-dim">you decide who gets it</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PLUGINS ================= -->
+    <section class="feature-section" id="plugins">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep new verb · plugin</span>
+          <h2>Missing a command? Make one.</h2>
+          <p>Your own commands live in your vault's <code>plugins/</code> folder — never inside the engine, so updates can't overwrite them. Scaffold one in a minute, or install a pack someone published. A new command automatically appears in <code>help</code>, in the menus, in tab-completion, and to AI assistants — and the safety rules gate it exactly like a built-in. New commands start on a short leash (<em>ask first</em> class) until you explicitly trust them.</p>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>extend it</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep new verb standup
+<span class="tk-ok">✓</span> scaffolded <span class="tk-str">plugins/local/standup/</span> <span class="tk-dim">(run.py + cmd.json)</span>
+
+<span class="tk-prompt">$</span> plainkeep plugin add you/plainkeep-pomodoro --yes
+<span class="tk-prompt">$</span> plainkeep plugin trust plainkeep-pomodoro --yes
+<span class="tk-dim"># until trusted, a plugin can't act without asking</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= TERMINAL UI ================= -->
+    <section class="feature-section" id="ui">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep ui</span>
+          <h2>The guided menu.</h2>
+          <p>One small, self-contained program (no extra installs, checksum-verified) that turns the whole command surface into menus and forms. It generates itself from the machine-readable command list, so a command you added five minutes ago is already in the menu. Point, pick, done — and it shows you the real command it ran, so the menus quietly teach you the typed way.</p>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>plainkeep ui</div>
+            <div class="terminal-panel__body">
+<pre>┌  <span class="tk-brand">plainkeep</span>
+│
+◇  What do you want to do? <span class="tk-dim">(type to filter)</span>
+│  <span class="tk-brand">＋ Capture a thought</span>      <span class="tk-dim">quick note → inbox</span>
+│  <span class="tk-ok">●</span> orient    <span class="tk-dim">where was I — journal, tasks, health</span>
+│  <span class="tk-ok">●</span> search    <span class="tk-dim">find a note</span>
+│  <span class="tk-cyan">●</span> task      <span class="tk-dim">list / add / done</span>
+│  <span class="tk-cyan">●</span> standup   <span class="tk-dim">your plugin — already here</span>
+│  <span class="tk-dim">…</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= HEALTH & UPDATES ================= -->
+    <section class="feature-section" id="health">
+      <div class="container">
+        <div class="section-heading reveal">
+          <span class="feature-section__kicker">plainkeep doctor · setup</span>
+          <h2 class="t-display-lg">It tells you what's wrong — and updates can't hurt you.</h2>
+          <p class="t-body" style="margin-top:1.5rem;"><code class="t-mono-sm">plainkeep doctor</code> checks everything and answers with next steps, not riddles: what's healthy, what's missing, and the one-line command that fixes each thing. And because the engine is installed <em>outside</em> your vault as a read-only, versioned tree, an update swaps the tool without ever touching a note: the new version is checked and self-tested before it goes live, and the version you were on is always kept, so rolling back is a tested one-liner — never a prayer.</p>
+        </div>
+
+        <div class="terminal-panel session-panel reveal">
+          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>plainkeep setup — the layer dashboard</div>
+          <div class="terminal-panel__body">
+<pre>setup layers:
+  <span class="tk-ok">✓</span> skeleton    Vault structure         <span class="tk-ok">ready</span>    required
+  <span class="tk-ok">✓</span> automation  Schedules               <span class="tk-ok">ready</span>    optional  6 jobs loaded
+  <span class="tk-ok">✓</span> search      Semantic search         <span class="tk-ok">ready</span>    optional
+  <span class="tk-warn">!</span> backups     Durability              <span class="tk-warn">blocked</span>  optional  restic is required
+    <span class="tk-dim">next: brew install restic</span>
+  <span class="tk-dim">◐</span> ui          Terminal UI             partial  optional  <span class="tk-warn">update available</span>
+    <span class="tk-dim">next: plainkeep setup ui --yes</span></pre>
+          </div>
+        </div>
+
+        <ul class="feature-section__copy reveal" style="margin-top:2rem; max-width: var(--measure);">
+          <li>Optional layers — semantic search, local models, backups, schedules, the UI — are switched on one at a time, each previewable with <code>--dry-run</code>.</li>
+          <li>An interrupted update finishes safely on re-run; it can never leave you with nothing.</li>
+          <li><code>plainkeep status</code> and <code>plainkeep orient</code> answer the daily question: <em>where was I?</em></li>
+        </ul>
+      </div>
+    </section>
+
+    <!-- ================= CTA ================= -->
+    <section class="section">
+      <div class="container">
+        <div class="cta-band reveal">
+          <div>
+            <h2>Five minutes to your own vault.</h2>
+            <p>Or take the throwaway demo for a spin first — one folder, one rm -rf to undo.</p>
+          </div>
+          <div class="cta-band__actions">
+            <a class="btn btn-primary" href="/#quickstart">Install plainkeep</a>
+            <a class="btn btn-secondary" href="/agents">Bring your AI</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="site-footer__grid">
+        <div>
+          <span class="site-footer__heading">Explore</span>
+          <ul class="site-footer__list">
+            <li><a href="/how-it-works">How it works</a></li>
+            <li><a href="/features">Features</a></li>
+            <li><a href="/agents">For AI agents</a></li>
+            <li><a href="/#quickstart">Install</a></li>
+          </ul>
+        </div>
+        <div>
+          <span class="site-footer__heading">Docs</span>
+          <ul class="site-footer__list">
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/setup.md">Layered setup</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/terminal-ui.md">The terminal UI</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/architecture.md">Architecture</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/machine-contract.md">Machine contract</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/plugins.md">Plugins</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/README.md">The docs map</a></li>
+            <li><a class="site-footer__llms" href="/llms.txt"><code class="t-mono-sm">llms.txt</code> — the docs, routed for AI agents</a></li>
+          </ul>
+        </div>
+        <div>
+          <span class="site-footer__heading">Project</span>
+          <ul class="site-footer__list">
+            <li><a href="https://github.com/gabros20/plainkeep">GitHub</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/CHANGELOG.md">Changelog</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/DECISIONS.md">Decision log (ADRs)</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/LICENSE">License (MIT)</a></li>
+          </ul>
+          <p class="site-footer__lineage" style="margin-top:1.5rem;">plainkeep is the kit — engine, terminal UI, installer. Your vault is a private copy that pulls improvements without ever exposing a note.</p>
+        </div>
+      </div>
+      <div class="site-footer__bottom t-mono-sm">plainkeep · MIT · gabros20/plainkeep</div>
+    </div>
+  </footer>
+
+</div>
+
+<script src="main.js"></script>
+</body>
+</html>

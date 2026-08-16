@@ -115,4 +115,108 @@
   updateScrollAffordance();
   window.addEventListener("resize", updateScrollAffordance);
   window.addEventListener("load", updateScrollAffordance);
+
+  /* ---------- Played terminal sessions ----------
+     The markup contains the COMPLETE session (static-complete without JS, and
+     under prefers-reduced-motion). With JS + motion, the session is hidden and
+     replayed: command lines type themselves, output lines print in order. */
+  var players = Array.prototype.slice.call(document.querySelectorAll(".term-play"));
+  players.forEach(function (panel) {
+    var pre = panel.querySelector("pre");
+    if (!pre) return;
+    var lines = Array.prototype.slice.call(pre.querySelectorAll(".tp-line"));
+    if (!lines.length) return;
+    var replayBtn = panel.querySelector(".term-play__replay");
+
+    if (reduceMotion || !("IntersectionObserver" in window)) {
+      if (replayBtn) replayBtn.hidden = true;
+      return;
+    }
+
+    var body = panel.querySelector(".terminal-panel__body");
+    if (body) body.style.minHeight = body.offsetHeight + "px";
+
+    var caret = document.createElement("span");
+    caret.className = "tp-caret";
+    var runToken = 0;
+
+    lines.forEach(function (l) {
+      if (l.hasAttribute("data-cmd")) l.dataset.full = l.textContent;
+    });
+
+    function hideAll() {
+      lines.forEach(function (l) {
+        l.hidden = true;
+        if (l.hasAttribute("data-cmd")) l.textContent = "";
+      });
+    }
+
+    function play() {
+      var token = ++runToken;
+      hideAll();
+      if (replayBtn) replayBtn.hidden = true;
+      var i = 0;
+
+      function next() {
+        if (token !== runToken) return;
+        if (i >= lines.length) {
+          if (caret.parentNode) caret.parentNode.removeChild(caret);
+          if (replayBtn) replayBtn.hidden = false;
+          return;
+        }
+        var line = lines[i++];
+        line.hidden = false;
+        if (line.hasAttribute("data-cmd")) {
+          var full = line.dataset.full || "";
+          var pos = 0;
+          line.appendChild(caret);
+          (function typeChar() {
+            if (token !== runToken) return;
+            if (pos < full.length) {
+              pos += 1;
+              line.textContent = full.slice(0, pos);
+              line.appendChild(caret);
+              window.setTimeout(typeChar, 24 + Math.floor(18 * ((pos * 7) % 5) / 5));
+            } else {
+              window.setTimeout(next, 320);
+            }
+          })();
+        } else {
+          window.setTimeout(next, line.textContent.trim() === "" ? 30 : 90);
+        }
+      }
+      next();
+    }
+
+    var seen = false;
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting && !seen) {
+          seen = true;
+          obs.unobserve(panel);
+          window.setTimeout(play, 350);
+        }
+      });
+    }, { threshold: 0.35 });
+    obs.observe(panel);
+
+    if (replayBtn) replayBtn.addEventListener("click", play);
+  });
+
+  /* ---------- Command anatomy: hover/focus a part, its legend card lifts ---------- */
+  var anatomies = Array.prototype.slice.call(document.querySelectorAll(".anatomy"));
+  anatomies.forEach(function (root) {
+    var all = Array.prototype.slice.call(root.querySelectorAll("[data-part]"));
+    function activate(part) {
+      all.forEach(function (el) {
+        el.classList.toggle("is-active", part !== null && el.getAttribute("data-part") === part);
+      });
+    }
+    all.forEach(function (el) {
+      ["mouseenter", "focus", "click"].forEach(function (ev) {
+        el.addEventListener(ev, function () { activate(el.getAttribute("data-part")); });
+      });
+    });
+    root.addEventListener("mouseleave", function () { activate(null); });
+  });
 })();

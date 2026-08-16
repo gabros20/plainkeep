@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script>document.documentElement.classList.add('js');</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>plainkeep for AI agents — same door, same rules</title>
+<meta name="description" content="Any capable AI agent can drive plainkeep: a documented contract (AGENTS.md), JSON answers with a fixed shape, exit codes as a protocol, a generated command manifest, and an MCP server — all behind the same safety rules you have.">
+<link rel="canonical" href="https://plainkeep.vercel.app/agents">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://plainkeep.vercel.app/agents">
+<meta property="og:title" content="plainkeep for AI agents — same door, same rules">
+<meta property="og:description" content="A neutral, documented surface any AI assistant can drive: JSON answers, exit-code protocol, a generated command manifest, MCP — and never more power than you have.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="plainkeep for AI agents — same door, same rules">
+<meta name="twitter:description" content="A neutral, documented surface any AI assistant can drive — and never more power than you have.">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="visually-hidden" href="#main">Skip to content</a>
+
+<nav class="prompt-gutter" aria-label="Section progress">
+  <div class="prompt-gutter__line" aria-hidden="true"><div class="prompt-gutter__fill" id="gutter-fill"></div></div>
+  <div class="prompt-gutter__rail" id="gutter-rail"></div>
+  <div class="prompt-gutter__markers">
+    <button class="prompt-marker" data-target="intro" aria-label="Jump to top">❯</button>
+    <button class="prompt-marker" data-target="contract" aria-label="Jump to The contract">❯</button>
+    <button class="prompt-marker" data-target="teach" aria-label="Jump to Refusals teach">❯</button>
+    <button class="prompt-marker" data-target="mcp" aria-label="Jump to MCP">❯</button>
+    <button class="prompt-marker" data-target="which" aria-label="Jump to Which agents">❯</button>
+    <button class="prompt-marker" data-target="rules" aria-label="Jump to The rules agents follow">❯</button>
+    <button class="prompt-marker" data-target="proof" aria-label="Jump to Proof">❯</button>
+  </div>
+</nav>
+
+<div class="page">
+
+  <header class="site-header" id="site-header">
+    <div class="container site-header__bar">
+      <a class="site-header__brand" href="/">
+        <svg class="site-header__logo" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="5.5" y="5.5" width="53" height="53" rx="14" fill="none" class="lg-frame" stroke-width="5.5"/>
+          <rect x="36" y="17" width="7.5" height="30" rx="3.75" class="lg-slot"/>
+        </svg>
+        plainkeep
+      </a>
+      <nav class="site-header__nav" aria-label="Primary">
+        <a href="/how-it-works">How it works</a>
+        <a href="/features">Features</a>
+        <a href="/agents" aria-current="page">For AI agents</a>
+        <a href="https://github.com/gabros20/plainkeep/tree/main/docs">Docs</a>
+      </nav>
+      <div class="site-header__actions">
+        <a class="site-header__github" href="https://github.com/gabros20/plainkeep">GitHub</a>
+        <a class="btn btn-primary" href="/#quickstart">Install</a>
+      </div>
+    </div>
+    <div class="mobile-anchor-nav-wrap">
+      <nav class="mobile-anchor-nav" aria-label="Sections">
+        <a href="#contract">The contract</a>
+        <a href="#teach">Refusals teach</a>
+        <a href="#mcp">MCP</a>
+        <a href="#which">Which agents</a>
+        <a href="#rules">The rules</a>
+        <a href="#proof">Proof</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ================= INTRO ================= -->
+    <section class="page-hero" id="intro">
+      <div class="container">
+        <div class="reveal">
+          <span class="page-hero__kicker">for AI agents</span>
+          <h1 class="t-display-xl">Your AI can run it too. With exactly your permissions.</h1>
+          <p class="t-body-lg page-hero__lede">Point any capable agent — Claude Code, Codex, anything that can read a file and run a command — at your vault, and it drives the same system through the same door. It reads a written contract, gets machine-precise answers, and hits the same safety rules you do. An assistant is a guest here, never a superuser.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= THE CONTRACT ================= -->
+    <section class="section" id="contract" style="padding-top:2rem;">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">Everything an agent needs is written down.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Three artifacts make the system drivable without guessing. <code class="t-mono-sm">AGENTS.md</code> is the operating contract — what an agent may do and how. <code class="t-mono-sm">plainkeep.json</code> is the generated manifest of every command: its arguments, its risk class, its exact subcommand grammar. And every command answers in JSON with one fixed shape when asked with <code class="t-mono-sm">--json</code>, plus a five-value exit-code protocol. No prose-parsing, no screen-scraping, no vendor SDK.</p>
+        </div>
+
+        <div class="panels-2 reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>plainkeep.json — one command, trimmed</div>
+            <div class="terminal-panel__body">
+<pre>{<span class="tk-key">"verb"</span>:<span class="tk-str">"task"</span>, <span class="tk-key">"risk"</span>:<span class="tk-str">"safe_write"</span>, <span class="tk-key">"dry_run"</span>:<span class="tk-ok">true</span>,
+ <span class="tk-key">"actions"</span>:[
+   {<span class="tk-key">"name"</span>:<span class="tk-str">"add"</span>,  <span class="tk-key">"args"</span>:[{<span class="tk-key">"name"</span>:<span class="tk-str">"title"</span>,<span class="tk-key">"required"</span>:<span class="tk-ok">true</span>}]},
+   {<span class="tk-key">"name"</span>:<span class="tk-str">"move"</span>, <span class="tk-key">"args"</span>:[
+     {<span class="tk-key">"name"</span>:<span class="tk-str">"id"</span>,<span class="tk-key">"complete"</span>:<span class="tk-str">"task-id"</span>},
+     {<span class="tk-key">"name"</span>:<span class="tk-str">"status"</span>,<span class="tk-key">"enum"</span>:[<span class="tk-str">"inbox"</span>,<span class="tk-str">"active"</span>,<span class="tk-str">"waiting"</span>,<span class="tk-str">"done"</span>]}]},
+   {<span class="tk-key">"name"</span>:<span class="tk-str">"done"</span>, <span class="tk-key">"args"</span>:[{<span class="tk-key">"name"</span>:<span class="tk-str">"id"</span>,<span class="tk-key">"complete"</span>:<span class="tk-str">"task-id"</span>}]}]}</pre>
+            </div>
+          </div>
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>one frozen answer shape</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep task add "Fix the Acme webhook" --json
+{<span class="tk-key">"plainkeep_json"</span>:1,<span class="tk-key">"ok"</span>:<span class="tk-ok">true</span>,<span class="tk-key">"verb"</span>:<span class="tk-str">"task"</span>,
+ <span class="tk-key">"data"</span>:{<span class="tk-key">"id"</span>:<span class="tk-str">"T-20260816-01"</span>,<span class="tk-key">"status"</span>:<span class="tk-str">"active"</span>}}
+
+<span class="tk-dim"># exit codes are the protocol:</span>
+<span class="tk-dim"># 0 ok · 2 usage · 3 needs --yes · 4 not found · 5 denied</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= REFUSALS TEACH ================= -->
+    <section class="section section--term" id="teach">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">Refusals teach. Completion knows your content.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">A refused call is not a dead end — the error carries the exact corrected command, so the agent's next call is right. And the same completion brain your shell uses is queryable: candidate values for any argument, pulled live from your actual notes and tasks. An agent never has to invent a slug and hope.</p>
+        </div>
+
+        <div class="panels-2 reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>the refusal carries the fix</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep backup run --json
+{<span class="tk-key">"plainkeep_json"</span>:1,<span class="tk-key">"ok"</span>:<span class="tk-err">false</span>,<span class="tk-key">"error"</span>:{<span class="tk-key">"code"</span>:3,
+ <span class="tk-key">"message"</span>:<span class="tk-str">"restic backup of the working set needs --yes"</span>,
+ <span class="tk-key">"hint"</span>:<span class="tk-str">"re-run: plainkeep backup run --yes"</span>}}
+
+<span class="tk-dim"># exit 3 — the agent reports to the human and waits.
+# it never pre-appends --yes on its own.</span></pre>
+            </div>
+          </div>
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>ask before guessing</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep complete --json task done
+[{<span class="tk-key">"value"</span>:<span class="tk-str">"T-20260816-01"</span>,<span class="tk-key">"description"</span>:<span class="tk-str">"Fix the Acme webhook"</span>},
+ {<span class="tk-key">"value"</span>:<span class="tk-str">"T-20260814-02"</span>,<span class="tk-key">"description"</span>:<span class="tk-str">"Draft the workshop outline"</span>}]
+
+<span class="tk-dim"># real candidates from the real vault —
+# the same brain tab-completion uses</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= MCP ================= -->
+    <section class="section" id="mcp">
+      <div class="container feature-section__grid">
+        <div class="feature-section__copy reveal">
+          <span class="feature-section__kicker">plainkeep mcp</span>
+          <h2>MCP, generated — not hand-maintained.</h2>
+          <p>For agent hosts that speak MCP, <code>plainkeep mcp</code> is a stateless server whose tool list is generated from the same command manifest — every built-in and every plugin, with schemas and hints, always current. Each tool call shells back through the ordinary command, so the safety rules and the logs stay the single enforcement path. Spawned per session, dies with it; no daemon lingers.</p>
+        </div>
+        <div class="reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>hook up an MCP host</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep mcp --setup
+claude mcp add plainkeep -- /Users/you/.local/bin/plainkeep mcp
+
+<span class="tk-dim"># tools generated from plainkeep.json — every verb,
+# every installed plugin. each call re-enters
+# `plainkeep &lt;verb&gt; --json`: guardrail intact.</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= WHICH AGENTS ================= -->
+    <section class="section" id="which" style="padding-top:0;">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">Bring whichever agent you already use.</h2>
+        </div>
+
+        <div class="agent-table reveal">
+          <table>
+            <thead><tr><th>Agent</th><th>Reads the contract as</th><th>To connect</th></tr></thead>
+            <tbody>
+              <tr><td>Claude Code</td><td><code>CLAUDE.md</code> bridge, or MCP</td><td>run <code>claude</code> from the vault</td></tr>
+              <tr><td>Codex CLI</td><td><code>AGENTS.md</code> (native)</td><td>run it from the vault</td></tr>
+              <tr><td>Any MCP host</td><td>generated tool list</td><td>register <code>plainkeep mcp</code> as stdio</td></tr>
+              <tr><td>Anything else</td><td><code>AGENTS.md</code></td><td>if it can read a file and run a command, it can drive plainkeep</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <p class="t-body-sm agent-note reveal">That's the point of a neutral surface: your workflows belong to the system, not to whichever assistant is fashionable this year. Swap agents; keep everything.</p>
+      </div>
+    </section>
+
+    <!-- ================= THE RULES ================= -->
+    <section class="section" id="rules" style="padding-top:0;">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">The rules agents live by.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">The contract isn't just an API reference — it's an operating discipline. The load-bearing rules, in plain words:</p>
+        </div>
+
+        <div class="door-flow__then reveal" style="max-width: var(--measure); margin-top: 2.5rem;">
+          <div class="door-step"><span class="door-step__n">1</span><span><b>Never invent a command.</b> The manifest is the complete list of what an agent may do. Something missing? It proposes; it doesn't improvise.</span></div>
+          <div class="door-step"><span class="door-step__n">2</span><span><b>Never compose paths by hand.</b> The agent supplies content and judgment; the command computes where things go. No freelance file-writing.</span></div>
+          <div class="door-step"><span class="door-step__n">3</span><span><b>Orient before acting.</b> Read the journal, check status — so two sessions never contradict each other.</span></div>
+          <div class="door-step"><span class="door-step__n">4</span><span><b>Log what you did.</b> One journal line per meaningful action. An action nobody can see didn't happen for the next session.</span></div>
+          <div class="door-step"><span class="door-step__n">5</span><span><b>Drafts, not truth.</b> AI-written notes stay marked draft until the human promotes them.</span></div>
+          <div class="door-step"><span class="door-step__n">6</span><span><b>Never transmit.</b> No emails, no posts, no payments, no deploys. Drafts only; the human sends.</span></div>
+          <div class="door-step"><span class="door-step__n">7</span><span><b>Ask-first actions stay with you.</b> Anything confirm-class — including turning schedules on or off — happens only on your explicit request.</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PROOF ================= -->
+    <section class="section" id="proof" style="padding-top:0;">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">Verified, not hoped.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">The contract was put through an 18-scenario simulation run independently by two different operator models. Both finished 18 of 18 with <strong>zero divergences</strong> — same filing decisions, same refusals, same traversal of the vault. When two different AIs read the same rules and behave identically, the rules are unambiguous.</p>
+          <p class="t-body" style="margin-top:1rem;">There's also <a href="/llms.txt"><code class="t-mono-sm">llms.txt</code></a> — a routed map of the docs for any model that lands here — and the full normative spec in <a href="https://github.com/gabros20/plainkeep/blob/main/docs/machine-contract.md">the machine contract</a>.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= CTA ================= -->
+    <section class="section" style="padding-top:0;">
+      <div class="container">
+        <div class="cta-band reveal">
+          <div>
+            <h2>Install it, then invite your agent in.</h2>
+            <p>Five minutes to a vault; one command to register the MCP server.</p>
+          </div>
+          <div class="cta-band__actions">
+            <a class="btn btn-primary" href="/#quickstart">Install plainkeep</a>
+            <a class="btn btn-secondary" href="https://github.com/gabros20/plainkeep/blob/main/AGENTS.md">Read AGENTS.md</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="site-footer__grid">
+        <div>
+          <span class="site-footer__heading">Explore</span>
+          <ul class="site-footer__list">
+            <li><a href="/how-it-works">How it works</a></li>
+            <li><a href="/features">Features</a></li>
+            <li><a href="/agents">For AI agents</a></li>
+            <li><a href="/#quickstart">Install</a></li>
+          </ul>
+        </div>
+        <div>
+          <span class="site-footer__heading">Docs</span>
+          <ul class="site-footer__list">
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/setup.md">Layered setup</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/terminal-ui.md">The terminal UI</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/architecture.md">Architecture</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/machine-contract.md">Machine contract</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/plugins.md">Plugins</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/README.md">The docs map</a></li>
+            <li><a class="site-footer__llms" href="/llms.txt"><code class="t-mono-sm">llms.txt</code> — the docs, routed for AI agents</a></li>
+          </ul>
+        </div>
+        <div>
+          <span class="site-footer__heading">Project</span>
+          <ul class="site-footer__list">
+            <li><a href="https://github.com/gabros20/plainkeep">GitHub</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/CHANGELOG.md">Changelog</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/DECISIONS.md">Decision log (ADRs)</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/LICENSE">License (MIT)</a></li>
+          </ul>
+          <p class="site-footer__lineage" style="margin-top:1.5rem;">plainkeep is the kit — engine, terminal UI, installer. Your vault is a private copy that pulls improvements without ever exposing a note.</p>
+        </div>
+      </div>
+      <div class="site-footer__bottom t-mono-sm">plainkeep · MIT · gabros20/plainkeep</div>
+    </div>
+  </footer>
+
+</div>
+
+<script src="main.js"></script>
+</body>
+</html>

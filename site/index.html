@@ -5,15 +5,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>plainkeep — a personal operating system in a folder of plaintext</title>
-<meta name="description" content="plainkeep turns a folder of Markdown files into a system that runs your knowledge, tasks, and work — operable by you, by schedules, and by AI agents, all through one command. Plaintext is the truth, git is the spine, nothing leaves your machine without you.">
+<meta name="description" content="plainkeep keeps your notes, tasks, and journal as ordinary text files in one folder you own — and gives you one command that runs them. Use it yourself, let it run on a schedule, or hand it to an AI assistant. No server, no cloud, no lock-in.">
 <link rel="canonical" href="https://plainkeep.vercel.app/">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://plainkeep.vercel.app/">
 <meta property="og:title" content="plainkeep — a personal operating system in a folder of plaintext">
-<meta property="og:description" content="One folder, one command, two faces: humans get a guided terminal UI, agents get a frozen JSON contract. Both pass the same guardrail. No server, no cloud, no lock-in.">
+<meta property="og:description" content="Your notes, tasks, and journal as plain text files you own, run by one command — by you, on a schedule, or by an AI assistant. Same safety rules for all three.">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="plainkeep — a personal operating system in a folder of plaintext">
-<meta name="twitter:description" content="One folder, one command, two faces: humans get a guided terminal UI, agents get a frozen JSON contract. Both pass the same guardrail.">
+<meta name="twitter:description" content="Your notes, tasks, and journal as plain text files you own, run by one command — by you, on a schedule, or by an AI assistant.">
 <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
 <link rel="stylesheet" href="styles.css">
 </head>
@@ -26,15 +26,12 @@
   <div class="prompt-gutter__rail" id="gutter-rail"></div>
   <div class="prompt-gutter__markers">
     <button class="prompt-marker" data-target="hero" aria-label="Jump to top">❯</button>
-    <button class="prompt-marker" data-target="two-faces" aria-label="Jump to Two faces">❯</button>
-    <button class="prompt-marker" data-target="roots" aria-label="Jump to The four roots">❯</button>
-    <button class="prompt-marker" data-target="day" aria-label="Jump to A day in the vault">❯</button>
-    <button class="prompt-marker" data-target="guardrail" aria-label="Jump to The guardrail">❯</button>
-    <button class="prompt-marker" data-target="agents" aria-label="Jump to Agents">❯</button>
-    <button class="prompt-marker" data-target="pipeline" aria-label="Jump to The knowledge pipeline">❯</button>
+    <button class="prompt-marker" data-target="what" aria-label="Jump to What it is">❯</button>
+    <button class="prompt-marker" data-target="door" aria-label="Jump to One door">❯</button>
+    <button class="prompt-marker" data-target="map" aria-label="Jump to Everything it does">❯</button>
+    <button class="prompt-marker" data-target="faces" aria-label="Jump to Humans and agents">❯</button>
     <button class="prompt-marker" data-target="quickstart" aria-label="Jump to Quickstart">❯</button>
-    <button class="prompt-marker" data-target="updates" aria-label="Jump to Staying current">❯</button>
-    <button class="prompt-marker" data-target="positioning" aria-label="Jump to Why plainkeep">❯</button>
+    <button class="prompt-marker" data-target="different" aria-label="Jump to Why plainkeep">❯</button>
     <button class="prompt-marker" data-target="closing" aria-label="Jump to Get started">❯</button>
   </div>
 </nav>
@@ -43,7 +40,7 @@
 
   <header class="site-header" id="site-header">
     <div class="container site-header__bar">
-      <a class="site-header__brand" href="#hero">
+      <a class="site-header__brand" href="/">
         <svg class="site-header__logo" viewBox="0 0 64 64" aria-hidden="true">
           <rect x="5.5" y="5.5" width="53" height="53" rx="14" fill="none" class="lg-frame" stroke-width="5.5"/>
           <rect x="36" y="17" width="7.5" height="30" rx="3.75" class="lg-slot"/>
@@ -51,11 +48,9 @@
         plainkeep
       </a>
       <nav class="site-header__nav" aria-label="Primary">
-        <a href="#two-faces">Two faces</a>
-        <a href="#roots">The roots</a>
-        <a href="#guardrail">Guardrail</a>
-        <a href="#agents">Agents</a>
-        <a href="#quickstart">Quickstart</a>
+        <a href="/how-it-works">How it works</a>
+        <a href="/features">Features</a>
+        <a href="/agents">For AI agents</a>
         <a href="https://github.com/gabros20/plainkeep/tree/main/docs">Docs</a>
       </nav>
       <div class="site-header__actions">
@@ -65,15 +60,11 @@
     </div>
     <div class="mobile-anchor-nav-wrap">
       <nav class="mobile-anchor-nav" aria-label="Sections">
-        <a href="#two-faces">Two faces</a>
-        <a href="#roots">Roots</a>
-        <a href="#day">A day</a>
-        <a href="#guardrail">Guardrail</a>
-        <a href="#agents">Agents</a>
-        <a href="#pipeline">Pipeline</a>
-        <a href="#quickstart">Quickstart</a>
-        <a href="#updates">Updates</a>
-        <a href="#positioning">Why plainkeep</a>
+        <a href="/how-it-works">How it works</a>
+        <a href="/features">Features</a>
+        <a href="/agents">For AI agents</a>
+        <a href="#quickstart">Install</a>
+        <a href="#different">Why plainkeep</a>
       </nav>
     </div>
   </header>
@@ -86,268 +77,167 @@
         <div class="hero">
           <div class="hero__copy reveal">
             <h1 class="t-display-xl">A personal <span class="nowrap-desktop">operating system,</span> in a folder of plaintext.</h1>
-            <p class="t-body-lg hero__subhead">plainkeep turns Markdown files in your own git repo into a system that runs your knowledge, tasks, and work — drivable by you, by schedules, and by AI agents, all through one <code class="t-mono-sm">plainkeep</code> command. No server, no cloud, no lock-in: you can grep your notes or walk away at any time.</p>
+            <p class="t-body-lg hero__subhead">plainkeep keeps your notes, tasks, and journal as ordinary text files in one folder you own — and gives you one command that runs them. Use it yourself, let it run on a schedule, or hand it to an AI assistant. Nothing lives on a server, and nothing leaves your machine without you.</p>
             <div class="hero__install">
               <code id="install-cmd">curl -fsSL https://raw.githubusercontent.com/gabros20/plainkeep/main/script/get -o get.sh &amp;&amp; sh get.sh</code>
               <button type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/gabros20/plainkeep/main/script/get -o get.sh && sh get.sh" aria-label="Copy install command">Copy</button>
             </div>
-            <p class="t-body-sm hero__meta">macOS / Linux · Python 3.10+ + git · zero required deps · MIT. Verify the published hash before running — <a href="https://github.com/gabros20/plainkeep#quick-start">the README shows the ritual</a>.</p>
+            <p class="t-body-sm hero__meta">macOS / Linux · needs only git and Python · free, MIT-licensed. The careful type verifies the download first — <a href="https://github.com/gabros20/plainkeep#quick-start">the README shows how</a>.</p>
             <div class="hero__ctas">
-              <a class="btn btn-primary" href="#quickstart">Get started</a>
-              <a class="btn btn-secondary" href="https://github.com/gabros20/plainkeep/tree/main/docs">Read the docs</a>
+              <a class="btn btn-primary" href="/how-it-works">See how it works</a>
+              <a class="btn btn-secondary" href="/features">Everything it does</a>
             </div>
           </div>
           <div class="hero__panel reveal">
-            <div class="terminal-panel">
-              <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>~/plainkeep — plainkeep ui</div>
+            <div class="terminal-panel term-play">
+              <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>a morning with plainkeep<button type="button" class="term-play__replay" hidden>↺ replay</button></div>
               <div class="terminal-panel__body">
-<pre>┌  <span class="tk-brand">plainkeep</span>  <span class="tk-dim">the guided terminal UI — humans point-and-pick,</span>
-│       <span class="tk-dim">agents use plainkeep &lt;verb&gt; --json</span>
-│
-◇  What do you want to do? <span class="tk-dim">(type to filter)</span>
-│  <span class="tk-brand">＋ Capture a thought</span>       <span class="tk-dim">quick note → inbox</span>
-│  <span class="tk-ok">●</span> orient    <span class="tk-dim">where was I — journal, tasks, inbox, health</span>
-│  <span class="tk-ok">●</span> search    <span class="tk-dim">ranked note hits</span>
-│  <span class="tk-cyan">●</span> task      <span class="tk-dim">list / add / done</span>
-│  <span class="tk-cyan">●</span> wiki      <span class="tk-dim">open · edit · new · backlinks</span>
-│  <span class="tk-cyan">●</span> triage    <span class="tk-dim">propose filing of inbox items</span>
-│  <span class="tk-warn">●</span> share     <span class="tk-dim">capability link — you send it</span>
-│  <span class="tk-dim">…</span>
-│
-<span class="tk-dim">◇  every pick re-enters `plainkeep &lt;verb&gt; --json` — one door</span></pre>
-            </div>
+<pre><span class="tp-line" data-cmd>plainkeep capture "pricing idea from the standup call"</span>
+<span class="tp-line"><span class="tk-ok">✓</span> saved to <span class="tk-str">inbox/</span> — file it later, or let triage propose a home</span>
+<span class="tp-line"> </span>
+<span class="tp-line" data-cmd>plainkeep task add "Fix the Acme webhook"</span>
+<span class="tp-line"><span class="tk-ok">✓</span>  plainkeep task add</span>
+<span class="tp-line">   id      <span class="tk-ok">T-20260816-01</span></span>
+<span class="tp-line">   status  active</span>
+<span class="tp-line"> </span>
+<span class="tp-line" data-cmd>plainkeep search "webhook retries"</span>
+<span class="tp-line">1. <span class="tk-str">wiki/notes/acme-webhook.md#retries</span>  <span class="tk-dim">…exponential backoff caps at…</span></span>
+<span class="tp-line"><span class="tk-dim">ranked hits from your own notes — nothing left your machine</span></span></pre>
+              </div>
             </div>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- ================= TWO FACES ================= -->
-    <section class="section" id="two-faces">
+    <!-- ================= WHAT IT IS ================= -->
+    <section class="section" id="what">
       <div class="container">
         <div class="section-heading reveal">
-          <h2 class="t-display-lg">Two faces. One door.</h2>
-          <p class="t-body" style="margin-top:1.5rem;">Humans get <code class="heading-mono">plainkeep ui</code> — menus and forms generated from the machine contract, nothing to memorize. Agents and scripts get <code class="heading-mono">plainkeep &lt;verb&gt; --json</code> — one frozen envelope and a strict exit-code protocol. Both enter the same dispatcher, so the guardrail and the logs see every action identically. The UI is not a second implementation: it <em>reads the contract and generates itself</em>, so a new verb appears in the menus the moment it exists.</p>
+          <h2 class="t-display-lg">Three plain facts.</h2>
         </div>
 
-        <div class="panels-2 reveal">
-          <div class="terminal-panel">
-            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>the human face — guided</div>
-            <div class="terminal-panel__body">
-<pre>◇  task — pick an action
-│  <span class="tk-cyan">●</span> list   <span class="tk-cyan">●</span> add   <span class="tk-cyan">●</span> show   <span class="tk-cyan">●</span> move   <span class="tk-cyan">●</span> done
-│
-◇  title
-│  Fix the Acme webhook
-│
-<span class="tk-ok">✓</span>  plainkeep task add
-   id      <span class="tk-ok">T-20260726-01</span>
-   status  active
-   title   Fix the Acme webhook</pre>
+        <div class="bento reveal">
+          <div class="bento__cell bento__files">
+            <h3>It's just files.</h3>
+            <p>Everything you keep is a Markdown text file in one folder — we call that folder your <strong>vault</strong>. You can open any of it in any editor, search it with any tool, and take it anywhere. There is no database and no export button, because there is nothing to export.</p>
+            <div class="tree-card">
+<pre><span class="td">your-vault/</span>
+├── <span class="td">wiki/</span>       <span class="tc">what you know</span>
+│   ├── <span class="tf">notes/</span>
+│   ├── <span class="tf">clients/</span>
+│   └── <span class="tf">projects/</span>
+├── <span class="td">tasks/</span>      <span class="tc">what you're doing</span>
+│   ├── <span class="tf">active/</span>
+│   └── <span class="tf">done/</span>
+├── <span class="td">journal/</span>    <span class="tc">what happened, day by day</span>
+├── <span class="td">inbox/</span>      <span class="tc">not filed yet</span>
+└── <span class="td">plugins/</span>    <span class="tc">commands you add</span></pre>
             </div>
           </div>
-          <div class="terminal-panel">
-            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>the agent face — flags + JSON</div>
-            <div class="terminal-panel__body">
-<pre><span class="tk-prompt">$</span> plainkeep task add "Fix the Acme webhook" --json
-{<span class="tk-key">"plainkeep_json"</span>:1,<span class="tk-key">"ok"</span>:<span class="tk-ok">true</span>,<span class="tk-key">"verb"</span>:<span class="tk-str">"task"</span>,
- <span class="tk-key">"data"</span>:{<span class="tk-key">"id"</span>:<span class="tk-str">"T-20260726-01"</span>,<span class="tk-key">"status"</span>:<span class="tk-str">"active"</span>}}
-
-<span class="tk-prompt">$</span> plainkeep backup run --json          <span class="tk-dim"># confirm-class, no --yes</span>
-{<span class="tk-key">"plainkeep_json"</span>:1,<span class="tk-key">"ok"</span>:<span class="tk-err">false</span>,<span class="tk-key">"error"</span>:{<span class="tk-key">"code"</span>:3,
- <span class="tk-key">"message"</span>:<span class="tk-str">"restic backup of the working set needs --yes"</span>,
- <span class="tk-key">"hint"</span>:<span class="tk-str">"re-run: plainkeep backup run --yes"</span>}}</pre>
-            </div>
+          <div class="bento__cell">
+            <h3>One command runs it.</h3>
+            <p>You never memorize where things go or how they're formatted. You say <em>what</em> — <code>plainkeep capture "an idea"</code> — and the command does the filing, the naming, and the linking. Every change is recorded with git, so any mistake is one step to undo.</p>
+          </div>
+          <div class="bento__cell">
+            <h3>Rules keep it safe.</h3>
+            <p>Before anything runs, a safety check classifies it: reads run freely, writes stay inside your folders, anything risky asks you first, and some things — like sending data anywhere — are simply refused. The same rules apply to you, to the schedule, and to any AI you invite in.</p>
           </div>
         </div>
 
-        <div class="exit-strip reveal" role="list" aria-label="Exit code protocol">
-          <span role="listitem"><b>0</b> ok</span>
-          <span role="listitem"><b>2</b> usage</span>
-          <span role="listitem"><b>3</b> needs <code class="t-mono-sm">--yes</code></span>
-          <span role="listitem"><b>4</b> not found</span>
-          <span role="listitem"><b>5</b> denied</span>
-        </div>
-        <p class="t-body pull-line reveal">A refusal is not a dead end — the error carries the exact corrected command. Refusals teach.</p>
+        <p class="t-heading pull-line reveal">Plaintext is the truth. Git is the undo button. Everything else is rebuildable.</p>
       </div>
     </section>
 
-    <!-- ================= THE FOUR ROOTS ================= -->
-    <section class="section" id="roots">
+    <!-- ================= ONE DOOR ================= -->
+    <section class="section" id="door">
       <div class="container">
         <div class="section-heading reveal">
-          <h2 class="t-display-lg">Four roots. Separated on purpose.</h2>
-          <p class="t-body" style="margin-top:1.5rem;">Siblings sit <em>next to</em> <code class="t-mono-sm">~/plainkeep</code>, never inside it. The knowledge repo stays small, plaintext, and fast — and the safety wall is rooted in this layout. Inside <code class="t-mono-sm">~/plainkeep</code>, everything is a Markdown file; indexes and embeddings are disposable caches rebuilt from the text.</p>
+          <h2 class="t-display-lg">Everyone comes through the same door.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Whether you pick from a menu, type a command, an item on the schedule fires, or an AI assistant acts on your behalf — it all becomes the same <code class="t-mono-sm">plainkeep</code> call, passes the same safety check, and lands in your files the same way. There is no side entrance.</p>
         </div>
 
-        <div class="roots-grid reveal">
-          <div class="root-card root-card--primary">
-            <span class="root-card__path t-mono-sm">~/plainkeep</span>
-            <p class="root-card__desc">Knowledge (wiki), tasks, journal, the verbs, your plugins.</p>
-            <span class="root-card__git">✅ your own git repo</span>
+        <div class="door-flow reveal">
+          <div class="door-flow__who" aria-label="Who can drive it">
+            <div class="door-chip"><b>You, guided</b><span>point-and-pick menus (<code class="t-mono-sm">plainkeep ui</code>)</span></div>
+            <div class="door-chip"><b>You, typing</b><span>one short command per action</span></div>
+            <div class="door-chip"><b>The schedule</b><span>your day opens &amp; closes on time</span></div>
+            <div class="door-chip"><b>An AI assistant</b><span>same commands, your permissions</span></div>
           </div>
-          <div class="root-card">
-            <span class="root-card__path t-mono-sm">~/work</span>
-            <p class="root-card__desc">Code — each project its own repo (<code class="t-mono-sm">products/ labs/ tools/ clients/</code>).</p>
-            <span class="root-card__git">each repo separately</span>
+          <div class="door-flow__door">
+            <svg viewBox="0 0 64 64" aria-hidden="true">
+              <rect x="5.5" y="5.5" width="53" height="53" rx="14" fill="none" class="lg-frame" stroke-width="5.5"/>
+              <rect x="36" y="17" width="7.5" height="30" rx="3.75" class="lg-slot"/>
+            </svg>
+            <div class="door-flow__door-cmd">plainkeep &lt;verb&gt;</div>
+            <div class="door-flow__door-note">the one door</div>
           </div>
-          <div class="root-card">
-            <span class="root-card__path t-mono-sm">~/files</span>
-            <p class="root-card__desc">Binary assets — client docs, PDFs, datasets.</p>
-            <span class="root-card__git">restic backup, not git</span>
-          </div>
-          <div class="root-card">
-            <span class="root-card__path t-mono-sm">~/dotfiles</span>
-            <p class="root-card__desc">Machine config; puts <code class="t-mono-sm">plainkeep</code> on PATH.</p>
-            <span class="root-card__git">✅ separately</span>
+          <div class="door-flow__then" aria-label="What happens next">
+            <div class="door-step"><span class="door-step__n">1</span><span><b>Safety check</b> — is this a read, a safe write, or something that needs your yes?</span></div>
+            <div class="door-step"><span class="door-step__n">2</span><span><b>The work</b> — files created, edited, or found, in the right place, in the right format.</span></div>
+            <div class="door-step"><span class="door-step__n">3</span><span><b>A git snapshot</b> — every change is recorded and one step to undo.</span></div>
           </div>
         </div>
 
-        <p class="t-heading pull-line reveal">Plaintext is the truth. Git is the spine. Everything else is a rebuildable cache.</p>
+        <p class="t-body pull-line reveal">An AI assistant never gets more power than you have — <a href="/agents">same door, same rules, same log</a>.</p>
       </div>
     </section>
 
-    <!-- ================= A DAY IN THE VAULT ================= -->
-    <section class="section" id="day">
+    <!-- ================= FEATURE MAP ================= -->
+    <section class="section" id="map">
       <div class="container">
         <div class="section-heading reveal">
-          <h2 class="t-display-lg">The daily rhythm is five verbs.</h2>
-          <p class="t-body" style="margin-top:1.5rem;"><code class="t-mono-sm">start → capture / triage / task → close</code>, with <code class="t-mono-sm">week</code> on Fridays. You never memorize paths or formats — the verb owns placement; you provide the content. Everything else is discoverable through <code class="t-mono-sm">plainkeep help</code>, tab-completion fed by your actual note slugs and task IDs, or the guided UI.</p>
+          <h2 class="t-display-lg">Everything it does.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Each card is one capability. All of them are explained, with real commands, on <a href="/features">the features page</a>.</p>
         </div>
 
-        <div class="terminal-panel session-panel reveal">
-          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>a day in the vault</div>
-          <div class="terminal-panel__body">
-<pre><span class="tk-prompt">$</span> plainkeep start                             <span class="tk-dim"># morning: today's journal, carry-forward, dashboard</span>
-<span class="tk-prompt">$</span> plainkeep capture "RRF beats naive hybrid"  <span class="tk-dim"># a thought → inbox/ (zero decisions)</span>
-<span class="tk-prompt">$</span> plainkeep triage                            <span class="tk-dim"># proposes: wiki note? task? — you approve</span>
-<span class="tk-prompt">$</span> plainkeep search "ranking fusion"           <span class="tk-dim"># ranked file#heading hits with snippets</span>
-<span class="tk-prompt">$</span> plainkeep open rrf                          <span class="tk-dim"># one resolver: task id → note slug → asset → search</span>
-<span class="tk-prompt">$</span> plainkeep close                             <span class="tk-dim"># evening: summarize the day, flag loose ends</span></pre>
-          </div>
+        <div class="feature-map reveal">
+          <a href="/features#schedule"><span class="feature-map__name">Your day, on schedule</span><span class="feature-map__desc">The day opens and closes by itself — at times you choose.</span><span class="feature-map__verb">plainkeep job</span></a>
+          <a href="/features#capture"><span class="feature-map__name">Quick capture</span><span class="feature-map__desc">A thought lands safely in seconds. Filing comes later.</span><span class="feature-map__verb">plainkeep capture</span></a>
+          <a href="/features#tasks"><span class="feature-map__name">Tasks</span><span class="feature-map__desc">A to-do list kept as files — move one, and its status moves.</span><span class="feature-map__verb">plainkeep task</span></a>
+          <a href="/features#wiki"><span class="feature-map__name">A personal wiki</span><span class="feature-map__desc">Notes that link to each other, so knowledge stays findable.</span><span class="feature-map__verb">plainkeep wiki</span></a>
+          <a href="/features#search"><span class="feature-map__name">Search</span><span class="feature-map__desc">Find anything you've ever kept — by keyword or by meaning.</span><span class="feature-map__verb">plainkeep search</span></a>
+          <a href="/features#documents"><span class="feature-map__name">Documents in</span><span class="feature-map__desc">PDFs, audio, and images become searchable, labeled notes.</span><span class="feature-map__verb">plainkeep files</span></a>
+          <a href="/features#bookmarks"><span class="feature-map__name">Save links</span><span class="feature-map__desc">Articles saved readable — before the internet loses them.</span><span class="feature-map__verb">plainkeep bookmark</span></a>
+          <a href="/features#backup"><span class="feature-map__name">Backup &amp; share</span><span class="feature-map__desc">Encrypted off-machine copies; sharing links that expire.</span><span class="feature-map__verb">plainkeep backup</span></a>
+          <a href="/features#plugins"><span class="feature-map__name">Your own commands</span><span class="feature-map__desc">Add abilities in minutes — updates never overwrite them.</span><span class="feature-map__verb">plainkeep new verb</span></a>
+          <a href="/features#ui"><span class="feature-map__name">The guided menu</span><span class="feature-map__desc">Drive everything by picking, not memorizing.</span><span class="feature-map__verb">plainkeep ui</span></a>
+          <a href="/features#health"><span class="feature-map__name">Health &amp; updates</span><span class="feature-map__desc">One command says what's wrong and the exact fix.</span><span class="feature-map__verb">plainkeep doctor</span></a>
+          <a href="/agents"><span class="feature-map__name">AI assistants</span><span class="feature-map__desc">Any capable agent can drive it — behind the same rules.</span><span class="feature-map__verb">plainkeep mcp</span></a>
         </div>
-
-        <div class="verb-groups reveal">
-          <table>
-            <thead><tr><th>Group</th><th>Verbs</th></tr></thead>
-            <tbody>
-              <tr><td>Flow</td><td><code>capture · triage · start · close · week</code></td></tr>
-              <tr><td>Knowledge</td><td><code>search · open · wiki · bookmark · enrich · organize</code></td></tr>
-              <tr><td>Tasks</td><td><code>task</code> <span class="tk-note">— folder = status: inbox / active / waiting / done</span></td></tr>
-              <tr><td>Work</td><td><code>new · repo · archive · files · sweep</code></td></tr>
-              <tr><td>Business</td><td><code>invoice</code> <span class="tk-note">(draft only)</span> <code>· share</code> <span class="tk-note">(capability links)</span></td></tr>
-              <tr><td>Jobs</td><td><code>job</code> <span class="tk-note">— schedule the nightly verbs</span></td></tr>
-              <tr><td>System</td><td><code>status · orient · doctor · setup · backup · index · models · plugin · ui · help</code></td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="t-body-sm verb-groups__note reveal">The verb list is generated, not maintained — <code class="t-mono-sm">plainkeep.json</code> describes the whole surface, and every new verb (or installed plugin) appears in <code class="t-mono-sm">help</code>, completion, the UI, and MCP automatically.</p>
       </div>
     </section>
 
-    <!-- ================= GUARDRAIL ================= -->
-    <section class="section" id="guardrail">
+    <!-- ================= HUMANS / AGENTS ================= -->
+    <section class="section section--term" id="faces">
       <div class="container">
         <div class="section-heading reveal">
-          <h2 class="t-display-lg">Every call passes the same wall.</h2>
-          <p class="t-body" style="margin-top:1.5rem;">Before any verb runs, the guardrail classifies it — yours, a cron job's, a plugin's, or an agent's. New and untrusted verbs default to <code class="t-mono-sm">confirm</code>. It's all git underneath, so even a mistaken write is one <code class="t-mono-sm">git revert</code> away.</p>
+          <h2 class="t-display-lg">Built for people. Ready for agents.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">The same system has two faces. You get menus and short commands designed to be guessable. Software — schedules, scripts, AI assistants — gets precise, machine-readable answers. Both are the same door in different clothes.</p>
         </div>
 
-        <div class="risk-table reveal">
-          <table>
-            <thead><tr><th>Class</th><th>Meaning</th></tr></thead>
-            <tbody>
-              <tr><td><span class="pill pill--read">read</span></td><td>pure read — runs freely, even unattended</td></tr>
-              <tr><td><span class="pill pill--safe">safe_write</span></td><td>writes inside the roots — every change is a revertible git diff</td></tr>
-              <tr><td><span class="pill pill--draft">draft_only</span></td><td>produces a draft (e.g. <code class="t-mono-sm">invoice</code>) — the system never transmits</td></tr>
-              <tr><td><span class="pill pill--confirm">confirm</span></td><td>needs an explicit <code class="t-mono-sm">--yes</code> — exit 3 with the exact re-run when missing</td></tr>
-              <tr><td><span class="pill pill--deny">deny</span></td><td>always refused: force-push, <code class="t-mono-sm">rm -rf</code>, secrets, paths outside the wall</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <p class="t-body pull-line reveal"><code class="heading-mono">--dry-run</code> on any mutating verb prints what would happen and writes nothing — it counts as a read, so even confirm-class verbs are explorable without <code class="heading-mono">--yes</code>.</p>
-      </div>
-    </section>
-
-    <!-- ================= AGENTS ================= -->
-    <section class="section" id="agents">
-      <div class="container">
-        <div class="section-heading reveal">
-          <h2 class="t-display-lg">Any agent. Same door, same wall.</h2>
-          <p class="t-body" style="margin-top:1.5rem;">Point any capable agent at <code class="t-mono-sm">~/plainkeep</code> and it drives the same system. It reads <code class="t-mono-sm">AGENTS.md</code> (the open contract standard) and the <code class="t-mono-sm">operate-plainkeep</code> skill; it parses the generated <code class="t-mono-sm">plainkeep.json</code> — every verb's args, schemas, risk class, per-action grammar, completion providers; and for MCP hosts, <code class="t-mono-sm">plainkeep mcp</code> is a stateless stdio server whose tool list is generated from the same contract. An agent never gets more power than you do.</p>
-        </div>
-
-        <div class="panels-2 reveal">
-          <div class="terminal-panel">
-            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>plainkeep.json — one verb, trimmed</div>
-            <div class="terminal-panel__body">
-<pre>{<span class="tk-key">"verb"</span>:<span class="tk-str">"task"</span>, <span class="tk-key">"risk"</span>:<span class="tk-str">"safe_write"</span>, <span class="tk-key">"group"</span>:<span class="tk-str">"TASKS"</span>,
- <span class="tk-key">"dry_run"</span>:<span class="tk-ok">true</span>,
- <span class="tk-key">"actions"</span>:[
-   {<span class="tk-key">"name"</span>:<span class="tk-str">"add"</span>,  <span class="tk-key">"args"</span>:[{<span class="tk-key">"name"</span>:<span class="tk-str">"title"</span>,<span class="tk-key">"required"</span>:<span class="tk-ok">true</span>}]},
-   {<span class="tk-key">"name"</span>:<span class="tk-str">"move"</span>, <span class="tk-key">"args"</span>:[
-     {<span class="tk-key">"name"</span>:<span class="tk-str">"id"</span>,<span class="tk-key">"complete"</span>:<span class="tk-str">"task-id"</span>},
-     {<span class="tk-key">"name"</span>:<span class="tk-str">"status"</span>,<span class="tk-key">"enum"</span>:[<span class="tk-str">"inbox"</span>,<span class="tk-str">"active"</span>,<span class="tk-str">"waiting"</span>,<span class="tk-str">"done"</span>]}]},
-   {<span class="tk-key">"name"</span>:<span class="tk-str">"done"</span>, <span class="tk-key">"args"</span>:[{<span class="tk-key">"name"</span>:<span class="tk-str">"id"</span>,<span class="tk-key">"complete"</span>:<span class="tk-str">"task-id"</span>}]}]}</pre>
-            </div>
+        <div class="split-doors reveal">
+          <div class="split-door split-door--paper">
+            <span class="split-door__kicker">for you</span>
+            <h3>Nothing to memorize.</h3>
+            <p>Menus generated from the tool itself, tab-completion that knows your actual notes, and a <code>--dry-run</code> switch that shows what would happen without doing it. If you get a command wrong, the refusal tells you the exact corrected command.</p>
+<pre>◇  What do you want to do?
+│  ＋ Capture a thought
+│  ● search — find a note
+│  ● task — list / add / done
+│  ● wiki — open · new · links</pre>
+            <a class="split-door__link" href="/how-it-works">How the command line works →</a>
           </div>
-          <div class="terminal-panel">
-            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>hook up an MCP host</div>
-            <div class="terminal-panel__body">
-<pre><span class="tk-prompt">$</span> plainkeep mcp --setup
-claude mcp add plainkeep -- /Users/you/plainkeep/plainkeep mcp
-
-<span class="tk-dim"># stateless stdio server — spawned per session, dies with it.</span>
-<span class="tk-dim"># tool list generated from plainkeep.json: every verb + every</span>
-<span class="tk-dim"># installed plugin, with schemas and hints. each tool call</span>
-<span class="tk-dim"># shells back through `plainkeep &lt;verb&gt; --json` — guardrail intact.</span></pre>
-            </div>
+          <div class="split-door split-door--term">
+            <span class="split-door__kicker">for AI assistants</span>
+            <h3>Same rules as you.</h3>
+            <p>Every command can answer in JSON with a fixed shape, exit codes form a protocol, and a generated contract file describes every command an agent may use. An assistant can act for you — but it can't do anything you couldn't.</p>
+<pre><span class="tk-prompt">$</span> plainkeep task add "Fix the webhook" --json
+{"plainkeep_json":1,"ok":<span class="tk-ok">true</span>,"verb":"task",
+ "data":{"id":"T-20260816-01","status":"active"}}</pre>
+            <a class="split-door__link" href="/agents">The agent contract →</a>
           </div>
         </div>
-
-        <div class="agent-table reveal">
-          <table>
-            <thead><tr><th>Agent</th><th>Reads the contract as</th><th>Point it at <code>~/plainkeep</code></th></tr></thead>
-            <tbody>
-              <tr><td>Claude Code</td><td><code>CLAUDE.md</code> bridge, or <code>plainkeep mcp</code></td><td>run <code>claude</code> from <code>~/plainkeep</code></td></tr>
-              <tr><td>Codex CLI</td><td><code>AGENTS.md</code> (native)</td><td>run from <code>~/plainkeep</code></td></tr>
-              <tr><td>Grok CLI</td><td><code>AGENTS.md</code> + <code>skills/</code></td><td>run in <code>~/plainkeep</code></td></tr>
-              <tr><td>Any MCP host</td><td>tool list from <code>plainkeep.json</code></td><td>register <code>plainkeep mcp</code> as stdio</td></tr>
-              <tr><td>Anything else</td><td><code>AGENTS.md</code></td><td>can read a file + run a command? it can drive plainkeep</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p class="t-body-sm agent-note reveal">Verified, not hoped: an 18-scenario simulation run by two different operator models ended 18/18 for both with <b>zero divergences</b> — same filing, same refusals, same traversal. The contract is unambiguous.</p>
-      </div>
-    </section>
-
-    <!-- ================= KNOWLEDGE PIPELINE ================= -->
-    <section class="section" id="pipeline">
-      <div class="container">
-        <div class="section-heading reveal">
-          <h2 class="t-display-lg">Artifacts in. Honest knowledge out.</h2>
-          <p class="t-body" style="margin-top:1.5rem;">PDFs, recordings, screenshots, and URLs become searchable, linked, <em>provenance-labeled</em> notes. Extraction is tiered and local — each format tries the best locally available tool and degrades gracefully. A model may propose, rank, or label; it may never directly write "truth" into your vault.</p>
-        </div>
-
-        <div class="terminal-panel session-panel reveal">
-          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>the pipeline</div>
-          <div class="terminal-panel__body">
-<pre><span class="tk-prompt">$</span> plainkeep files ingest talk.pdf --research --extract  <span class="tk-dim"># file it + extract text → a DERIVED note</span>
-<span class="tk-prompt">$</span> plainkeep files distill talk                          <span class="tk-dim"># compile concept notes (drafts) from the extract</span>
-<span class="tk-prompt">$</span> plainkeep organize                                    <span class="tk-dim"># scan for links/dupes/fixes → proposals, zero LLM writes</span>
-<span class="tk-prompt">$</span> plainkeep organize review                             <span class="tk-dim"># page through each proposed op with its exact diff</span>
-<span class="tk-prompt">$</span> plainkeep organize apply --yes                        <span class="tk-dim"># replay ONLY what you approved — one git commit per op</span></pre>
-          </div>
-        </div>
-
-        <div class="planes reveal">
-          <div class="plane-card"><span class="plane-card__name t-mono-sm">human</span><p>Notes you wrote. The default author; what search trusts most.</p></div>
-          <div class="plane-card"><span class="plane-card__name t-mono-sm">derived</span><p>Machine extractions — labeled with <code class="t-mono-sm">derived_from</code>, <code class="t-mono-sm">source_sha256</code>, and the tool that made them.</p></div>
-          <div class="plane-card"><span class="plane-card__name t-mono-sm">agent</span><p>Model-written drafts — gated as <code class="t-mono-sm">status: draft</code> until <em>you</em> promote them in triage. Machine material can never quietly become truth.</p></div>
-        </div>
-
-        <p class="t-body pull-line reveal">Three local search stages find it all again: keyword + wikilink graph out of the box; local vectors and reranking opt-in. The index is disposable — <code class="heading-mono">rm -rf .index &amp;&amp; plainkeep index</code> rebuilds it from the text.</p>
       </div>
     </section>
 
@@ -355,53 +245,27 @@ claude mcp add plainkeep -- /Users/you/plainkeep/plainkeep mcp
     <section class="section" id="quickstart">
       <div class="container">
         <div class="section-heading reveal">
-          <h2 class="t-display-lg">Template to vault in five minutes.</h2>
-          <p class="t-body" style="margin-top:1.5rem;">The repo is a <b>template, not your data</b>. The installer clones your own copy to <code class="t-mono-sm">~/plainkeep</code>, wires the machine, and never pushes anywhere. Needs macOS or Linux, <code class="t-mono-sm">git</code>, Python 3.10+ — nothing else is required.</p>
+          <h2 class="t-display-lg">Installed in five minutes.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">The installer creates your own private vault, wires your machine, and never sends anything anywhere. A guided first-run asks a few questions — including when your day should start and close — with safe defaults everywhere. Needs macOS or Linux, <code class="t-mono-sm">git</code>, and Python 3.10+.</p>
         </div>
 
         <div class="terminal-panel quickstart__session reveal">
-          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>quickstart session</div>
+          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>quickstart</div>
           <div class="terminal-panel__body">
             <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">curl -fsSL https://raw.githubusercontent.com/gabros20/plainkeep/main/script/get -o get.sh</span></span>
-            <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">shasum -a 256 get.sh</span>   <span class="qs__comment"># compare against script/get.sh.sha256 — read it, then run it</span></span>
-            <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">sh get.sh</span>              <span class="qs__comment"># lean vault at ~/plainkeep, non-interactive, no sudo</span></span>
-            <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">plainkeep setup --wizard</span>     <span class="qs__comment"># guided first-run: skeleton + terminal UI on, heavy layers off</span></span>
+            <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">shasum -a 256 get.sh</span>   <span class="qs__comment"># optional: verify against the published hash, read it first</span></span>
+            <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">sh get.sh</span>              <span class="qs__comment"># your private vault + the engine, no sudo</span></span>
+            <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">plainkeep setup --wizard</span>     <span class="qs__comment"># guided first-run: schedule on, heavy extras off</span></span>
             <span class="qs__line"><span class="tk-prompt">$</span><span class="qs__cmd">plainkeep ui</span>                 <span class="qs__comment"># point-and-pick from here</span></span>
           </div>
         </div>
 
-        <p class="t-body-sm quickstart__note reveal">Kick the tyres first: <code class="t-mono-sm">sh get.sh --demo</code> installs a throwaway vault with example notes into a tmp dir — one <code class="t-mono-sm">rm -rf</code> removes it completely. Semantic search, local models, backups, and scheduled jobs are opt-in layers: <code class="t-mono-sm">plainkeep setup</code> is the dashboard, <code class="t-mono-sm">plainkeep setup &lt;layer&gt; --yes</code> advances one, <code class="t-mono-sm">--dry-run</code> previews anything.</p>
+        <p class="t-body-sm quickstart__note reveal">Just looking? <code class="t-mono-sm">sh get.sh --demo</code> installs a throwaway vault with example notes into a temp folder — one <code class="t-mono-sm">rm -rf</code> removes it completely. Semantic search, local AI models, and backups are optional layers you can switch on any time with <code class="t-mono-sm">plainkeep setup</code>.</p>
       </div>
     </section>
 
-    <!-- ================= STAYING CURRENT ================= -->
-    <section class="section" id="updates">
-      <div class="container">
-        <div class="section-heading reveal">
-          <h2 class="t-display-lg">Engine updates flow. Your notes never move.</h2>
-          <p class="t-body" style="margin-top:1.5rem;"><code class="heading-mono">./script/update</code> 3-way-merges <em>only the engine files</em>: unmodified files fast-forward, your local engine patches merge, conflicts get markers, and your wiki, tasks, and journal are never touched. The terminal UI updates the same way — the engine ships the version it expects, and the setup dashboard tells you when a newer binary is pinned and ready.</p>
-        </div>
-
-        <div class="terminal-panel session-panel reveal">
-          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>plainkeep setup — the layer dashboard</div>
-          <div class="terminal-panel__body">
-<pre>setup layers:
-  <span class="tk-ok">✓</span> skeleton    Vault structure         <span class="tk-ok">ready</span>    required  vault skeleton ready
-  <span class="tk-ok">✓</span> search      Semantic search         <span class="tk-ok">ready</span>    optional  semantic search operational
-  <span class="tk-warn">!</span> backups     Durability              <span class="tk-warn">blocked</span>  optional  restic is required
-    <span class="tk-dim">next: install restic: brew install restic</span>
-  <span class="tk-dim">◐</span> models      File-processing / LLM   partial  optional  model layer incomplete
-  <span class="tk-dim">○</span> automation  Schedules               absent   optional  job plists not rendered
-  <span class="tk-dim">◐</span> ui          Terminal UI             partial  optional  <span class="tk-warn">update available: 0.1.1 → 0.1.2</span>
-    <span class="tk-dim">next: plainkeep setup ui --yes</span></pre>
-          </div>
-        </div>
-        <p class="t-body-sm reveal" style="margin-top:1.5rem; max-width: var(--measure);">The <code class="t-mono-sm">ui</code> layer downloads a self-contained compiled binary (sha256-verified, pinned to the release the engine was tested with) into the vault's own <code class="t-mono-sm">.local/bin/</code> — no Node on your machine, no <code class="t-mono-sm">node_modules</code> in your vault, ever.</p>
-      </div>
-    </section>
-
-    <!-- ================= POSITIONING ================= -->
-    <section class="section" id="positioning">
+    <!-- ================= WHY PLAINKEEP ================= -->
+    <section class="section" id="different">
       <div class="container">
         <div class="section-heading reveal">
           <h2 class="t-display-lg">Keeps the files. Adds the system.</h2>
@@ -410,30 +274,30 @@ claude mcp add plainkeep -- /Users/you/plainkeep/plainkeep mcp
         <div class="positioning-table reveal">
           <table>
             <thead>
-              <tr><th>Instead of…</th><th>The tension</th><th>Where plainkeep sits</th></tr>
+              <tr><th>Instead of…</th><th>The catch</th><th>Where plainkeep sits</th></tr>
             </thead>
             <tbody>
               <tr>
-                <td>cloud PKM apps (Notion &amp; co.)</td>
-                <td>your notes live in someone's database and leave when it does</td>
-                <td>Markdown in your own git repo — grep it, fork it, walk away anytime</td>
+                <td>a notes app in the cloud</td>
+                <td>your notes live in someone else's database, and leave when it does</td>
+                <td>text files in your own git repo — read them, move them, walk away anytime</td>
               </tr>
               <tr>
-                <td>a bare Obsidian vault</td>
-                <td>files but no command surface — every writer (you, cron, agents) improvises placement and format</td>
-                <td>one verb surface owns placement + a guardrail gates every write; Obsidian stays as the free frontend</td>
+                <td>a bare folder of Markdown</td>
+                <td>files but no system — every writer (you, schedules, AI) improvises where things go</td>
+                <td>one command owns the filing, and a safety check gates every write</td>
               </tr>
               <tr>
-                <td>building on one agent CLI</td>
-                <td>your workflows get welded to one vendor's memory and tool primitives</td>
-                <td>an agent-agnostic contract — any CLI or MCP host drives the same verbs behind the same wall</td>
+                <td>building your life around one AI tool</td>
+                <td>your workflows get welded to one vendor's memory and habits</td>
+                <td>a neutral, documented surface — any assistant can drive it, none can own it</td>
               </tr>
             </tbody>
           </table>
         </div>
 
-        <p class="t-body principles-line reveal">The principles it enforces: plaintext is the truth; git is the spine; one door (<code class="t-mono-sm">plainkeep &lt;verb&gt;</code> is the only writer); agents are guests behind the same guardrail; nothing transmits without a human; reversible, zero-install, no server.</p>
-        <p class="t-body-sm no-place-line reveal">Named non-features, so they don't creep in: no server, no daemon, no cloud sync, no proprietary format, no auto-send. The vault plus git history is the whole platform.</p>
+        <p class="t-body principles-line reveal">The promises it keeps: your files stay plain text; every change is one step to undo; one command is the only writer; AI assistants are guests behind the same rules; nothing is ever sent anywhere without you.</p>
+        <p class="t-body-sm no-place-line reveal">And the things it will never grow, on purpose: no server, no background daemon, no cloud sync, no private format, no auto-send.</p>
       </div>
     </section>
 
@@ -446,13 +310,13 @@ claude mcp add plainkeep -- /Users/you/plainkeep/plainkeep mcp
           <rect x="36" y="17" width="7.5" height="30" rx="3.75" class="lg-slot"/>
           </svg>
           <h2 class="t-display-lg">Plaintext outlives every app.</h2>
-          <p class="t-body closing__sub">Every verb guardrail-gated, documented in the machine contract, and covered by offline test suites in CI. MIT-licensed. Your notes stay yours.</p>
+          <p class="t-body closing__sub">Free and MIT-licensed. Every command safety-gated, documented, and covered by offline tests. Your notes stay yours.</p>
           <div class="hero__install closing__install">
             <code>curl -fsSL https://raw.githubusercontent.com/gabros20/plainkeep/main/script/get -o get.sh &amp;&amp; sh get.sh</code>
             <button type="button" data-copy="curl -fsSL https://raw.githubusercontent.com/gabros20/plainkeep/main/script/get -o get.sh && sh get.sh" aria-label="Copy install command">Copy</button>
           </div>
           <div class="closing__ctas">
-            <a class="btn btn-primary" href="#quickstart">Get started</a>
+            <a class="btn btn-primary" href="/how-it-works">See how it works</a>
             <a class="btn btn-secondary" href="https://github.com/gabros20/plainkeep">View on GitHub</a>
           </div>
         </div>
@@ -465,6 +329,15 @@ claude mcp add plainkeep -- /Users/you/plainkeep/plainkeep mcp
     <div class="container">
       <div class="site-footer__grid">
         <div>
+          <span class="site-footer__heading">Explore</span>
+          <ul class="site-footer__list">
+            <li><a href="/how-it-works">How it works</a></li>
+            <li><a href="/features">Features</a></li>
+            <li><a href="/agents">For AI agents</a></li>
+            <li><a href="/#quickstart">Install</a></li>
+          </ul>
+        </div>
+        <div>
           <span class="site-footer__heading">Docs</span>
           <ul class="site-footer__list">
             <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/setup.md">Layered setup</a></li>
@@ -472,7 +345,6 @@ claude mcp add plainkeep -- /Users/you/plainkeep/plainkeep mcp
             <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/architecture.md">Architecture</a></li>
             <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/machine-contract.md">Machine contract</a></li>
             <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/plugins.md">Plugins</a></li>
-            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/backup-and-share.md">Backup &amp; share</a></li>
             <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/README.md">The docs map</a></li>
             <li><a class="site-footer__llms" href="/llms.txt"><code class="t-mono-sm">llms.txt</code> — the docs, routed for AI agents</a></li>
           </ul>
@@ -485,10 +357,7 @@ claude mcp add plainkeep -- /Users/you/plainkeep/plainkeep mcp
             <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/DECISIONS.md">Decision log (ADRs)</a></li>
             <li><a href="https://github.com/gabros20/plainkeep/blob/main/LICENSE">License (MIT)</a></li>
           </ul>
-        </div>
-        <div>
-          <span class="site-footer__heading">The template pattern</span>
-          <p class="site-footer__lineage">plainkeep is the kit — engine, terminal UI, and installer. Your vault is a private copy that tracks it as a fetch-only upstream and pulls engine improvements without ever exposing a note. The tool is public; your operating system is yours.</p>
+          <p class="site-footer__lineage" style="margin-top:1.5rem;">plainkeep is the kit — engine, terminal UI, installer. Your vault is a private copy that pulls improvements without ever exposing a note. The tool is public; your operating system is yours.</p>
         </div>
       </div>
       <div class="site-footer__bottom t-mono-sm">plainkeep · MIT · gabros20/plainkeep</div>

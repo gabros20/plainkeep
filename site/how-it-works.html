@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+<head>
+<script>document.documentElement.classList.add('js');</script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How plainkeep works — the command line, demystified</title>
+<meta name="description" content="How the plainkeep command line actually works: the anatomy of a command, what happens when you press Enter, the guided menus, and the safety rules that gate every change. No terminal experience required.">
+<link rel="canonical" href="https://plainkeep.vercel.app/how-it-works">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://plainkeep.vercel.app/how-it-works">
+<meta property="og:title" content="How plainkeep works — the command line, demystified">
+<meta property="og:description" content="You type a short sentence; it does the filing. What a command is made of, what happens when you press Enter, and why you can't really get it wrong.">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="How plainkeep works — the command line, demystified">
+<meta name="twitter:description" content="You type a short sentence; it does the filing. What a command is made of, what happens when you press Enter, and why you can't really get it wrong.">
+<link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<a class="visually-hidden" href="#main">Skip to content</a>
+
+<nav class="prompt-gutter" aria-label="Section progress">
+  <div class="prompt-gutter__line" aria-hidden="true"><div class="prompt-gutter__fill" id="gutter-fill"></div></div>
+  <div class="prompt-gutter__rail" id="gutter-rail"></div>
+  <div class="prompt-gutter__markers">
+    <button class="prompt-marker" data-target="intro" aria-label="Jump to top">❯</button>
+    <button class="prompt-marker" data-target="anatomy" aria-label="Jump to Anatomy of a command">❯</button>
+    <button class="prompt-marker" data-target="drive" aria-label="Jump to Two ways to drive">❯</button>
+    <button class="prompt-marker" data-target="enter" aria-label="Jump to Press Enter">❯</button>
+    <button class="prompt-marker" data-target="forgiving" aria-label="Jump to You can't get it wrong">❯</button>
+    <button class="prompt-marker" data-target="day" aria-label="Jump to A day with it">❯</button>
+    <button class="prompt-marker" data-target="rules" aria-label="Jump to The safety rules">❯</button>
+    <button class="prompt-marker" data-target="roots" aria-label="Jump to Where things live">❯</button>
+  </div>
+</nav>
+
+<div class="page">
+
+  <header class="site-header" id="site-header">
+    <div class="container site-header__bar">
+      <a class="site-header__brand" href="/">
+        <svg class="site-header__logo" viewBox="0 0 64 64" aria-hidden="true">
+          <rect x="5.5" y="5.5" width="53" height="53" rx="14" fill="none" class="lg-frame" stroke-width="5.5"/>
+          <rect x="36" y="17" width="7.5" height="30" rx="3.75" class="lg-slot"/>
+        </svg>
+        plainkeep
+      </a>
+      <nav class="site-header__nav" aria-label="Primary">
+        <a href="/how-it-works" aria-current="page">How it works</a>
+        <a href="/features">Features</a>
+        <a href="/agents">For AI agents</a>
+        <a href="https://github.com/gabros20/plainkeep/tree/main/docs">Docs</a>
+      </nav>
+      <div class="site-header__actions">
+        <a class="site-header__github" href="https://github.com/gabros20/plainkeep">GitHub</a>
+        <a class="btn btn-primary" href="/#quickstart">Install</a>
+      </div>
+    </div>
+    <div class="mobile-anchor-nav-wrap">
+      <nav class="mobile-anchor-nav" aria-label="Sections">
+        <a href="#anatomy">A command</a>
+        <a href="#drive">Two ways</a>
+        <a href="#enter">Press Enter</a>
+        <a href="#forgiving">Forgiving</a>
+        <a href="#day">A day</a>
+        <a href="#rules">Safety</a>
+        <a href="#roots">Where things live</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="main">
+
+    <!-- ================= INTRO ================= -->
+    <section class="page-hero" id="intro">
+      <div class="container">
+        <div class="reveal">
+          <span class="page-hero__kicker">how it works</span>
+          <h1 class="t-display-xl">You say what you want. It does the filing.</h1>
+          <p class="t-body-lg page-hero__lede">plainkeep lives in the terminal — but you don't need to be a terminal person. A command here is a short, readable sentence, and this page shows you everything about how one works: what it's made of, what happens when you press Enter, and why it's hard to get wrong.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= ANATOMY ================= -->
+    <section class="section" id="anatomy" style="padding-top:2rem;">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">A command is a sentence.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Every plainkeep command has the same shape: the tool, the thing you're working with, what to do with it, your own words, and optional switches. Hover or tap each part below.</p>
+        </div>
+
+        <div class="anatomy reveal">
+          <div class="terminal-panel anatomy__panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>anatomy of a command</div>
+            <div class="anatomy__cmd">
+              <button type="button" class="anatomy__part" data-part="tool">plainkeep</button>
+              <button type="button" class="anatomy__part" data-part="verb">task</button>
+              <button type="button" class="anatomy__part" data-part="action">add</button>
+              <button type="button" class="anatomy__part" data-part="words">"Fix the Acme webhook"</button>
+              <button type="button" class="anatomy__part" data-part="flag">--dry-run</button>
+            </div>
+          </div>
+          <dl class="anatomy__legend">
+            <div class="anatomy__item" data-part="tool">
+              <dt>plainkeep</dt>
+              <dd>The tool. Every command starts with it — there's exactly one program to know.</dd>
+            </div>
+            <div class="anatomy__item" data-part="verb">
+              <dt>task — the verb</dt>
+              <dd>The thing you're working with: <code>task</code>, <code>wiki</code>, <code>search</code>, <code>job</code>… Each verb owns one area of your life.</dd>
+            </div>
+            <div class="anatomy__item" data-part="action">
+              <dt>add — the action</dt>
+              <dd>What to do with it: <code>add</code>, <code>list</code>, <code>done</code>, <code>move</code>… Simple verbs skip this part entirely.</dd>
+            </div>
+            <div class="anatomy__item" data-part="words">
+              <dt>your words</dt>
+              <dd>The content, in quotes, exactly as you'd say it. You never format anything — the command does.</dd>
+            </div>
+            <div class="anatomy__item" data-part="flag">
+              <dt>--dry-run — a switch</dt>
+              <dd>Optional extras. This one means "show me what would happen, but don't do it" — it works on every command that changes anything.</dd>
+            </div>
+          </dl>
+        </div>
+
+        <p class="t-body pull-line reveal">That's the whole grammar. Every one of the ~30 verbs follows it.</p>
+      </div>
+    </section>
+
+    <!-- ================= TWO WAYS TO DRIVE ================= -->
+    <section class="section" id="drive">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">Don't want to type? Pick from a menu.</h2>
+          <p class="t-body" style="margin-top:1.5rem;"><code class="heading-mono">plainkeep ui</code> opens a guided menu in the terminal: arrow keys, type-to-filter, forms that ask for exactly what a command needs. It isn't a separate app — the menus are generated from the same command list, so every pick becomes a regular command underneath. Learn by watching what it runs; graduate to typing when (and if) you feel like it.</p>
+        </div>
+
+        <div class="panels-2 reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>picking — plainkeep ui</div>
+            <div class="terminal-panel__body">
+<pre>◇  task — pick an action
+│  <span class="tk-cyan">●</span> list   <span class="tk-cyan">●</span> add   <span class="tk-cyan">●</span> show   <span class="tk-cyan">●</span> move   <span class="tk-cyan">●</span> done
+│
+◇  title
+│  Fix the Acme webhook
+│
+<span class="tk-ok">✓</span>  plainkeep task add
+   id      <span class="tk-ok">T-20260816-01</span>
+   status  active</pre>
+            </div>
+          </div>
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>typing — the same thing</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep task add "Fix the Acme webhook"
+<span class="tk-ok">✓</span>  plainkeep task add
+   id      <span class="tk-ok">T-20260816-01</span>
+   status  active
+
+<span class="tk-dim"># same door, same result — the menu just typed it for you</span></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= PRESS ENTER ================= -->
+    <section class="section" id="enter">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">What happens when you press Enter.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Five things, every time, in the same order — whether the command came from you, a menu, the schedule, or an AI assistant.</p>
+        </div>
+
+        <div class="step-flow reveal">
+          <div class="step-flow__step">
+            <div class="step-flow__title">1 · It reads you</div>
+            <p>The command is checked against the grammar above. Mistyped? You get the corrected version to copy, not an error wall.</p>
+          </div>
+          <div class="step-flow__step step-flow__step--gate">
+            <div class="step-flow__title">2 · Safety check</div>
+            <p>Every command is classified before it runs: a read, a safe write, or something that needs your explicit yes. Some things are always refused.</p>
+          </div>
+          <div class="step-flow__step">
+            <div class="step-flow__title">3 · The work</div>
+            <p>Files are created, edited, or found — in the right folder, with the right format and links. That knowledge lives in the command, not in your head.</p>
+          </div>
+          <div class="step-flow__step step-flow__step--git">
+            <div class="step-flow__title">4 · A snapshot</div>
+            <p>The change is recorded with git. Any edit — even a wrong one — is one <code>git revert</code> from undone.</p>
+          </div>
+          <div class="step-flow__step">
+            <div class="step-flow__title">5 · It reports</div>
+            <p>You get a short, human answer. Software asking the same thing gets a precise JSON answer instead — same facts, different clothes.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= FORGIVING ================= -->
+    <section class="section section--term" id="forgiving">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">You can't really get it wrong.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Four safety nets mean a wrong command costs you seconds, never data.</p>
+        </div>
+
+        <div class="panels-2 reveal">
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>a refusal teaches</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep backup run
+<span class="tk-err">✗</span> backing up needs your explicit yes
+  <span class="tk-dim">re-run:</span> <span class="tk-str">plainkeep backup run --yes</span>
+
+<span class="tk-dim"># a "no" always carries the exact corrected command.
+# nothing happened; nothing was half-done.</span></pre>
+            </div>
+          </div>
+          <div class="terminal-panel">
+            <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>preview anything</div>
+            <div class="terminal-panel__body">
+<pre><span class="tk-prompt">$</span> plainkeep archive old-website --dry-run
+<span class="tk-dim">would:</span> bundle the repo, move it out of ~/work,
+<span class="tk-dim">      </span> link the bundle from its project note
+<span class="tk-dim"># --dry-run writes NOTHING — it's a read.
+# works on every command that changes things.</span></pre>
+            </div>
+          </div>
+        </div>
+
+        <div class="exit-strip reveal" role="list" aria-label="What the answers mean">
+          <span role="listitem"><b>0</b> it worked</span>
+          <span role="listitem"><b>2</b> mistyped — here's the fix</span>
+          <span role="listitem"><b>3</b> needs your yes</span>
+          <span role="listitem"><b>4</b> nothing by that name</span>
+          <span role="listitem"><b>5</b> refused, on purpose</span>
+        </div>
+        <p class="t-body-sm reveal" style="margin-top:1rem; max-width: var(--measure); color: var(--term-dim);">Every command ends in one of five outcomes — numbered, so software can react to them too. That's the whole protocol.</p>
+
+        <p class="t-body pull-line reveal" style="color: var(--rust-bright);">Plus: <code class="heading-mono">plainkeep help</code> lists everything with a summary, and tab-completion fills in your actual note names and task IDs — pulled live from your own files.</p>
+      </div>
+    </section>
+
+    <!-- ================= A DAY ================= -->
+    <section class="section" id="day">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">A day with it.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">The daily rhythm is a handful of commands — and the two bookends, <code class="t-mono-sm">start</code> and <code class="t-mono-sm">close</code>, <a href="/features#schedule">run on a schedule by default</a>, so the day begins and ends even when you forget to.</p>
+        </div>
+
+        <div class="terminal-panel session-panel term-play reveal">
+          <div class="terminal-panel__bar"><span class="terminal-panel__dot"></span>a day in the vault<button type="button" class="term-play__replay" hidden>↺ replay</button></div>
+          <div class="terminal-panel__body">
+<pre><span class="tp-line"><span class="tk-dim">07:30 — the schedule already ran `plainkeep start`: today's journal is open,</span></span>
+<span class="tp-line"><span class="tk-dim">        yesterday's unfinished tasks carried forward. You just show up.</span></span>
+<span class="tp-line"> </span>
+<span class="tp-line" data-cmd>plainkeep capture "RRF beats naive hybrid search"</span>
+<span class="tp-line"><span class="tk-ok">✓</span> saved to <span class="tk-str">inbox/</span> — zero decisions at capture time</span>
+<span class="tp-line"> </span>
+<span class="tp-line" data-cmd>plainkeep triage</span>
+<span class="tp-line">1 of 3 · <span class="tk-str">"RRF beats naive hybrid search"</span></span>
+<span class="tp-line">  proposes: a wiki note in <span class="tk-str">wiki/notes/</span> — you approve, it files</span>
+<span class="tp-line"> </span>
+<span class="tp-line" data-cmd>plainkeep search "ranking fusion"</span>
+<span class="tp-line">1. <span class="tk-str">wiki/notes/rrf.md#reciprocal-rank-fusion</span>  <span class="tk-dim">…combines rankings by…</span></span>
+<span class="tp-line"> </span>
+<span class="tp-line" data-cmd>plainkeep open rrf</span>
+<span class="tp-line"><span class="tk-dim">one resolver: task id → note name → file → falls back to search</span></span>
+<span class="tp-line"> </span>
+<span class="tp-line"><span class="tk-dim">18:30 — the schedule runs `plainkeep close`: the day's facts digested into</span></span>
+<span class="tp-line"><span class="tk-dim">        the journal, loose ends flagged for tomorrow. Whether you typed or not.</span></span></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================= SAFETY RULES ================= -->
+    <section class="section" id="rules">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">The safety rules, spelled out.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Before any command runs — yours, the schedule's, or an AI's — it's classified into one of five classes. The class decides what it's allowed to do without asking you.</p>
+        </div>
+
+        <div class="risk-table reveal">
+          <table>
+            <thead><tr><th>Class</th><th>In plain words</th></tr></thead>
+            <tbody>
+              <tr><td><span class="pill pill--read">read</span></td><td>just looking — runs freely, even unattended</td></tr>
+              <tr><td><span class="pill pill--safe">safe_write</span></td><td>writes inside your own folders — every change is a git snapshot you can undo</td></tr>
+              <tr><td><span class="pill pill--draft">draft_only</span></td><td>produces a draft (an invoice, say) — the system never sends anything, ever</td></tr>
+              <tr><td><span class="pill pill--confirm">confirm</span></td><td>needs your explicit <code class="t-mono-sm">--yes</code> — without it you get the corrected command, and nothing happens</td></tr>
+              <tr><td><span class="pill pill--deny">deny</span></td><td>always refused: deleting recklessly, touching secrets, writing outside the walls</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <p class="t-body pull-line reveal">New and unfamiliar commands start at <code class="heading-mono">confirm</code> until you promote them. Trust is earned, even by the tool's own parts.</p>
+      </div>
+    </section>
+
+    <!-- ================= WHERE THINGS LIVE ================= -->
+    <section class="section" id="roots">
+      <div class="container">
+        <div class="section-heading reveal">
+          <h2 class="t-display-lg">Where things live.</h2>
+          <p class="t-body" style="margin-top:1.5rem;">Four folders, separated on purpose. Your vault holds only text, so it stays small and fast; code and heavy files live next to it, never inside it. The safety walls are built along these lines.</p>
+        </div>
+
+        <div class="roots-grid reveal">
+          <div class="root-card root-card--primary">
+            <span class="root-card__path t-mono-sm">the vault</span>
+            <p class="root-card__desc">Notes, tasks, journal, plus commands you add. All text.</p>
+            <span class="root-card__git">✅ your own git repo</span>
+          </div>
+          <div class="root-card">
+            <span class="root-card__path t-mono-sm">~/work</span>
+            <p class="root-card__desc">Code — each project its own repo, tracked from the vault.</p>
+            <span class="root-card__git">each repo separately</span>
+          </div>
+          <div class="root-card">
+            <span class="root-card__path t-mono-sm">~/files</span>
+            <p class="root-card__desc">Heavy files — client docs, PDFs, recordings. Each has a small text "shadow note" in the vault, so search still finds it.</p>
+            <span class="root-card__git">backed up, not in git</span>
+          </div>
+          <div class="root-card">
+            <span class="root-card__path t-mono-sm">~/dotfiles</span>
+            <p class="root-card__desc">Machine setup; puts <code class="t-mono-sm">plainkeep</code> on your PATH.</p>
+            <span class="root-card__git">✅ separately</span>
+          </div>
+        </div>
+
+        <p class="t-body-sm reveal" style="margin-top:1.5rem; max-width: var(--measure);">One more wall worth knowing: the app itself is installed <em>outside</em> your vault, read-only and versioned. The tool can never overwrite your notes, and your notes never contain the tool — <a href="/features#health">updates swap the engine, never touch your files</a>.</p>
+      </div>
+    </section>
+
+    <!-- ================= CTA ================= -->
+    <section class="section">
+      <div class="container">
+        <div class="cta-band reveal">
+          <div>
+            <h2>Now see everything it can do.</h2>
+            <p>Schedules, search, documents, backups, plugins — every capability with real commands.</p>
+          </div>
+          <div class="cta-band__actions">
+            <a class="btn btn-primary" href="/features">All the features</a>
+            <a class="btn btn-secondary" href="/#quickstart">Install it</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="site-footer">
+    <div class="container">
+      <div class="site-footer__grid">
+        <div>
+          <span class="site-footer__heading">Explore</span>
+          <ul class="site-footer__list">
+            <li><a href="/how-it-works">How it works</a></li>
+            <li><a href="/features">Features</a></li>
+            <li><a href="/agents">For AI agents</a></li>
+            <li><a href="/#quickstart">Install</a></li>
+          </ul>
+        </div>
+        <div>
+          <span class="site-footer__heading">Docs</span>
+          <ul class="site-footer__list">
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/setup.md">Layered setup</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/terminal-ui.md">The terminal UI</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/architecture.md">Architecture</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/machine-contract.md">Machine contract</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/plugins.md">Plugins</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/README.md">The docs map</a></li>
+            <li><a class="site-footer__llms" href="/llms.txt"><code class="t-mono-sm">llms.txt</code> — the docs, routed for AI agents</a></li>
+          </ul>
+        </div>
+        <div>
+          <span class="site-footer__heading">Project</span>
+          <ul class="site-footer__list">
+            <li><a href="https://github.com/gabros20/plainkeep">GitHub</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/CHANGELOG.md">Changelog</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/docs/DECISIONS.md">Decision log (ADRs)</a></li>
+            <li><a href="https://github.com/gabros20/plainkeep/blob/main/LICENSE">License (MIT)</a></li>
+          </ul>
+          <p class="site-footer__lineage" style="margin-top:1.5rem;">plainkeep is the kit — engine, terminal UI, installer. Your vault is a private copy that pulls improvements without ever exposing a note.</p>
+        </div>
+      </div>
+      <div class="site-footer__bottom t-mono-sm">plainkeep · MIT · gabros20/plainkeep</div>
+    </div>
+  </footer>
+
+</div>
+
+<script src="main.js"></script>
+</body>
+</html>

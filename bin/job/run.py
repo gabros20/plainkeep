@@ -368,6 +368,12 @@ def _enable(targets, jobs, agents):
         try:
             src = launchdlib.rendered_path(name)
             vaultio.write_text(src, launchdlib.plist(name, jobs[name]), encoding="utf-8")
+            # A symlink destination is the pre-ADR-022 shape (`ln -sf` out of jobs/launchd/, per the
+            # old `job apply` guidance) and `copyfile` onto it is wrong both ways it can point: back
+            # at `src` it raises SameFileError, anywhere else it writes THROUGH the link and the
+            # installed entry stays a symlink — no copy, no drift detection. Replace it.
+            if dst.is_symlink():
+                dst.unlink()
             shutil.copyfile(src, dst)
         except Exception as exc:  # r2/I5: a malformed entry too, not just a filesystem refusal
             out.append({"name": name, "ok": False, "plist": str(dst),

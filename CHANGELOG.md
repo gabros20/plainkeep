@@ -25,6 +25,16 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   loaded schedule is stale and prints the one command that fixes it. `plainkeep setup automation
   --yes` and `--all --yes` stay non-interactive and leave existing times alone.
 
+### Fixed
+- **`plainkeep job enable` on a machine migrated under the old symlink guidance.** Before ADR-022
+  the handoff after `job apply` was `ln -sf …/jobs/launchd/*.plist` into `~/Library/LaunchAgents`;
+  `enable` installs a *copy*, and copying onto that symlink either raised `SameFileError` (link back
+  at the rendered plist — the enable died half-done) or wrote **through** the link into whatever it
+  pointed at, leaving the installed entry a symlink, which is exactly what ADR-022 forbids (same
+  inode ⇒ drift between the vault's schedule and the installed one can never be detected). `enable`
+  now replaces a symlink destination with a real file, so the first `enable` on a migrated machine
+  completes and quietly retires the legacy shape.
+
 ### Changed
 - **A malformed jobs registry is now refused, and reported, everywhere.** Two shapes reach the
   reader: a job **key** that is not a plain identifier (it becomes a plist filename outside your

@@ -436,7 +436,11 @@ PINNED_DELETES: dict[str, set[str]] = {
     # ratchet asks — can this path resolve under `~/files/**/in/`? — is answered NO structurally: the
     # name is `<launch_agents_dir()>/com.plainkeep.<registry key>.plist`, and neither half comes from
     # an argument. It removes only what `enable` installed; the vault-side rendered plist is left.
-    "bin/job/run.py": {"dst.unlink(missing_ok=True)"},
+    # The bare `dst.unlink()` is `enable` replacing a PRE-ADR-022 SYMLINK before installing its copy
+    # (the old guidance was `ln -sf` out of jobs/launchd/; copying onto that raises SameFileError or
+    # writes through the link) — same structurally-derived path, guarded by `dst.is_symlink()`, so
+    # what it removes is only ever the link, never a file's bytes.
+    "bin/job/run.py": {"dst.unlink(missing_ok=True)", "dst.unlink()"},
     "bin/lib/setuplib.py": {"shutil.rmtree(venv, ignore_errors=True)",
                             "asset_path.unlink(missing_ok=True)",
                             "checksums_path.unlink(missing_ok=True)"},

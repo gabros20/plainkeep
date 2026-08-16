@@ -321,6 +321,61 @@ def case_enable_contains_a_per_job_failure(td: Path) -> None:
     run(h, "disable", "--all", "--yes")
 
 
+def case_enable_replaces_a_legacy_symlink_with_a_real_file(td: Path) -> None:
+    """THE LEGACY SYMLINK SHAPE MUST NOT BREAK `enable` — OR SURVIVE IT.
+
+    Before ADR-022, the guidance after `job apply` was `ln -sf …/jobs/launchd/*.plist` into
+    `~/Library/LaunchAgents`. Every machine migrated under that guidance has symlinks where `enable`
+    now wants to install a COPY, and `shutil.copyfile` onto a symlink is wrong in both directions it
+    can point:
+
+      * back at the rendered plist (the migrated shape): src and dst are the same file, so the copy
+        raises `SameFileError` and the enable dies half-done;
+      * anywhere else: the copy writes THROUGH the link into its target, the installed entry stays a
+        symlink, and ADR-022's copy-not-symlink property is silently violated — with it goes drift
+        detection, which compares two paths that are now one inode.
+
+    So `enable` must REPLACE a symlink destination with a real file. Both directions are pinned."""
+    h = td / "legacy_symlink"
+    (h / "jobs").mkdir(parents=True)
+    vaultfx.mark_vault(h)
+    (h / "jobs" / "registry.json").write_text(json.dumps({"external_allowlist": [], "jobs": {
+        "linked_home": {"command": "plainkeep index", "schedule": {"daily": "07:30"}, "risk": "read"},
+        "linked_away": {"command": "plainkeep consolidate", "schedule": {"daily": "02:30"},
+                        "risk": "safe_write"},
+    }}), encoding="utf-8")
+    agents = FAKE["fx"].agents
+    # The migrated shape: the LaunchAgents entry is a symlink to the vault's rendered plist. Dangling
+    # at creation; `enable` renders fresh first, so it resolves by the time the copy runs.
+    (agents / "com.plainkeep.linked_home.plist").symlink_to(
+        h / "jobs" / "launchd" / "com.plainkeep.linked_home.plist")
+    # The other direction: a symlink to some unrelated file, which a copy-through would overwrite.
+    elsewhere = h / "stale-backup.plist"
+    elsewhere.write_text("stale bytes that must survive", encoding="utf-8")
+    (agents / "com.plainkeep.linked_away.plist").symlink_to(elsewhere)
+    FAKE["fx"].clear()
+
+    r = run(h, "enable", "--all", "--yes", "--json")
+    env = json.loads(r.stdout.splitlines()[0]) if r.stdout.strip() else {}
+    results_by = {d["name"]: d for d in env.get("data", {}).get("results", [])}
+    check("enable succeeds on a vault migrated under the old symlink guidance",
+          r.returncode == 0 and all(d.get("ok") for d in results_by.values()),
+          f"rc={r.returncode} results={results_by}")
+    for name in ("linked_home", "linked_away"):
+        dst = agents / f"com.plainkeep.{name}.plist"
+        check(f"the installed entry for '{name}' is a REAL FILE, not a symlink (ADR-022)",
+              dst.exists() and not dst.is_symlink(), str(dst))
+    installed = text(agents / "com.plainkeep.linked_home.plist")
+    check("the installed copy is the fresh render, not whatever the link pointed at",
+          "com.plainkeep.linked_home" in installed, installed[:120])
+    check("a symlink pointing elsewhere is replaced, never written THROUGH",
+          elsewhere.read_text(encoding="utf-8") == "stale bytes that must survive",
+          elsewhere.read_text(encoding="utf-8")[:120])
+    check("both jobs were bootstrapped",
+          sum(1 for c in fake_log() if c.startswith("bootstrap ")) == 2, str(fake_log()))
+    run(h, "disable", "--all", "--yes")
+
+
 _MALFORMED_REGISTRY = {"external_allowlist": [], "jobs": {
     # aaa/zzz sort either side of the malformed entry, so the loop provably continues past it.
     "aaa_ok": {"command": "plainkeep index", "schedule": {"interval_minutes": 60}, "risk": "read"},
@@ -1083,6 +1138,7 @@ def main() -> int:
         case_illegal_jobs_are_never_scheduled(Path(td))
         case_traversing_key_is_refused_before_anything_runs(Path(td))
         case_enable_contains_a_per_job_failure(Path(td))
+        case_enable_replaces_a_legacy_symlink_with_a_real_file(Path(td))
 
         # r2 fix: I5 — containment must cover more than OSError.
         case_enable_contains_a_malformed_entry(Path(td))

@@ -459,35 +459,6 @@ def main(argv):
         "adapter: CLAUDE.md bridges @AGENTS.md" if claude.exists() else "adapter: CLAUDE.md MISSING")
     (ok if skill.exists() else fail)(f"adapter: skills/operate-plainkeep/SKILL.md {'present' if skill.exists() else 'MISSING'}")
 
-    # THE UNWIRED-RULE CHECK (ADR-019), pointed at the agent contract instead of at code.
-    #
-    # A contract that TELLS an agent to read a file it cannot open is a guardrail nothing consults:
-    # the agent obeys the first instruction, gets ENOENT, and proceeds on its own judgement — which
-    # in the field meant grepping the notes and scripting around the verb surface. Since ADR-017
-    # there is no `skills/` beside a vault's notes, so an adapter naming that RELATIVE path is
-    # naming nothing. Measured on a real vault migrated from the pre-ADR-017 layout; nothing
-    # detected it for months, because the presence checks above only ask whether the adapter EXISTS.
-    #
-    # WARN, never fail: the vault is still perfectly operable, and since `plainkeep setup agents`
-    # the manual reaches agents as a SKILL rather than through this path, so a stale sentence costs
-    # an agent nothing when that layer is ready. It is still wrong, and the remedy is one command.
-    # The match must be VAULT-RELATIVE, which is why it is a regex and not `in`. A healthy adapter
-    # names the manual by its ABSOLUTE engine path (`…/engine/current/skills/operate-plainkeep/…`),
-    # and that string CONTAINS the relative one — so a substring test warns about every correct
-    # vault. The lookbehind rejects any reference preceded by a path character, leaving only a bare
-    # `skills/…` the reader would resolve against the vault.
-    rel_ref = re.compile(r"(?<![\w./-])skills/operate-plainkeep")
-    for adapter in (agents, claude):
-        try:
-            text = adapter.read_text()
-        except OSError:
-            continue
-        if rel_ref.search(text) and not (paths.PLAINKEEP_HOME / "skills" / "operate-plainkeep").exists():
-            warn(f"adapter: {adapter.name} tells agents to read 'skills/operate-plainkeep/…', "
-                 f"which does not exist in this vault (the engine moved out, ADR-017)")
-            warn("  fix: plainkeep vault sync-adapters --yes  "
-                 "(and `plainkeep setup agents --yes` installs the manual as a skill)")
-
     # per-agent adapters: warn if absent (a vault may not use every agent), FAIL if present-but-broken
     cdx_cfg, cdx_sk = paths.PLAINKEEP_HOME / ".codex" / "config.toml", paths.PLAINKEEP_HOME / ".codex" / "skills"
     if cdx_cfg.exists() or cdx_sk.is_symlink() or cdx_sk.exists():

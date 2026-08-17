@@ -27,19 +27,6 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   as a path, and both spell out the reading half of the surface (`plainkeep search` to find,
   `plainkeep help` / `complete --json` to learn a verb) so that an agent that still cannot load the
   manual has the method rather than only the prohibitions.
-- **`plainkeep vault sync-adapters`, and a `doctor` check that the agent contract still resolves.**
-  `AGENTS.md`/`CLAUDE.md` are vault-owned and nothing refreshed them, so a vault kept its
-  birth-contract forever — which is how a vault migrated from the pre-ADR-017 layout went on telling
-  every agent to read `skills/operate-plainkeep/SKILL.md` *relative to the vault*, where no `skills/`
-  has existed since the engine moved out. Generated adapters now carry a stamp: the contract version
-  plus a sha256 of everything above it. That pair answers the only question a refresh may ask without
-  risking somebody's work — *is this still exactly what plainkeep wrote?* — so `sync-adapters`
-  rewrites `stale` and `missing` adapters and refuses to touch an `edited` or `unmanaged` one,
-  dropping an `AGENTS.md.plainkeep-new` beside it to merge instead. It reports by default (`--yes` to
-  write, `--dry-run` to preview). `plainkeep doctor` gains the detector this class of bug needed:
-  it warns when an adapter names a vault-relative `skills/…` that is not there, matched by a regex
-  rather than a substring — a healthy adapter names the manual by its ABSOLUTE engine path, which
-  *contains* the relative one, and the substring version warned about every correct vault.
 - **Schedule times are a product surface: `plainkeep job set`, and the setup wizard asks.** The
   hours automation runs at were two literals in `jobs/registry.json` that only a hand-edit could
   change, so a day that runs 08:00–22:00 got a system that opened it at 07:30 and closed it at

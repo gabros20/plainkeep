@@ -1,7 +1,7 @@
 {
   "verb": "vault",
   "summary": "register, name and re-point plainkeep vaults (marker + registry)",
-  "usage": "plainkeep vault list | status | sync-adapters [--yes] | init <path> [--name <slug>] [--default] --yes | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
+  "usage": "plainkeep vault list | status | init <path> [--name <slug>] [--default] --yes | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
   "risk": "safe_write",
   "reads": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
   "writes": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
@@ -79,13 +79,6 @@
       "args": [
         { "name": "selector", "type": "string", "required": true, "help": "registered name or id" }
       ]
-    },
-    {
-      "name": "sync-adapters",
-      "summary": "bring this vault's AGENTS.md/CLAUDE.md up to the engine's current agent contract; reports by default, --yes rewrites",
-      "risk": "confirm",
-      "dry_run": true,
-      "args": []
     }
   ]
 }

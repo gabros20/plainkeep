@@ -28,16 +28,14 @@ without an explicit `--yes` (exit 3, with the exact re-run line). list/status ar
 (lib/vaultroot.discover) and prints which of the four mechanisms won and what each of the others saw
 — including when the chain refuses, which is exactly when an operator needs it.
 """
-import hashlib
 import json
 import os
-import re
 import subprocess
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, output, paths, vaultio, vaultreg, vaultroot  # noqa: E402
+from lib import enginetree, output, paths, vaultreg, vaultroot  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402  (the ONE list of what a data vault must contain)
 
 GREEN, RED, YEL, DIM, CYAN, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[36m", "\033[0m"
@@ -150,56 +148,6 @@ If it is not among your skills, it is here:
 That path goes through `current`, so it keeps naming the engine that is actually active after an
 update or a rollback. **If you cannot read it, say so and stop — do not improvise a way around it.**
 """
-
-# THE ADAPTERS ARE VERSIONED, so a vault created under an older contract can be told apart from one
-# written yesterday — and, more importantly, from one its owner has EDITED.
-#
-# The stamp is the last line of a generated adapter and carries two facts: which contract generated
-# it, and the sha256 of everything above it. That pair answers the only question a refresh may ask
-# without risking somebody's work: *is this file still exactly what plainkeep wrote?* Hash matches →
-# untouched, safe to regenerate. Hash differs, or no stamp at all → a human wrote in it, and the
-# refresh writes a `.plainkeep-new` sibling and says so instead of overwriting.
-#
-# Why this exists: `AGENTS.md` is vault-owned and nothing refreshed it, so a vault carried its
-# birth-contract forever. Measured on a real machine — a vault migrated from the pre-ADR-017 layout
-# still instructed every agent to read `skills/operate-plainkeep/SKILL.md` *relative to the vault*,
-# where no `skills/` has existed since the engine moved out. The agent got ENOENT and improvised.
-ADAPTER_CONTRACT = 2
-_STAMP_RE = re.compile(r"\n?<!-- plainkeep-adapters: contract=(\d+) sha256=([0-9a-f]{64}) -->\s*\Z")
-
-
-def _stamp(body: str) -> str:
-    """Append the contract stamp. The hash covers the body only, so re-rendering is stable."""
-    digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
-    return f"{body}\n<!-- plainkeep-adapters: contract={ADAPTER_CONTRACT} sha256={digest} -->\n"
-
-
-def _unstamp(text: str) -> tuple[str, int | None, str | None]:
-    """(body, contract, recorded-hash). Contract is None for a file plainkeep never stamped."""
-    m = _STAMP_RE.search(text)
-    if not m:
-        return text, None, None
-    return text[:m.start()], int(m.group(1)), m.group(2)
-
-
-def adapter_state(path, fresh: str) -> str:
-    """`missing` · `current` · `stale` (ours, untouched, older text) · `edited` · `unmanaged`.
-
-    Only `missing` and `stale` may be rewritten — see the ADAPTER_CONTRACT note. `unmanaged` is a
-    file with no stamp: every vault created before this contract, and any adapter written by hand."""
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return "missing"
-    except OSError:
-        return "unmanaged"
-    body, contract, recorded = _unstamp(text)
-    if contract is None:
-        return "unmanaged"
-    if hashlib.sha256(body.encode("utf-8")).hexdigest() != recorded:
-        return "edited"
-    return "current" if text == fresh else "stale"
-
 
 INIT_CLAUDE_MD = """\
 @AGENTS.md
@@ -376,13 +324,11 @@ def cmd_init(argv):
         keep = d / ".gitkeep"
         if not any(d.iterdir()):
             keep.touch()
-    # Adapters are STAMPED at birth (ADAPTER_CONTRACT) so a later `vault sync-adapters` can tell an
-    # untouched file from one its owner has written in, and refresh only the former.
-    adapters = render_adapters(name)
+    skill = enginetree.stable_launcher().parent / "skills" / "operate-plainkeep" / "SKILL.md"
     for rel, text in ((".gitignore", INIT_GITIGNORE),
                       ("jobs/registry.json", json.dumps(INIT_JOBS_REGISTRY, indent=2) + "\n"),
-                      ("AGENTS.md", adapters["AGENTS.md"]),
-                      ("CLAUDE.md", adapters["CLAUDE.md"])):
+                      ("AGENTS.md", INIT_AGENTS_MD.format(name=name, skill=skill)),
+                      ("CLAUDE.md", INIT_CLAUDE_MD)):
         f = target / rel
         if not f.exists():
             f.write_text(text, encoding="utf-8")
@@ -446,76 +392,6 @@ def cmd_init(argv):
             print(f"  {CYAN}this is now the default vault{RESET}")
         print(f"  use it:   {CYAN}plainkeep --vault {name} status{RESET}")
     return output.emit(data, "vault", human=render)
-
-
-def _skill_path():
-    """The manual, named through `current` — never the active version (see `stable_launcher`)."""
-    return enginetree.stable_launcher().parent / "skills" / "operate-plainkeep" / "SKILL.md"
-
-
-def render_adapters(name: str) -> dict:
-    """The adapters this engine would write for a vault called `name`, stamped."""
-    return {"AGENTS.md": _stamp(INIT_AGENTS_MD.format(name=name, skill=_skill_path())),
-            "CLAUDE.md": _stamp(INIT_CLAUDE_MD)}
-
-
-def cmd_sync_adapters(argv):
-    """Bring a vault's AGENTS.md/CLAUDE.md up to the engine's current contract.
-
-    READ by default: it prints what each adapter is and stops. `--yes` rewrites only the adapters
-    plainkeep can prove it wrote and nobody has touched since; anything else gets a `.plainkeep-new`
-    sibling to merge, because an adapter is a file its owner is invited to edit and a refresh that
-    silently overwrote one would destroy exactly the local rules it was written to hold."""
-    yes = "--yes" in argv
-    dry = "--dry-run" in argv
-    root = paths.PLAINKEEP_HOME
-    reg = vaultreg.read_registry()
-    entry = vaultreg.entry_for_path(reg, root)
-    fresh = render_adapters(entry["name"] if entry else root.name)
-
-    rows, wrote, handoff = [], [], []
-    for rel, text in fresh.items():
-        p = root / rel
-        state = adapter_state(p, text)
-        rows.append({"adapter": rel, "state": state})
-        if state == "current":
-            continue
-        # Through `vaultio`, not raw: unlike `init` — whose target is by definition NOT the active
-        # root, and is exempted for that reason — these land in the vault this invocation selected,
-        # so they are ordinary vault writes and belong behind the same wall as every other one.
-        if state in ("missing", "stale"):
-            if yes and not dry:
-                vaultio.write_text(p, text)
-            wrote.append(rel)
-        else:  # edited / unmanaged — never clobbered
-            side = p.with_name(p.name + ".plainkeep-new")
-            if yes and not dry:
-                vaultio.write_text(side, text)
-            handoff.append(f"{rel} was edited here — the current version is beside it as "
-                           f"{side.name}; merge what you want and delete it")
-
-    for r in rows:
-        r["ok"] = r["state"] in ("current", "stale", "missing")
-    if output.json_mode():
-        return output.emit_rows(rows, verb="vault",
-                                header={"wrote": wrote, "handoff": handoff,
-                                        "contract": ADAPTER_CONTRACT, "dry_run": dry})
-    for r in rows:
-        tint = {"current": GREEN, "stale": YEL, "missing": YEL}.get(r["state"], CYAN)
-        print(f"  {tint}{r['state']:<10}{RESET} {r['adapter']}")
-    if not wrote and not handoff:
-        print(f"\nboth adapters are current (contract {ADAPTER_CONTRACT}) — nothing to do")
-        return 0
-    if not yes:
-        verb = "would rewrite" if wrote else "would write a merge copy for"
-        print(f"\n{verb}: {', '.join(wrote or [h.split()[0] for h in handoff])}")
-        print(f"{DIM}re-run with --yes{RESET}")
-        return 0
-    if wrote:
-        print(f"\n{'would rewrite' if dry else 'rewrote'}: {', '.join(wrote)}")
-    for h in handoff:
-        print(f"{YEL}!{RESET} {h}")
-    return 0
 
 
 # --- actions -------------------------------------------------------------------------------------
@@ -858,7 +734,7 @@ def cmd_status(_argv):
 
 ACTIONS = {"init": cmd_init, "register": cmd_register, "rebind": cmd_rebind,
            "deregister": cmd_deregister, "default": cmd_default, "list": cmd_list,
-           "status": cmd_status, "sync-adapters": cmd_sync_adapters}
+           "status": cmd_status}
 
 
 def main(argv):

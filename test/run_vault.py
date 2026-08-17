@@ -448,7 +448,105 @@ def case_containment_axes() -> None:
                   "of $HOME on this machine. It is a read-only stat probe where it exists.")
 
 
+# --------------------------------------------------------------------------------------------
+# F. `vault sync-adapters` — refreshing the agent contract WITHOUT eating the owner's edits.
+#
+# The defect this closes: AGENTS.md is vault-owned and nothing ever refreshed it, so a vault kept
+# its birth-contract forever — including, on a real machine, an instruction to read
+# `skills/operate-plainkeep/SKILL.md` relative to the vault, which ADR-017 deleted. The risk the
+# refresh itself introduces is the opposite one: an adapter is a file its owner is invited to edit,
+# and a blind rewrite would destroy the local rules it was written to hold. Both are pinned here.
+# --------------------------------------------------------------------------------------------
+def case_sync_adapters() -> None:
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        home, cfg = tmp / "v", tmp / "cfg"
+        r = vault(home, cfg, "init", str(home), "--name", "syncv", "--yes")
+        check("sync: init creates the vault", r.returncode == 0, r.stdout + r.stderr)
+
+        agents = home / "AGENTS.md"
+        # (1) Born stamped, and therefore recognisable as ours later.
+        born = agents.read_text()
+        check("sync: init stamps the adapter with the contract version",
+              "<!-- plainkeep-adapters: contract=" in born, born[-200:])
+        check("sync: a fresh vault reports both adapters current",
+              "current" in vault(home, cfg, "sync-adapters").stdout, "")
+
+        # (2) The engine's manual is named through `current`, not through the version — the whole
+        #     reason the old pointer rotted. And never as a path beside the notes.
+        check("sync: the adapter does not name a vault-relative skills/ path",
+              "skills/operate-plainkeep/SKILL.md" not in born.split("If it is not among your skills")[0]
+              or "/engine/" in born, born[:400])
+
+        # (3) An UNTOUCHED adapter from an older contract is safe to rewrite: same hash, older text.
+        stale = born.replace("## How to act on this vault", "## How to act on this vault (OLD)")
+        import hashlib as _h
+        body = stale.split("\n<!-- plainkeep-adapters:")[0]
+        agents.write_text(f"{body}\n<!-- plainkeep-adapters: contract=1 "
+                          f"sha256={_h.sha256(body.encode()).hexdigest()} -->\n", encoding="utf-8")
+        out = vault(home, cfg, "sync-adapters").stdout
+        check("sync: an untouched older adapter reads as stale", "stale" in out, out)
+        check("sync: reporting alone rewrites nothing", "(OLD)" in agents.read_text(), "")
+        r = vault(home, cfg, "sync-adapters", "--yes")
+        check("sync: --yes rewrites a stale adapter", "(OLD)" not in agents.read_text(), r.stdout)
+        check("sync: the rewritten adapter is current again",
+              "stale" not in vault(home, cfg, "sync-adapters").stdout, "")
+
+        # (4) THE ONE THAT MATTERS: a HAND-EDITED adapter is never overwritten. Its hash no longer
+        #     matches its stamp, so the refresh leaves it and writes a sibling to merge.
+        mine = agents.read_text().replace("## How to act on this vault",
+                                          "## MY OWN RULE — never delete this\n\n## How to act on this vault")
+        agents.write_text(mine, encoding="utf-8")
+        out = vault(home, cfg, "sync-adapters").stdout
+        check("sync: an edited adapter reads as edited", "edited" in out, out)
+        r = vault(home, cfg, "sync-adapters", "--yes")
+        check("sync: --yes NEVER overwrites an edited adapter",
+              "MY OWN RULE" in agents.read_text(), r.stdout + r.stderr)
+        check("sync: it leaves the current version beside it to merge",
+              (home / "AGENTS.md.plainkeep-new").is_file(), r.stdout)
+
+        # (5) An adapter plainkeep never wrote (every pre-contract vault) is equally untouchable.
+        agents.write_text("# hand-written from before the contract existed\n", encoding="utf-8")
+        out = vault(home, cfg, "sync-adapters").stdout
+        check("sync: an unstamped adapter reads as unmanaged", "unmanaged" in out, out)
+        vault(home, cfg, "sync-adapters", "--yes")
+        check("sync: --yes NEVER overwrites an unstamped adapter",
+              agents.read_text().startswith("# hand-written"), agents.read_text()[:80])
+
+        # (6) A missing adapter is simply restored.
+        agents.unlink()
+        vault(home, cfg, "sync-adapters", "--yes")
+        check("sync: a missing adapter is restored", agents.is_file() and
+              "<!-- plainkeep-adapters: contract=" in agents.read_text(), "")
+
+        # (7) --dry-run writes nothing, and is a read (no --yes needed).
+        agents.write_text("# gone stale again\n", encoding="utf-8")
+        r = vault(home, cfg, "sync-adapters", "--dry-run")
+        check("sync: --dry-run needs no --yes and writes nothing",
+              r.returncode == 0 and agents.read_text() == "# gone stale again\n", r.stdout + r.stderr)
+
+        # (8) THE DETECTOR, both directions. A healthy adapter names the manual by its ABSOLUTE
+        #     engine path, which CONTAINS the vault-relative string — so a substring test warns
+        #     about every correct vault, which is how this check was written the first time and
+        #     caught in review. Silent on healthy, loud on the shape measured in the field.
+        def _doctor_says_dangling(v: Path) -> bool:
+            e = {**os.environ, "PLAINKEEP_HOME": str(v), "PLAINKEEP_CONFIG_HOME": str(cfg)}
+            d = subprocess.run([sys.executable, str(REPO / "bin" / "doctor" / "run.py")],
+                               capture_output=True, text=True, env=e)
+            return "tells agents to read" in (d.stdout + d.stderr)
+
+        vault(home, cfg, "sync-adapters", "--yes")   # back to a generated adapter
+        agents.unlink(missing_ok=True)
+        vault(home, cfg, "sync-adapters", "--yes")
+        check("doctor: silent on a healthy vault (the absolute engine path is not a dangling ref)",
+              not _doctor_says_dangling(home), agents.read_text()[:200])
+        agents.write_text("# v\n\nRead `skills/operate-plainkeep/SKILL.md` first.\n", encoding="utf-8")
+        check("doctor: warns when an adapter names a vault-relative skills/ path that is gone",
+              _doctor_says_dangling(home), "")
+
+
 def main() -> int:
+    case_sync_adapters()
     case_roundtrip()
     case_fail_closed()
     case_atomic()

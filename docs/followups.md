@@ -689,6 +689,15 @@ in-branch; this is what was deliberately deferred.
   int. Measured by hand during the review (`schedule names 2 cadences (daily, interval_minutes)`)
   and correct — just not pinned. Fix: a fixture registry per shape in `run_jobverb.py`, asserted on
   `job list` (warn text) and `job enable` (whole-command refusal).
+- ~~**An existing vault's agent adapters are never refreshed**~~ — **DONE.** Generated adapters now
+  carry a stamp (contract version + a hash of the body); `plainkeep vault sync-adapters` rewrites
+  only `stale`/`missing` ones — the files it can prove it wrote and nobody has edited — and leaves
+  an `edited` or `unmanaged` adapter alone with a `.plainkeep-new` sibling to merge, because an
+  adapter is a file its owner is invited to edit. `plainkeep doctor` warns when an adapter still
+  names a vault-relative `skills/…` path that does not exist, matched by a regex rather than a
+  substring so the ABSOLUTE engine path in a healthy adapter is not mistaken for a dangling one.
+  The original entry, kept for the record:
+
 - **An existing vault's agent adapters are never refreshed** (found while fixing the dangling
   manual pointer). `AGENTS.md`/`CLAUDE.md` are VAULT-owned: `plainkeep vault init` writes them once
   and, as `migrate.py`'s own note says, "an installed engine does not provide them" — `script/update`

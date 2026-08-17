@@ -468,6 +468,38 @@ Why this is a layer and not a line in a doc: an agent that cannot read the manua
 what makes the operating rules binding, so it is a step the installer performs rather than advice
 somebody has to follow.
 
+### Refreshing a vault's own contract
+
+`AGENTS.md` and `CLAUDE.md` are **vault-owned**: `plainkeep vault init` writes them once, and no
+engine update touches them — so a vault made under an older contract keeps that text forever. That
+is how a vault migrated from the pre-ADR-017 layout went on telling agents to read
+`skills/operate-plainkeep/SKILL.md` *relative to the vault*, years after the engine moved out.
+
+```sh
+plainkeep vault sync-adapters          # report only: current / stale / edited / unmanaged / missing
+plainkeep vault sync-adapters --yes    # rewrite what is safe to rewrite
+```
+
+Generated adapters carry a stamp — the contract version plus a hash of everything above it — and
+that stamp is what makes a safe refresh possible:
+
+| State | Meaning | What `--yes` does |
+| --- | --- | --- |
+| `current` | matches what this engine would write | nothing |
+| `stale` | our stamp, hash matches, older text | rewrites it |
+| `missing` | not there | writes it |
+| `edited` | our stamp, hash **differs** — you wrote in it | leaves it, drops `AGENTS.md.plainkeep-new` beside it |
+| `unmanaged` | no stamp (every pre-contract vault, and any hand-written adapter) | same — never overwritten |
+
+An adapter is a file you are invited to edit; a refresh that silently overwrote one would destroy
+the local rules it was written to hold. So the only files it rewrites are the ones it can prove it
+wrote and nobody has touched. Everything else gets a copy to merge and a line saying so.
+
+`plainkeep doctor` warns when an adapter still names a vault-relative `skills/…` path that does not
+exist, and names both remedies. It **warns rather than fails**: since the `agents` layer the manual
+reaches agents as a skill, so a stale sentence no longer costs an agent its manual — it is simply
+wrong, and one command fixes it.
+
 ## Blocked: backups
 
 Blocked layers stay blocked and print the exact remediation in `next`.

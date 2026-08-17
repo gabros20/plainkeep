@@ -55,10 +55,15 @@ from pathlib import Path
 # The SIBLING-ROOTS anchor (~/work, ~/files, ~/dotfiles) — ADR-015 D4 converged two variables that
 # were relocating the same conceptual thing. PLAINKEEP_TEST_HOME first, so the validated spec model
 # (test/lib/guardrail.py) and its 59 parity cases keep resolving exactly as before.
+# The last resort is the OS's own answer, never a literal path. A hardcoded home here was one
+# developer's machine baked into a published tool: on any host with no `HOME` it anchored the
+# sibling roots — and therefore the walled-off iCloud/Photos markers below — at a directory
+# belonging to somebody else, so the wall defended paths that did not exist and left the real
+# ones unmarked. `expanduser("~")` falls back to the password database, which is this machine's.
 HOME = (os.environ.get("PLAINKEEP_TEST_HOME")
         or os.environ.get("PLAINKEEP_ROOTS_HOME")
         or os.environ.get("HOME")
-        or "/Users/tamas")
+        or os.path.expanduser("~"))
 
 # Paths walled off by LOCATION (§2, §5) — matched case-insensitively, as a SUBSTRING, so a nested
 # spelling ("…/Mobile Documents/…") is caught wherever it appears in the path.

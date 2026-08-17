@@ -181,6 +181,13 @@ EXEMPT: dict[str, dict[str, str]] = {
         'dest_dir.mkdir(parents=True, exist_ok=True)':
             "~/work/archive/<year> — the bundle destination for an archived fleet repo",
     },
+    "bin/lib/agentskills.py": {
+        'dst.parent.mkdir(parents=True, exist_ok=True)':
+            "the operator's own agent skills dir (~/.claude/skills and siblings) — outside every "
+            "vault by definition, which is the point: the manual has to land where the agent looks. "
+            "The path is structural (a literal in TARGETS + the SKILL_NAME constant), never an "
+            "argument, and the only thing written there is a symlink",
+    },
     "bin/new/run.py": {
         'repo.parent.mkdir(parents=True, exist_ok=True)':
             "~/work/<kind>/<slug> — _write_verdict denies a ~/work write unless it is the current "
@@ -444,6 +451,14 @@ PINNED_DELETES: dict[str, set[str]] = {
     "bin/lib/setuplib.py": {"shutil.rmtree(venv, ignore_errors=True)",
                             "asset_path.unlink(missing_ok=True)",
                             "checksums_path.unlink(missing_ok=True)"},
+    # `plainkeep setup agents` replacing a STALE link it owns (agentskills.py). Same structural
+    # answer as the launchd pins above: the path is `<agent_home()>/<fixed rel>/operate-plainkeep`,
+    # and neither half comes from an argument — `rel` is a literal in `TARGETS`, the leaf is the
+    # module's `SKILL_NAME` constant. It cannot resolve under `~/files/**/in/`. The delete is
+    # guarded by `dst.is_symlink()`, so what it removes is a LINK and never a file's bytes; a real
+    # directory at that name raises `FileExistsError` instead, which `test/run_setup_layers.py`
+    # pins ("a real directory is NEVER replaced by a link").
+    "bin/lib/agentskills.py": {"dst.unlink()"},
     "bin/lib/vaultreg.py": {"self.path.unlink(missing_ok=True)",
                             # the atomic write of the registry file itself, which lives outside every
                             # vault by design — so it can never resolve under `~/files/**/in/`

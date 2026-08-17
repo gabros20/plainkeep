@@ -108,7 +108,7 @@ it. Run `plainkeep doctor` afterward to confirm the vault is healthy under its n
 
 The full contract is in [the machine contract §7](machine-contract.md#7-plainkeep-setup-layer-status-enum).
 
-The six layers are: `skeleton`, `search`, `backups`, `models`, `automation`, `ui`.
+The seven layers are: `skeleton`, `search`, `backups`, `models`, `automation`, `ui`, `agents`.
 
 ## Guided first-run
 
@@ -427,6 +427,46 @@ Job output goes to `.logs/jobs/<name>.log`.
 **Off macOS** the layer reports `not_applicable`: launchd is macOS-only. The registry is
 scheduler-neutral by design, so the jobs remain runnable by hand (or from any scheduler you point at
 `plainkeep job run <name>`), and nothing about this ever fails a health check on Linux.
+
+## Agent skills: the manual, where agents actually look
+
+```sh
+plainkeep setup agents --yes
+```
+
+The operating manual (`skills/operate-plainkeep/SKILL.md`) is engine-owned, and since ADR-017 the
+engine lives outside every vault — which is the one place no agent looks. This layer installs it
+into the skill directories agents already scan, as symlinks:
+
+| Directory | Read by |
+| --- | --- |
+| `~/.claude/skills/operate-plainkeep` | Claude Code |
+| `~/.agents/skills/operate-plainkeep` | Codex CLI, OpenClaw, Grok Build (the cross-tool directory) |
+| `~/.hermes/skills/operate-plainkeep` | Hermes |
+| `~/.grok/skills/operate-plainkeep` | Grok Build (in addition to `~/.agents`) |
+
+`SKILL.md` in `<skills-dir>/<name>/` is an open standard (agentskills.io); the manual already
+satisfies it, so this is a delivery step and not a translation.
+
+Four things worth knowing:
+
+- **Only installed agents are targeted**, and a tool's config directory is not the directory it
+  reads skills from. `~/.claude/skills` is created when `~/.claude` exists; the shared
+  `~/.agents/skills` is created when **any** of `~/.agents`, `~/.codex`, `~/.grok` or an OpenClaw
+  config is there — Codex, for one, keeps its config in `~/.codex` and loads skills from
+  `~/.agents/skills`. On a host with no agent at all the layer is `not_applicable` — advisory,
+  never a failure.
+- **Symlinks, not copies, and they name `current`.** One engine update refreshes every agent at once,
+  and a rollback follows the same link back. There is no second copy to drift.
+- **A real directory is never replaced.** If `~/.claude/skills/operate-plainkeep/` is a real folder
+  (someone installed a copy by hand), the layer reports `partial` and stops. Move it aside and re-run.
+- **Confirm-class**, for the reason `automation` is: it writes outside the vault, into the operator's
+  own agent configuration.
+
+Why this is a layer and not a line in a doc: an agent that cannot read the manual does not stop, it
+*improvises* — it greps the notes and writes scripts to do what one verb already does. Delivery is
+what makes the operating rules binding, so it is a step the installer performs rather than advice
+somebody has to follow.
 
 ## Blocked: backups
 

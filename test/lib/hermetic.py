@@ -67,6 +67,15 @@ ENV_HOME = "PLAINKEEP_HOME"
 # still sets its own — these never override a caller's choice.
 ENV_LAUNCHCTL = "PLAINKEEP_LAUNCHCTL"
 ENV_LAUNCH_AGENTS_DIR = "PLAINKEEP_LAUNCH_AGENTS_DIR"
+# THE AGENT-SKILLS SURFACE IS SEALED FOR THE SAME REASON THE LAUNCHD ONE IS.
+#
+# `plainkeep setup agents` writes symlinks into the operator's OWN agent directories
+# (`~/.claude/skills`, `~/.agents/skills`, `~/.hermes/skills`, `~/.grok/skills`). Unsealed, a suite
+# that advances that layer — or any suite that advances `--all` — would install into the developer's
+# live Claude Code and Hermes installs, and a `stale` link there would be REPLACED. Pointing the
+# whole surface at a throwaway root makes `detected()` empty by default, so the layer reports
+# `not_applicable` and writes nothing; a suite that wants targets creates them under its own root.
+ENV_AGENT_HOME = "PLAINKEEP_AGENT_HOME"
 
 _sealed: str | None = None
 
@@ -117,6 +126,10 @@ def _seal_machine(root: str) -> None:
         d = os.path.join(root, "LaunchAgents")
         os.makedirs(d, exist_ok=True)
         os.environ[ENV_LAUNCH_AGENTS_DIR] = d
+    if not os.environ.get(ENV_AGENT_HOME):
+        d = os.path.join(root, "agent-home")
+        os.makedirs(d, exist_ok=True)
+        os.environ[ENV_AGENT_HOME] = d
 
 
 def scratch_root() -> str:

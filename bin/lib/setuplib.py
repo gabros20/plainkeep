@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from lib import embed, enginetree, enrichlib, imagelib, launchdlib, paths, provision, vaultio
+from lib import agentskills, embed, enginetree, enrichlib, imagelib, launchdlib, paths, provision, vaultio
 
 # The ENGINE's bin/ (paths.BIN) — this module reads engine-owned files through it, `bin/ui/version.txt`
 # above all: the pin `plainkeep setup ui` downloads against and compares the installed binary to.
@@ -92,6 +92,10 @@ LAYERS: list[Layer] = [
     # claimed otherwise. The wizard is unaffected (it advances with yes=True after its own prompt).
     Layer("automation", "Schedules", "Scheduled jobs, loaded into launchd", False, "confirm"),
     Layer("ui", "Terminal UI", "The guided plainkeep-ui binary for humans (`plainkeep ui`)", False, "confirm"),
+    # CONFIRM for the reason `automation` is: it writes OUTSIDE the vault, into the operator's own
+    # agent configuration directories. The wizard defaults it on — an agent that cannot read the
+    # manual improvises, which is the failure this layer exists to end.
+    Layer("agents", "Agent skills", "The operating manual, in the folders AI agents read", False, "confirm"),
 ]
 
 
@@ -548,6 +552,51 @@ def _status_ui(layer: Layer) -> dict:
                 "install the GitHub CLI: brew install gh (then `plainkeep setup ui --yes`)")
 
 
+def _status_agents(layer: Layer) -> dict:
+    """Is the operating manual reachable by the agents installed on this machine?
+
+    NOT_APPLICABLE when no agent is installed at all — advisory by contract (§7), so a server or a
+    machine whose owner drives plainkeep only by hand is never nagged about a manual nothing would
+    read. A machine WITH agents and without links is `absent`: that is the exact state in which an
+    agent reads the vault contract, cannot open the manual it names, and improvises."""
+    src = agentskills.source_dir()
+    items = agentskills.rows()
+    if not items:
+        return _row(layer, "not_applicable",
+                    "no agent skill directories on this host (no Claude Code / Codex / Hermes / Grok)",
+                    items, "")
+    if not (src / "SKILL.md").is_file():
+        # The engine is the source of truth and it has no manual to deliver. Linking would produce a
+        # dangling link in every agent's directory, which is worse than the absence it replaces.
+        return _row(layer, "blocked", f"the engine ships no manual at {src}", items, "")
+    foreign = [i for i in items if i["state"] == "foreign"]
+    if foreign:
+        return _row(layer, "partial",
+                    f"{foreign[0]['id']}/{agentskills.SKILL_NAME} is a real directory, not a link — "
+                    "move it aside, then re-run", items, "plainkeep setup agents --yes")
+    state = _items_status(items)
+    if state == "ready":
+        return _row(layer, "ready", f"{len(items)} agent(s) read the operating manual", items)
+    return _row(layer, state, "the operating manual is not in the folders these agents read", items,
+                "plainkeep setup agents --yes")
+
+
+def _install_agents(res: dict, *, fake: bool) -> None:
+    """Link the manual into every DETECTED agent skills directory.
+
+    Per-agent failure is recorded and does not abort the rest: one agent with a hand-installed
+    directory must not cost the others their manual."""
+    for t in agentskills.detected():
+        dst = agentskills.link_path(t)
+        if _fake(fake):
+            res["ran"].append(f"link {dst} -> {agentskills.source_dir()}")
+            continue
+        try:
+            res["ran"].append(agentskills.link(t))
+        except OSError as exc:
+            res["handoff"].append(f"{t.agent}: {exc}")
+
+
 def _ui_verify_and_install(asset_path, checksums_path, target) -> None:
     """sha256-gate the downloaded asset against the release's checksums.txt, then move it into place
     executable. Raises OSError on any mismatch (the caller surfaces it as a layer failure) and
@@ -626,6 +675,8 @@ def status(layer_id=None) -> list[dict]:
             out.append(_status_automation(layer))
         elif layer.id == "ui":
             out.append(_status_ui(layer))
+        elif layer.id == "agents":
+            out.append(_status_agents(layer))
     return out
 
 
@@ -713,6 +764,10 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             # ADR-011: download the compiled plainkeep-ui release binary (sha256-verified) into
             # $PLAINKEEP_HOME/.local/bin — or compile from cli/ source in a contributor checkout.
             _install_ui(res, fake=fake)
+        elif layer.id == "agents":
+            # Deliver the engine-owned manual into each installed agent's own skills directory
+            # (agentskills.py). Symlinks through `current`, so an engine update refreshes them all.
+            _install_agents(res, fake=fake)
     except BaseException as exc:
         exc.ops_partial_ran = list(res["ran"])
         raise

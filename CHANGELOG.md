@@ -7,6 +7,26 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 ## [Unreleased]
 
 ### Added
+- **`plainkeep setup agents` — the operating manual, delivered where agents actually look.** The
+  manual (`skills/operate-plainkeep/SKILL.md`) is engine-owned, and since ADR-017 the engine lives
+  outside every vault, so the only thing pointing at it was prose: a vault's `AGENTS.md` telling the
+  agent to read `skills/operate-plainkeep/SKILL.md`, a path that resolves to **nothing** in a
+  data-only vault. Reported from the field: an agent obeyed that first instruction, got ENOENT, and
+  proceeded on its own judgement — grepping the notes and scripting around the verb surface, because
+  every rule about *how* to operate a vault lived in the file it could not open. `SKILL.md` in
+  `<skills-dir>/<name>/` is an open standard (agentskills.io) that Claude Code, Codex CLI, Hermes,
+  OpenClaw and Grok Build all implement, and the manual already satisfied it — so the gap was
+  delivery, not authoring. The new layer symlinks it into every agent skills directory present on
+  the machine (`~/.claude/skills/`, `~/.agents/skills/` — the cross-tool directory Codex, OpenClaw
+  and Grok read — `~/.hermes/skills/`, `~/.grok/skills/`). Symlinks through `current`, so one engine
+  update refreshes every agent and a rollback follows them back; only installed agents are targeted
+  (`not_applicable`, advisory, on a host with none); a **real** directory at a target name is
+  reported and never replaced, because deleting somebody's hand-installed skill to make room for a
+  link is data loss, not a setup step. Confirm-class for the reason `automation` is — it writes
+  outside the vault. The vault contract and `CLAUDE.md` now name the manual as a *skill* rather than
+  as a path, and both spell out the reading half of the surface (`plainkeep search` to find,
+  `plainkeep help` / `complete --json` to learn a verb) so that an agent that still cannot load the
+  manual has the method rather than only the prohibitions.
 - **Schedule times are a product surface: `plainkeep job set`, and the setup wizard asks.** The
   hours automation runs at were two literals in `jobs/registry.json` that only a hand-edit could
   change, so a day that runs 08:00–22:00 got a system that opened it at 07:30 and closed it at
@@ -26,6 +46,19 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   --yes` and `--all --yes` stay non-interactive and leave existing times alone.
 
 ### Fixed
+- **One developer's machine was baked into a published tool.** The shipped agent contract opened
+  with "You are operating Tamas's personal operating system", the operating manual routed repos by
+  naming a specific client, and it pinned a currency and a tax-formula path — all of it delivered,
+  now, into every user's agent skill directories. The engine-owned contract and manual are neutral:
+  they describe *a* vault and *the human*, and anything specific to one person's work (named
+  clients, house conventions, rates and currency) is read from that vault's own
+  `wiki/conventions.md` and business notes, which is where it always belonged. `bin/lib/wall.py`
+  had the same defect as executable code — with no `HOME` set it anchored the sibling roots, and
+  therefore the walled-off iCloud/Photos markers, at a literal `/Users/tamas`, so on any other host
+  the path wall defended paths that did not exist and left the real ones unmarked; it now falls
+  back to `expanduser("~")`, which is the machine's own answer. The contract also stopped asserting
+  `~/plainkeep`: since ADR-014 a vault's path is not fixed, and the rule now names the vault
+  `plainkeep vault status` reports.
 - **`plainkeep job enable` on a machine migrated under the old symlink guidance.** Before ADR-022
   the handoff after `job apply` was `ln -sf …/jobs/launchd/*.plist` into `~/Library/LaunchAgents`;
   `enable` installs a *copy*, and copying onto that symlink either raised `SameFileError` (link back

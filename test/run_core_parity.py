@@ -1411,8 +1411,18 @@ def _no_repo_read_unreadable_source(binary: str, tmps: list[Path], vault: Path) 
 # did. That matters more for this module than most: `bin/**` is inside migration's own removal
 # allowlist, so a vault's copy of `migrate.py` is one of the files a migration deletes. The installed
 # copy is the one that outlives the operation.
+#
+# 29, and TWO modules are being accounted for here rather than one. `agentskills.py` is this
+# change's: the delivery surface for the operating manual (`plainkeep setup agents`), which belongs
+# in the INSTALLED tree for the same reason this count exists — the skill it links to is
+# engine-owned and named through `current`, so the module computing that link travels with the
+# engine, not with any vault. The other is `wall.py`, added by the root-DISCOVERY commit (58431d8)
+# without raising this number, so the pin sat one behind from then until now and this check was
+# already RED on main before the agents layer existed. Recorded rather than quietly absorbed: the
+# whole point of a pinned count is that adding a module is a decision somebody states out loud, and
+# a pin that silently drifts proves the opposite of what it was put here to prove.
 EXPECTED_ENGINE_VERBS = 35
-EXPECTED_ENGINE_LIB_MODULES = 27
+EXPECTED_ENGINE_LIB_MODULES = 29
 
 
 def _installed_manifest_checks(tmps: list[Path]) -> None:

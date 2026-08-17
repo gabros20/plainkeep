@@ -110,8 +110,8 @@ def main() -> int:
         mod = reload_setuplib(home)
 
         ids = [layer.id for layer in mod.LAYERS]
-        check("registry has L1-L5 + ui in order",
-              ids == ["skeleton", "search", "backups", "models", "automation", "ui"], str(ids))
+        check("registry has L1-L5 + ui + agents in order",
+              ids == ["skeleton", "search", "backups", "models", "automation", "ui", "agents"], str(ids))
         check("registry exposes layer shape",
               all(layer.id and layer.title and layer.gate and isinstance(layer.required, bool) for layer in mod.LAYERS),
               str(mod.LAYERS))
@@ -120,7 +120,7 @@ def main() -> int:
 
         rows = mod.status()
         valid = {"ready", "partial", "absent", "blocked", "not_applicable"}
-        check("status returns public rows", len(rows) == 6 and all({"id", "title", "status", "required", "detail", "items", "next"}.issubset(r) for r in rows), str(rows))
+        check("status returns public rows", len(rows) == 7 and all({"id", "title", "status", "required", "detail", "items", "next"}.issubset(r) for r in rows), str(rows))
         check("status values are valid", {r["status"] for r in rows} <= valid, str(rows))
         check("single-layer status filters", [r["id"] for r in mod.status("search")] == ["search"])
 
@@ -1232,12 +1232,12 @@ def main() -> int:
         json_dash = run_setup(["--json"], cli_home)
         try:
             lines = [json.loads(ln) for ln in json_dash.stdout.splitlines() if ln.strip()]
-            json_ok = json_dash.returncode == 0 and len(lines) == 7 and lines[0]["count"] == 6
+            json_ok = json_dash.returncode == 0 and len(lines) == 8 and lines[0]["count"] == 7
         except Exception as e:
             lines = []
             json_ok = False
             json_dash.stderr += str(e)
-        check("setup --json emits header plus six parseable layer rows", json_ok, json_dash.stdout + json_dash.stderr)
+        check("setup --json emits header plus seven parseable layer rows", json_ok, json_dash.stdout + json_dash.stderr)
         check("setup --json rows expose public fields",
               bool(lines) and all({"id", "title", "status", "required", "detail", "items", "next"}.issubset(r) for r in lines[1:]),
               str(lines))
@@ -1345,6 +1345,115 @@ def main() -> int:
               dry_all.stderr + dry_all.stdout)
         check("setup --all --dry-run renders no plists, pulls no model, creates no .venv",
               not (dry_home / ".venv").exists() and not (dry_home / "jobs" / "launchd").exists())
+
+    # ---------------------------------------------------------------------------------------------
+    # The `agents` layer: the operating manual, delivered into the directories agents actually read.
+    #
+    # The bug this pins is a DELIVERY bug, not a wording one: the manual satisfies the SKILL.md
+    # standard and shipped only inside the engine tree, so a vault contract naming
+    # `skills/operate-plainkeep/SKILL.md` resolved to nothing and every agent improvised. Each check
+    # below is one way that could silently come back.
+    with tempfile.TemporaryDirectory() as td:
+        home = make_home(Path(td))
+        agent_home = Path(td) / "agent-home"
+        agent_home.mkdir()
+        os.environ["PLAINKEEP_AGENT_HOME"] = str(agent_home)
+        sl = reload_setuplib(home)
+        from lib import agentskills  # noqa: E402
+        importlib.reload(agentskills)
+
+        # (1) No agent on the host: advisory, and — the part that matters — it writes NOTHING.
+        row = sl.status("agents")[0]
+        check("agents: not_applicable when no agent dirs exist",
+              row["status"] == "not_applicable" and row["items"] == [], str(row))
+        sl.advance("agents", yes=True, fake=False)
+        check("agents: advancing on a host with no agents creates nothing",
+              list(agent_home.iterdir()) == [], str(list(agent_home.iterdir())))
+
+        # (1b) A TOOL'S CONFIG DIR IS NOT THE DIRECTORY IT READS SKILLS FROM. Codex keeps config in
+        #      `~/.codex` and loads skills from `~/.agents/skills`. Keying delivery on `~/.agents`
+        #      meant a machine with Codex and no `~/.agents` got nothing — measured on a real host,
+        #      which had `.codex` and `.grok` and no `.agents` at all.
+        (agent_home / ".codex").mkdir()
+        row = sl.status("agents")[0]
+        check("agents: Codex counts as installed via ~/.codex, not ~/.agents",
+              row["status"] == "absent" and any(i["id"] == ".agents/skills" for i in row["items"]),
+              str(row))
+        sl.advance("agents", yes=True, fake=False)
+        cross = agent_home / ".agents" / "skills" / "operate-plainkeep"
+        check("agents: the cross-tool dir is CREATED for a Codex-only machine",
+              cross.is_symlink() and (cross / "SKILL.md").is_file(), str(cross))
+        sl.advance("agents", yes=True, fake=False)  # settle back to ready before the next case
+
+        # (2) Two more agents installed, no manual in either — the state the field machine was in.
+        (agent_home / ".claude").mkdir()
+        (agent_home / ".hermes").mkdir()
+        row = sl.status("agents")[0]
+        # `partial`, not `absent`: Codex was linked in (1b), so this is the mixed state — one agent
+        # served, two newly installed and unserved. Three targets are detected (.agents, .claude,
+        # .hermes); `.grok/skills` is not, because no `~/.grok` exists in this fixture.
+        check("agents: newly installed agents show as unserved alongside a linked one",
+              row["status"] == "partial" and len(row["items"]) == 3
+              and sorted(i["state"] for i in row["items"]) == ["absent", "absent", "linked"],
+              str(row))
+        check("agents: the row hands over the exact command",
+              row["next"] == "plainkeep setup agents --yes", str(row))
+
+        # (3) Confirm-class: it writes outside the vault, so no --yes means no write.
+        res = sl.advance("agents", yes=False, fake=False)
+        check("agents: confirm-gated — no --yes, nothing linked",
+              res["confirm_needed"] and not (agent_home / ".claude" / "skills").exists(), str(res))
+
+        # (4) Advance links every detected agent, and the link RESOLVES to the shipped manual.
+        res = sl.advance("agents", yes=True, fake=False)
+        links = [agent_home / ".claude" / "skills" / "operate-plainkeep",
+                 agent_home / ".hermes" / "skills" / "operate-plainkeep"]
+        check("agents: advance links every detected agent",
+              all(p.is_symlink() for p in links), str(res["ran"]))
+        check("agents: each link resolves to the engine's SKILL.md",
+              all((p / "SKILL.md").is_file() for p in links),
+              str([str(p.resolve()) for p in links]))
+        check("agents: layer is ready after advancing", sl.status("agents")[0]["status"] == "ready")
+
+        # (5) The link must name `current`, never the active version — a version-pinned link breaks
+        #     at the next update and dangles when that version is pruned (stable_launcher's argument).
+        check("agents: link target is not a version-pinned engine path",
+              "/engine/" not in str(agentskills.source_dir()) or
+              "/current/" in str(agentskills.source_dir()),
+              str(agentskills.source_dir()))
+
+        # (6) Idempotent: a second advance is a skip, not a re-link.
+        res2 = sl.advance("agents", yes=True, fake=False)
+        check("agents: re-advancing a ready layer is a skip", res2["skipped"] == ["agents"], str(res2))
+
+        # (7) A STALE link (ours, pointing at a pruned engine) is replaced.
+        # `missing_ok` on purpose: if delivery regressed, the link above was never created, and a
+        # fixture that raises here would abort the run and print NO failing checks at all — the
+        # regression would read as a crash rather than as the six named failures it actually is.
+        stale = links[0]
+        stale.unlink(missing_ok=True)
+        stale.parent.mkdir(parents=True, exist_ok=True)
+        os.symlink(str(Path(td) / "gone" / "operate-plainkeep"), stale)
+        check("agents: a link to a pruned engine reads as stale",
+              sl.status("agents")[0]["status"] == "partial", str(sl.status("agents")[0]))
+        sl.advance("agents", yes=True, fake=False)
+        check("agents: advance repairs a stale link",
+              (stale / "SKILL.md").is_file(), str(stale.resolve()))
+
+        # (8) A REAL directory at the target name is somebody's hand-installed skill. Report it;
+        #     never delete it to make room for a link. This is the check that keeps the delete in
+        #     `agentskills.link()` bounded to symlinks — the pathwall pin states the same bound.
+        stale.unlink(missing_ok=True)
+        stale.mkdir(parents=True, exist_ok=True)
+        (stale / "SKILL.md").write_text("hand-written, must survive\n", encoding="utf-8")
+        row = sl.status("agents")[0]
+        check("agents: a real directory reads as partial, not ready", row["status"] == "partial", str(row))
+        sl.advance("agents", yes=True, fake=False)
+        check("agents: a real directory is NEVER replaced by a link",
+              stale.is_dir() and not stale.is_symlink()
+              and (stale / "SKILL.md").read_text().startswith("hand-written"),
+              str(row))
+        os.environ.pop("PLAINKEEP_AGENT_HOME", None)
 
     print(f"\n{BOLD}Setup layer registry — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

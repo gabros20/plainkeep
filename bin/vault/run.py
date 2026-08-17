@@ -123,14 +123,30 @@ enforces none of them.
 `plainkeep.json` in this directory is the machine contract (schema, verbs, capabilities). It is
 GENERATED — regenerate it with `plainkeep help` rather than editing it.
 
+## How to FIND things — this half is not optional
+
+READING has a surface too, and skipping it is the failure this section exists to prevent:
+
+* To find a note, a task or an asset: `plainkeep search "<query>"`. Never `grep`, `find` or `ls`
+  your way through these folders — the index exists so you don't have to, and trawling is how
+  things get misfiled, duplicated, or acted on twice.
+* To learn what a verb takes: `plainkeep help`, or `plainkeep complete --json <partial>` for the
+  candidate values of any argument. Never read or parse `plainkeep.json` with a script.
+* The verb computes placement, naming and links. You supply content and judgement, nothing else.
+
 ## The operating manual
 
-Engine-owned, and it travels with the engine rather than with these notes:
+Engine-owned, and it travels with the engine rather than with these notes. It is normally already
+loaded as one of your SKILLS — `plainkeep setup agents --yes` installs it into every agent skills
+directory on this machine (`~/.claude/skills/`, `~/.agents/skills/`, `~/.hermes/skills/`,
+`~/.grok/skills/`), which is where each agent already looks.
+
+If it is not among your skills, it is here:
 
     {skill}
 
 That path goes through `current`, so it keeps naming the engine that is actually active after an
-update or a rollback.
+update or a rollback. **If you cannot read it, say so and stop — do not improvise a way around it.**
 """
 
 INIT_CLAUDE_MD = """\
@@ -138,6 +154,10 @@ INIT_CLAUDE_MD = """\
 
 The vault's instructions live in AGENTS.md, which every agent adapter reads. This file only bridges
 to it, so there is one set of instructions rather than two that drift.
+
+The operating manual is the `operate-plainkeep` SKILL, installed into `~/.claude/skills/` by
+`plainkeep setup agents --yes`. It is engine-owned and lives outside this vault — there is no
+`skills/` directory here to read it from.
 """
 
 INIT_JOBS_REGISTRY = {

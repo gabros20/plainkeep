@@ -334,7 +334,7 @@
             <span class="pr-dot" style="background:#FF5F57"></span>
             <span class="pr-dot" style="background:#FEBC2E"></span>
             <span class="pr-dot" style="background:#28C840"></span>
-            <span class="pr-termtitle" id="prTermTitle">tamas — ~/plainkeep</span>
+            <span class="pr-termtitle" id="prTermTitle">you — ~/vault</span>
           </div>
           <div class="pr-termbody" id="prTermBody"></div>
         </div>
@@ -786,7 +786,7 @@ function prReset(idx){prBuildTree();
     else if(m.op==='move'){const src=document.querySelector('#prTree [data-path="'+m.from+'"]');if(src)src.remove();
       prStructAdd({path:m.to,label:m.label,depth:m.depth,after:m.after},false);}});
   prTermBodyEl().innerHTML='';
-  document.getElementById('prTermTitle').textContent=prMode==='human'?'tamas — ~/plainkeep':'claude — ~/plainkeep';
+  document.getElementById('prTermTitle').textContent=prMode==='human'?'you — ~/vault':'claude — ~/vault';
   document.getElementById('prPvTab').textContent='no file open';document.getElementById('prPvBody').innerHTML='';prSetCap('');}
 async function prPlay(){prCancel();const g=prGen;prReset(prIdx);prSetRunning(true);
   await prRun(SCN[prIdx][prMode],g);if(g===prGen)prSetRunning(false);}

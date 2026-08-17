@@ -1,8 +1,8 @@
 ---
 name: operate-plainkeep
 description: >
-  How to operate Tamas's personal operating system (~/plainkeep), code workspace (~/work),
-  and asset store (~/files). Read this whenever asked to capture, search, organize,
+  How to operate a plainkeep vault (knowledge, tasks, journal), its code workspace (~/work),
+  and its asset store (~/files). Read this whenever asked to capture, search, organize,
   triage, manage tasks, file documents, scaffold or archive projects/clients, draft
   invoices, review the day/week, or do coding work in any ~/work repo. This is the
   full operating manual; pair it with plainkeep.json (the verb list) and wiki/conventions.md.
@@ -96,13 +96,16 @@ guess a permanent home.
 A directory with code is NOT automatically a "project." Decide with these questions, top
 to bottom, FIRST hit wins — never skip to a lower one:
 
-1. Am I (Tamas) getting PAID to build/maintain it? → `~/work/clients/<client>/` (his main
-   client is `clients/designatives/`).
-2. Is it HIS OWN product he intends to ship and keep? → `~/work/products/`.
-3. Is it something he only RUNS — a fork he maintains, a self-hosted app, someone else's
-   tool he cloned to use? → `~/work/tools/`.  ← cloned tools land HERE, never in clients/products.
+1. Is the human PAID to build or maintain it? → `~/work/clients/<client>/`.
+2. Is it their OWN product, meant to ship and be kept? → `~/work/products/`.
+3. Is it something they only RUN — a fork they maintain, a self-hosted app, someone else's
+   tool cloned to use? → `~/work/tools/`.  ← cloned tools land HERE, never in clients/products.
 4. Is it an EXPERIMENT with a possible future? → `~/work/labs/`.
 5. Is it a throwaway clone just to look at / test? → `~/work/sandbox/` (never backed up).
+
+Named clients, house conventions and any local exceptions to this tree live in the VAULT
+(`wiki/conventions.md`), never in this manual — this file is engine-owned and shared by every
+plainkeep install, so anything specific to one person's work belongs on their side of the line.
 
 If you cannot answer #1–#5 with confidence, STOP and ask. Misfiling a repo is worse than
 asking, because it pollutes the registry that drives backup and restore.
@@ -261,7 +264,9 @@ happen for the next operator.
   project hub and the journal.
 - NEVER transmit externally (email, push, deploy, post, payment). Drafts only; human sends.
 - NEVER read `.env` or print secrets. References (`op://…`) may be named, never resolved.
-- NEVER hardcode tax rates — read `wiki/areas/business-admin/tax-formula.md`. Currency HUF.
+- NEVER hardcode tax rates or a currency — read them from the vault's own business notes
+  (`wiki/areas/business-admin/tax-formula.md` by convention). Rates and currency are the
+  human's, not this manual's; if the note is missing, say so and stop rather than assuming.
 - BRAIN-FIRST: search the system (`plainkeep search`) before any web/external lookup or relying on
   your own memory. The system is the cheapest, most current, most personal source; external
   calls only fill gaps it genuinely lacks. State when you fell back to an external source.

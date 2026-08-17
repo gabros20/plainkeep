@@ -689,3 +689,17 @@ in-branch; this is what was deliberately deferred.
   int. Measured by hand during the review (`schedule names 2 cadences (daily, interval_minutes)`)
   and correct — just not pinned. Fix: a fixture registry per shape in `run_jobverb.py`, asserted on
   `job list` (warn text) and `job enable` (whole-command refusal).
+- **An existing vault's agent adapters are never refreshed** (found while fixing the dangling
+  manual pointer). `AGENTS.md`/`CLAUDE.md` are VAULT-owned: `plainkeep vault init` writes them once
+  and, as `migrate.py`'s own note says, "an installed engine does not provide them" — `script/update`
+  refreshes them only in a SOURCE CHECKOUT. So a vault created before a contract change keeps the old
+  text forever. Measured on a real machine: a vault migrated from the pre-ADR-017 layout still told
+  every agent to read `skills/operate-plainkeep/SKILL.md` *relative to the vault*, where no `skills/`
+  has existed since the engine moved out — the agent got ENOENT and improvised. `plainkeep setup
+  agents` (this release) makes that mostly moot by delivering the manual through each agent's own
+  skills directory rather than through a path in prose, so a stale pointer no longer costs the agent
+  its manual. The gap that remains is the text itself. Fix: a contract-version marker in the adapters
+  plus `plainkeep vault sync-adapters --yes` (or a `doctor --init` repair) that rewrites them when the
+  engine ships a newer contract, and a `doctor` check that the manual reference RESOLVES — the
+  ADR-019 "unwired rule" detector pointed at the agent contract, which would have caught this on the
+  day ADR-017 landed.

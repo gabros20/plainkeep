@@ -6,6 +6,14 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [4.0.8] — 2026-08-18
+
+The first tagged engine release. Everything below shipped to `main` before this tag existed;
+cutting it gives the engine a version you can name, pin and roll back to, the way the terminal UI
+already had one (`ui-v*`).
+
 ### Added
 - **`plainkeep setup agents` — the operating manual, delivered where agents actually look.** The
   manual (`skills/operate-plainkeep/SKILL.md`) is engine-owned, and since ADR-017 the engine lives

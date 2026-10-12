@@ -1,0 +1,394 @@
+{
+ "schema": "plainkeep.bench.queries/1",
+ "queries": [
+  {
+   "id": "hu-01",
+   "query": "kapcsolattartó fizetési határidő",
+   "expected": [
+    "wiki/clients/kovacs-es-tarsa-kft.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-exact"
+   ],
+   "answerable": true,
+   "note": "client hub; every word accented and verbatim in the target"
+  },
+  {
+   "id": "hu-02",
+   "query": "felmondási titoktartási kötelezettség",
+   "expected": [
+    "wiki/notes/szolgaltatasi-szerzodes-sablon.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-exact"
+   ],
+   "answerable": true,
+   "note": "contract template; a looser contract note shares 'kötelezettség'"
+  },
+  {
+   "id": "hu-03",
+   "query": "számlázás teljesítésigazolás jóváhagyás",
+   "expected": [
+    "wiki/runbooks/havi-szamlazasi-folyamat.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-exact"
+   ],
+   "answerable": true,
+   "note": "invoicing runbook; other notes share 'számlázás'"
+  },
+  {
+   "id": "hu-04",
+   "query": "átalányadó áfamentesség bevételi",
+   "expected": [
+    "wiki/notes/atalanyado-es-afa.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-exact"
+   ],
+   "answerable": true,
+   "note": "tax note; a deadline calendar shares the vocabulary"
+  },
+  {
+   "id": "hu-05",
+   "query": "átütemezés mérföldkő egyeztetés",
+   "expected": [
+    "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-exact"
+   ],
+   "answerable": true,
+   "note": "meeting note"
+  },
+  {
+   "id": "hu-06",
+   "query": "könyvelő pénzügyi vezetője",
+   "expected": [
+    "wiki/people/nagy-eszter.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-exact"
+   ],
+   "answerable": true,
+   "note": "person note"
+  },
+  {
+   "id": "hu-07",
+   "query": "ügyfelek bevezetésének",
+   "expected": [
+    "wiki/notes/ugyfel-bevezetes-ellenorzolista.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-inflect"
+   ],
+   "answerable": true,
+   "note": "inflected forms only; target has 'ügyfél' and 'bevezetés'. Needs 0.2"
+  },
+  {
+   "id": "hu-08",
+   "query": "szerződést reklamációkról",
+   "expected": [
+    "wiki/notes/reklamacio-kezelesi-szabaly.md"
+   ],
+   "tags": [
+    "hu",
+    "hu-inflect"
+   ],
+   "answerable": true,
+   "note": "inflected forms only; target has 'szerződés' and 'reklamáció'. Needs 0.2"
+  },
+  {
+   "id": "deep-01",
+   "query": "pgbouncer keeps stale connections to the old primary after a promotion, how long until they expire",
+   "expected": [
+    "wiki/runbooks/postgres-failover-runbook.md"
+   ],
+   "tags": [
+    "deep",
+    "en"
+   ],
+   "answerable": true,
+   "needle": "the shipped default of 600 seconds meant that workers kept failing for ten minutes",
+   "note": "answer is in the last section, past the embed window"
+  },
+  {
+   "id": "deep-02",
+   "query": "signature rejections because the receiver clock was running ahead",
+   "expected": [
+    "wiki/notes/webhook-outage-postmortem-2026-08.md"
+   ],
+   "tags": [
+    "deep",
+    "en"
+   ],
+   "answerable": true,
+   "needle": "The affected receiver's clock had drifted nine minutes ahead",
+   "note": "answer is in the last section, past the embed window"
+  },
+  {
+   "id": "deep-03",
+   "query": "what happened to unacknowledged messages when the Redis replica was promoted",
+   "expected": [
+    "wiki/research/queue-backend-comparison.md"
+   ],
+   "tags": [
+    "deep",
+    "en"
+   ],
+   "answerable": true,
+   "needle": "unacknowledged entries stayed in the pending-entries list of the old consumer names",
+   "note": "answer is in the last section, past the embed window"
+  },
+  {
+   "id": "deep-04",
+   "query": "request body size limit before the relay queues a pointer instead of the body",
+   "expected": [
+    "wiki/projects/webhook-relay.md"
+   ],
+   "tags": [
+    "deep",
+    "en"
+   ],
+   "answerable": true,
+   "needle": "Request bodies larger than 256 KB are not queued directly",
+   "note": "answer is in a late section of the project hub"
+  },
+  {
+   "id": "deep-05",
+   "query": "how long do we retain the nightly database dumps",
+   "expected": [
+    "wiki/notes/infra-meeting-log-2026-q3.md"
+   ],
+   "tags": [
+    "deep",
+    "en"
+   ],
+   "answerable": true,
+   "needle": "keep nightly database dumps for 35 days",
+   "note": "answer is in the last meeting entry"
+  },
+  {
+   "id": "task-01",
+   "query": "SendGrid API key rotation",
+   "expected": [
+    "tasks/active/T-20260902-01.md"
+   ],
+   "tags": [
+    "task",
+    "en"
+   ],
+   "answerable": true,
+   "note": "active task; the term appears nowhere else"
+  },
+  {
+   "id": "task-02",
+   "query": "wildcard certificate renewal for staging",
+   "expected": [
+    "tasks/active/T-20260904-02.md"
+   ],
+   "tags": [
+    "task",
+    "en"
+   ],
+   "answerable": true,
+   "note": "active task; the term appears nowhere else"
+  },
+  {
+   "id": "task-03",
+   "query": "bank SEPA direct debit mandate",
+   "expected": [
+    "tasks/waiting/T-20260905-03.md"
+   ],
+   "tags": [
+    "task",
+    "en"
+   ],
+   "answerable": true,
+   "note": "waiting task; the term appears nowhere else"
+  },
+  {
+   "id": "task-04",
+   "query": "move cron jobs to systemd timers",
+   "expected": [
+    "tasks/done/T-20260810-04.md"
+   ],
+   "tags": [
+    "task",
+    "en"
+   ],
+   "answerable": true,
+   "note": "done task; the term appears nowhere else"
+  },
+  {
+   "id": "journal-01",
+   "query": "Safari cookie lifetime broke the demo login",
+   "expected": [
+    "journal/2026/09/2026-09-03.md"
+   ],
+   "tags": [
+    "journal",
+    "en"
+   ],
+   "answerable": true,
+   "note": "journal day; a neighbouring day shares 'demo' and 'login'"
+  },
+  {
+   "id": "journal-02",
+   "query": "courier lost the security key parcel",
+   "expected": [
+    "journal/2026/09/2026-09-09.md"
+   ],
+   "tags": [
+    "journal",
+    "en"
+   ],
+   "answerable": true,
+   "note": "journal day; a neighbouring day shares 'parcel'"
+  },
+  {
+   "id": "journal-03",
+   "query": "why did I go back from the Zed editor",
+   "expected": [
+    "journal/2026/09/2026-09-16.md"
+   ],
+   "tags": [
+    "journal",
+    "en"
+   ],
+   "answerable": true,
+   "note": "journal day; a neighbouring day shares 'editor'"
+  },
+  {
+   "id": "superseded-01",
+   "query": "which queue did we use for webhooks before Redis Streams",
+   "expected": [
+    "wiki/notes/decision-sqs-for-webhook-queue.md"
+   ],
+   "tags": [
+    "superseded",
+    "en"
+   ],
+   "answerable": true,
+   "note": "historical question; the newer decision repeats the query words"
+  },
+  {
+   "id": "superseded-02",
+   "query": "why was a Hetzner VPS originally picked for staging",
+   "expected": [
+    "wiki/notes/decision-hetzner-vps-for-staging.md"
+   ],
+   "tags": [
+    "superseded",
+    "en"
+   ],
+   "answerable": true,
+   "note": "historical question; the newer decision covers the same topic"
+  },
+  {
+   "id": "superseded-03",
+   "query": "how were invoices produced before Invoice Ninja",
+   "expected": [
+    "wiki/notes/decision-pandoc-invoice-pipeline.md"
+   ],
+   "tags": [
+    "superseded",
+    "en"
+   ],
+   "answerable": true,
+   "note": "historical question; the newer decision repeats the query words"
+  },
+  {
+   "id": "unanswerable-01",
+   "query": "SOC 2 audit evidence for webhook delivery",
+   "expected": [],
+   "tags": [
+    "unanswerable",
+    "en"
+   ],
+   "answerable": false,
+   "note": "no note covers SOC 2; 'webhook' makes keyword return hits"
+  },
+  {
+   "id": "unanswerable-02",
+   "query": "Kubernetes GPU autoscaling for the invoice service",
+   "expected": [],
+   "tags": [
+    "unanswerable",
+    "en"
+   ],
+   "answerable": false,
+   "note": "no note covers it; 'invoice' makes keyword return hits"
+  },
+  {
+   "id": "unanswerable-03",
+   "query": "app store review guidelines for the client portal",
+   "expected": [],
+   "tags": [
+    "unanswerable",
+    "en"
+   ],
+   "answerable": false,
+   "note": "no note covers it; 'client' makes keyword return hits"
+  },
+  {
+   "id": "exact-01",
+   "query": "Retry Budget",
+   "expected": [
+    "wiki/notes/retry-budget.md"
+   ],
+   "tags": [
+    "exact",
+    "en"
+   ],
+   "answerable": true,
+   "note": "exact title; two denser notes repeat 'retry' and 'budget'"
+  },
+  {
+   "id": "exact-02",
+   "query": "Client Offboarding Checklist",
+   "expected": [
+    "wiki/notes/offboarding-clients-steps.md"
+   ],
+   "tags": [
+    "exact",
+    "en"
+   ],
+   "answerable": true,
+   "note": "exact title; two denser checklists repeat 'client' and 'checklist'"
+  },
+  {
+   "id": "exact-03",
+   "query": "code freeze",
+   "expected": [
+    "wiki/notes/release-freeze-windows.md"
+   ],
+   "tags": [
+    "exact",
+    "en"
+   ],
+   "answerable": true,
+   "note": "alias; denser notes repeat 'code' and 'freeze'"
+  },
+  {
+   "id": "exact-04",
+   "query": "vat deadlines",
+   "expected": [
+    "wiki/notes/tax-filing-calendar.md"
+   ],
+   "tags": [
+    "exact",
+    "en"
+   ],
+   "answerable": true,
+   "note": "alias; denser notes repeat 'vat' and 'deadlines'"
+  }
+ ]
+}

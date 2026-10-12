@@ -17,6 +17,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -291,7 +292,11 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
 
 
 def _fts_query(q: str) -> str:
-    toks = [t for t in re.findall(r"[A-Za-z0-9]+", q.lower()) if len(t) > 1]
+    # \w is Unicode-aware (ü, ő, é survive); it also matches "_", so drop tokens with no letter/digit
+    # (e.g. "__") rather than hand FTS5 an empty or punctuation-only phrase.
+    # NFC first: a decomposed "u" + combining diaeresis (pasted from macOS) would otherwise split the word
+    q = unicodedata.normalize("NFC", q)
+    toks = [t for t in re.findall(r"\w+", q.lower()) if len(t) > 1 and any(c.isalnum() for c in t)]
     return " OR ".join(f'"{t}"' for t in toks) or '""'
 
 
@@ -353,10 +358,16 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
     material (any note with `derived_from`); 'agent' keeps only `author: agent` notes."""
     con = connect()
     amap = _authorship(con) if author else {}
+    fts = _fts_query(query)
+    if fts == '""':
+        # no usable token (punctuation only): the '""' fallback matches every chunk in FTS5, and the
+        # vector arm would still answer; a query with nothing to search for returns no hits
+        con.close()
+        return []
     try:
         rows = con.execute(
             "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
-            (_fts_query(query), k * 4),
+            (fts, k * 4),
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []

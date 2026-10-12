@@ -6,7 +6,11 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+- **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
+  pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found
+  nothing. Tokens are now Unicode word characters, the FTS5 `unicode61` tokenizer folds diacritics so
+  `ugyfel` also matches, and a query with no usable token returns no hits.
 
 ## [4.0.8] — 2026-08-18
 

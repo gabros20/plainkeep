@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from lib.hermetic import seal
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
@@ -101,6 +102,28 @@ def main() -> int:
         dpaths = [p for p, _h, _s in search("designatives", k=6)]
         check("wikilink-graph expansion surfaces linked note",
               any("stripe-webhook-retries" in p for p in dpaths), f"{dpaths}")
+
+        # Unicode query tokens: a Hungarian note must be reachable with and without diacritics,
+        # and punctuation-only queries must not raise.
+        hu_name = "hu-ugyfel-szerzodes"
+        (content / f"{hu_name}.md").write_text(
+            "---\ntitle: Ügyfél szerződés\n---\n\n# Ügyfél szerződés\n\n"
+            "Az ügyfél szerződését a jogász átnézte, a szerződés aláírása következik.\n",
+            encoding="utf-8")
+        index(content, verbose=False)
+        hu_want = hu_name + ".md"
+        hu_q = {"ügyfél szerződés": "accented phrase", "ugyfel": "diacritic-free",
+                "szerződés": "accented single word",
+                unicodedata.normalize("NFD", "ügyfél szerződés"): "decomposed (NFD) phrase"}
+        for q, label in hu_q.items():
+            hp = [p for p, _h, _s in search(q, k=5)]
+            check(f"unicode: {label} ({q})", hu_want in hp, f"want {hu_want}, got {hp[:3]}")
+        try:
+            junk = [p for p, _h, _s in search("__ ... !!", k=5)]
+            check("unicode: punctuation-only query has no error", True)
+            check("unicode: punctuation-only query returns no hits", junk == [], f"{junk[:3]}")
+        except Exception as e:  # noqa: BLE001
+            check("unicode: punctuation-only query has no error", False, f"{type(e).__name__}: {e}")
 
         # subprocess smoke of the real CLI
         env = {**os.environ}

@@ -16,6 +16,11 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   `commits:` line for git and a separate `backup:` line that says "not configured" when no restic target
   exists. `backup run` records `.backup/last_ok.json` after a passing `restic check`.
 
+- **Triage defaults to `gemma4:e2b` (v2 step 0.12).** The ollama agent used `gemma3:1b`; it is now
+  `gemma4:e2b`, a separate default from enrich's `gemma4:e4b` (`PLAINKEEP_AGENT_MODEL` still overrides).
+  `models` gains a `triage` stage, so `models pull --all` (and `setup models`) pulls it. Without Ollama,
+  triage still falls back to the shell heuristics.
+
 ### Fixed
 - **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
   pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found

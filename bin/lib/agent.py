@@ -8,12 +8,19 @@ The verb never knows which agent (or none) ran: identical surface either way. Th
 
 Configure in your dotfiles:
     export PLAINKEEP_AGENT="claude"        # or "codex", "grok", "ollama", or "none" (default)
-    export PLAINKEEP_AGENT_MODEL="gemma3:1b"   # for PLAINKEEP_AGENT=ollama
+    export PLAINKEEP_AGENT_MODEL="gemma4:e2b"   # for PLAINKEEP_AGENT=ollama (triage; enrich has its own model)
     export PLAINKEEP_AGENT_CMD="my-agent --print"   # escape hatch: any command; the prompt is appended
 """
 import os
 import shlex
 import subprocess
+
+# The triage/classify default: small and fast, kept separate from the enrich default (enrichlib, gemma4:e4b).
+DEFAULT_TRIAGE_MODEL = "gemma4:e2b"
+
+
+def triage_model() -> str:
+    return os.environ.get("PLAINKEEP_AGENT_MODEL") or DEFAULT_TRIAGE_MODEL
 
 
 def _agent() -> str:
@@ -39,7 +46,7 @@ def _command(prompt: str, scope: str):
     if a == "grok":
         return ["grok", "-p", prompt]
     if a == "ollama":
-        return ["ollama", "run", os.environ.get("PLAINKEEP_AGENT_MODEL", "gemma3:1b"), prompt]
+        return ["ollama", "run", triage_model(), prompt]
     return None                                 # unknown agent → no command → fallback
 
 

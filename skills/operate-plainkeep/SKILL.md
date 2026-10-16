@@ -34,9 +34,9 @@ consequences you must act on:
   <name>` scaffolds one into `<vault>/plugins/local/<name>/`, which is user-owned, survives
   an engine upgrade, and re-enters through the dispatcher so the guardrail still gates it.
 * **Creating a vault and installing an engine are two different acts.** `plainkeep vault
-  init <path> --yes` makes a new DATA-ONLY vault (content dirs, configuration, `plugins/`,
+  init <path> --approved` makes a new DATA-ONLY vault (content dirs, configuration, `plugins/`,
   a generated `plainkeep.json`, the marker, a registry entry — and no code). `plainkeep
-  vault register <path> --yes` ADOPTS a directory that already exists. Neither installs an
+  vault register <path> --approved` ADOPTS a directory that already exists. Neither installs an
   engine, and `init` refuses a directory that already carries engine code — that is a
   source checkout, and `register` is what adopts one.
 * **Never update or roll back an engine on a human's behalf without being asked.** Both are
@@ -59,18 +59,24 @@ verb carries an `actions[]` array — the full subcommand grammar (per-action na
 to know a subcommand's exact shape instead of guessing from prose. `plainkeep complete --json
 <partial words…>` returns candidate `{value, description, kind}` rows for any argument (the
 same brain shell tab-completion uses). Per-action `risk` is descriptive (the verb self-gates
-`confirm` subactions on `--yes`, exit 3) — never pre-append `--yes`; let the verb refuse and
-read the exact re-run from its error. `plainkeep ui` is the HUMAN terminal UI — not for you; you
+`confirm` subactions on `--approved`, exit 3) — never pre-append the flag speculatively; let the
+verb refuse and read the exact re-run from its error (consent rule: §6a). `plainkeep ui` is the HUMAN terminal UI — not for you; you
 drive verbs by flags + `--json`, which is the better surface for an agent.
 
 ## 3. Orientation — run this at the start of every session
-1. Read today's and yesterday's `journal/YYYY/MM/*.md` to see what already happened.
-   The day's bookends are SCHEDULED by default (ADR-022): journal lines like
-   `started the day (automated)` / `closed the day (automated)` mean launchd ran
-   `start`/`close`, not a human — do not re-run `start` because nobody typed it; the note is
-   already seeded and a second run is a no-op you'd be logging for nothing.
-2. Run `plainkeep status` (active/waiting tasks, last close/backup/index).
-3. If your work is multi-step, open or create its task: `plainkeep task add "<title>"`.
+Run `plainkeep orient`. One call returns what you need to start: the journal tail (today's
+and yesterday's lines), active/waiting tasks, inbox and proposals, index age (and
+`pending_embeddings` when semantic search has a backlog), the last commit
+(`last_commit_age_min`), the backup state (separate from commits: "not configured", "last ok
+<time>", or "configured, no verified run recorded"), git state and recent notes. `--json` for
+a parsed form, `--line` for a one-line summary.
+
+The day's bookends are SCHEDULED by default (ADR-022): journal lines like
+`started the day (automated)` / `closed the day (automated)` mean launchd ran
+`start`/`close`, not a human — do not re-run `start` because nobody typed it; the note is
+already seeded and a second run is a no-op you'd be logging for nothing.
+
+If your work is multi-step, open or create its task: `plainkeep task add "<title>"`.
 Do not start acting until you've oriented; the journal exists so you never repeat or
 contradict the last session.
 
@@ -132,8 +138,14 @@ hubs, not a pile of files. Rules of traversal:
 - **Search first; never trawl.** To find anything, run `plainkeep search "<query>"` → it
   returns ranked `file#heading` hits. Open the file and read the relevant heading. Do not
   `cat` your way through folders; the index exists precisely so you don't.
+  - `search` covers every content collection (wiki, tasks, journal, inbox); narrow with
+    `--collection wiki|tasks|journal|inbox`. It returns the top 10 by default and says so in a
+    footer (`showing 10 of ≥N — use --limit/--all`): a cut list is never the whole answer. For
+    "everything in a collection or with a tag" do not page `search` — use
+    `plainkeep wiki list --tag <tag>`, which is exhaustive. `search` is for discovery.
   - *Driving plainkeep from an agent terminal (Hermes, dispatch, cron)?* Keyword search always works,
-    but **semantic** search (`search.vectors = true` in `~/.config/plainkeep/config.toml`, or `PLAINKEEP_VECTORS=1`) needs the agent's shell to use the same `python3`
+    but **semantic** search (`search.vectors = true` in the host's `~/.config/plainkeep/config.toml`
+    — `plainkeep setup search` writes it — or `PLAINKEEP_VECTORS=1`) needs the agent's shell to use the same `python3`
     (venv + PATH) as your interactive shell — a common silent gap. If `plainkeep doctor` says lancedb is
     missing though you installed it, see [`docs/agent-terminal-search.md`](../../docs/agent-terminal-search.md).
 - **Read frontmatter before body.** `type`, `status`, `related`, and (for projects)
@@ -159,6 +171,32 @@ hubs, not a pile of files. Rules of traversal:
 
 ## 6. How to DO things (the full surface — grouped)
 Discover the live, authoritative set with `plainkeep help`; this is the working summary.
+
+### 6a. Recipes — the common jobs, in the fewest calls
+| To… | Run | Notes |
+|---|---|---|
+| Find something | `plainkeep search "<query>"` | one call; add `--collection wiki` to narrow, `--limit N`/`--all` if the footer says it was cut. All notes with a tag: `plainkeep wiki list --tag <tag>` |
+| Capture a thought | `plainkeep capture "<text>"` | lands in `inbox/`; never pick a permanent home yourself |
+| File a document (binary) | `plainkeep files ingest <path>` | PROPOSES; shadow note + `~/files/…/in/`; then `files extract <slug>` if it must be searchable |
+| File a finished note | `plainkeep wiki new <type> "<Title>"`, then edit the file it names | the verb computes path, slug and frontmatter; you write the body and link it from its hub |
+| Share a note | `plainkeep search "<words>"` → slug, then `plainkeep share <slug> --approved` | two calls. Publishing is external: pass `--approved` only if the human asked you to share THIS note (§6b). Preview with `--dry-run` |
+| Track multi-step work | `plainkeep task add "<title>"`, later `task move <id> <status>` / `task done <id>` | log in the task's `## Log` |
+| Resume earlier work | `plainkeep orient`, then `plainkeep task show <id>` or `plainkeep search "<topic>"` | the journal tail and the task log are the memory |
+
+State to trust from `orient`/`status`: `index_age_min` null with a "partial" line means writes
+indexed note by note but no full `plainkeep index` ran, so `search` sees only those notes;
+`pending_embeddings: N` means N notes await vectors (keyword search still covers them);
+`backup:` is its own line — recent commits are not a backup.
+
+### 6b. Consent: `--approved`
+Confirm-class actions (publish a share, enable a job, pull a model, create/adopt a vault…) refuse
+without a consent flag (exit 3). `--approved` is the canonical flag; `--yes` and `-y` are aliases
+with identical behaviour. The rule for you:
+- Pass `--approved` ONLY when the human asked for THAT action in this conversation. Their ask is
+  consent for that one confirm-class call and nothing else.
+- Never for an action you decided on yourself, even if it seems obviously helpful — stop and ask.
+- Scheduled and unattended runs never pass it. MCP never exposes it.
+- It never clears a deny.
 
 - Capture / find:    `plainkeep capture "<text>"` · `plainkeep search "<query>"`
 - Daily / weekly:    `plainkeep start` · `plainkeep close` · `plainkeep week`
@@ -197,11 +235,11 @@ Discover the live, authoritative set with `plainkeep help`; this is the working 
     or it degrades to a deterministic stdlib keyword floor — never crashes. See
     [`docs/search-enrichment.md`](../../docs/search-enrichment.md).
   - `plainkeep models list|status|stop|pull|test` — see/download/offload/A-B-test the model behind any
-    stage (stt/ocr/vlm/enrich/embed/rerank); `pull`/`test` are confirm-gated (`--yes`). Same doc.
+    stage (stt/ocr/vlm/enrich/embed/rerank); `pull`/`test` are confirm-gated (`--approved`). Same doc.
 - Work scaffolding:  `plainkeep new project|client "<name>"` (asks/uses the routing tree above)
 - Repo lifecycle:    `plainkeep repo health|clone <p>|clone --all` · `plainkeep archive <project>` (dead repo → bundle)
 - Business:          `plainkeep invoice <client>` (DRAFT only; reads tax-formula.md; never sends)
-- System:            `plainkeep status` · `plainkeep doctor` · `plainkeep setup [<layer>] [--all] [--yes|--wizard]`
+- System:            `plainkeep status` · `plainkeep doctor` · `plainkeep setup [<layer>] [--all] [--approved|--wizard]`
   (layered installer; paired with `plainkeep doctor` as checker; see
   [`docs/setup.md`](../../docs/setup.md)) · `plainkeep vault status|list` (which vault am I on,
   which engine is running, how was it chosen) · `plainkeep backup` · `plainkeep index` · `plainkeep sweep`
@@ -212,15 +250,15 @@ Discover the live, authoritative set with `plainkeep help`; this is the working 
   it is a VAULT WRITE that never touches launchd, so run it freely — the human's consent still gates
   activation, and `set` prints the `enable` line when the loaded schedule goes stale.
   `enable`/`disable` MUTATE THE HUMAN'S LAUNCHD SESSION (`~/Library/LaunchAgents`) and are
-  confirm-class (`--yes`): never run them on your own initiative — only on the human's explicit
+  confirm-class (`--approved`): never run them on your own initiative — only on the human's explicit
   ask, and prefer showing them `--dry-run` output first. Doctor WARNs (never fails) on a
   rendered-but-unloaded schedule or drift; the remedy it names is the human's to run.
   · `plainkeep complete --json` (completion candidates) · `plainkeep ui` (human TUI — not for agents;
-  installed by `plainkeep setup ui --yes` as a compiled binary into `.local/bin/`)
+  installed by `plainkeep setup ui --approved` as a compiled binary into `.local/bin/`)
 
 `triage`, `files ingest`, and `invoice` PROPOSE; the human approves. `archive`, `sweep`,
 `start`/`close`/`week`, and anything mutating support `--dry-run` — use it when unsure what a
-verb will do (a dry-run is a read, so it needs no `--yes`).
+verb will do (a dry-run is a read, so it needs no `--approved`).
 
 ## 7. Working inside a ~/work repo
 - FIRST read that repo's `AGENTS.md` and use its `script/*` commands; never invent build

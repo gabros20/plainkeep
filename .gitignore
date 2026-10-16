@@ -76,3 +76,6 @@ cli/node_modules/
 # by deleting it — `pyproject.toml` and `uv.lock` themselves ARE committed, since they are the
 # artifact that ships.
 /tools/
+
+# real-vault bench queries (see test/run_bench.py --vault)
+test/bench/*.private.json

@@ -34,6 +34,7 @@ SUITES = [
     ("searchability model (§10.2)", "run_search.py"),
     ("stage-1 search impl (§10.2)", "run_search_impl.py"),
     ("stage-2 hybrid LanceDB (§10.2)", "run_search_vec.py"),
+    ("retrieval bench, report mode (v2 0.0)", "run_bench.py"),
     ("daily-driver verbs (§4/§7)", "run_verbs.py"),
     ("triage flow (§4/§10)", "run_triage.py"),
     ("agent indirection (§6)", "run_agentlib.py"),

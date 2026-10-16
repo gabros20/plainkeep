@@ -22,6 +22,7 @@
       "inbox": "int",
       "proposals": "int",
       "index_age_min": "int",
+      "pending_embeddings": "int",
       "last_commit_age_min": "int",
       "backup_configured": "bool",
       "backup_last_ok": "string",

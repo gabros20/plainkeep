@@ -92,6 +92,26 @@ def delete_paths(paths: list[str]) -> None:
         tbl.delete(pred)
 
 
+def drop() -> None:
+    """Remove the whole vector table (an index schema change re-embeds from scratch)."""
+    db = connect()
+    if TABLE in db.table_names():
+        db.drop_table(TABLE)
+
+
+def prefix_paths(prefix: str) -> None:
+    """Rewrite every record's `path` and `id` to `<prefix><old>` in place (the schema-2 index migration:
+    note paths went from wiki-relative to vault-relative). Idempotent: records that already start with
+    the prefix are left alone, so a re-run after a crash cannot produce `wiki/wiki/...`. Raises if
+    LanceDB cannot do it, and the caller then drops the table instead."""
+    db = connect()
+    if TABLE not in db.table_names():
+        return
+    pre = _q(prefix)
+    db.open_table(TABLE).update(where=f"NOT (path LIKE {_q(prefix + '%')})",
+                                values_sql={"path": f"concat({pre}, path)", "id": f"concat({pre}, id)"})
+
+
 def add_batch(records: list[dict], dim: int) -> None:
     """Add many vectors in one call (batched backfill throughput)."""
     if not records:

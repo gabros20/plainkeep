@@ -87,16 +87,24 @@ def _proposals() -> int:
     return len(list(d.glob("*.jsonl"))) if d.exists() else 0
 
 
+def _pending_embeddings() -> int:
+    from lib import indexlib
+    return indexlib.pending_embeddings()
+
+
 def _gather() -> dict:
     active, waiting = _tasks("active"), _tasks("waiting")
     inbox = len(list(paths.INBOX.glob("*.md"))) if paths.INBOX.exists() else 0
-    index_age = _age_min(DB.stat().st_mtime) if DB.exists() else None
+    from lib import indexlib
+    stamp = indexlib.last_full_index_ts()   # last finished `plainkeep index`; the sqlite mtime moves on every write
+    index_age = _age_min(stamp) if stamp is not None else None
     commit_age = _last_commit_age()
     backup_configured, backup_ok = _backup_state()
     return {
         "active": len(active), "waiting": len(waiting),
         "inbox": inbox, "proposals": _proposals(),
-        "index_age_min": index_age, "last_commit_age_min": commit_age,
+        "index_age_min": index_age, "pending_embeddings": _pending_embeddings(),
+        "last_commit_age_min": commit_age,
         "backup_configured": backup_configured, "backup_last_ok": backup_ok,
         "backup_age_min": commit_age,   # deprecated alias of last_commit_age_min (v2 0.6)
         "git_dirty": _git_dirty(),
@@ -128,7 +136,14 @@ def _dashboard(data: dict):
     print(f"  inbox:   {data['inbox']} item(s) to triage" +
           (f", {data['proposals']} organize proposal file(s)" if data["proposals"] else ""))
     ia, ca, gd = data["index_age_min"], data["last_commit_age_min"], data["git_dirty"]
-    print(f"  index:   {'built ' + str(ia) + ' min ago' if ia is not None else 'not built (run: plainkeep index)'}")
+    if ia is not None:
+        print(f"  index:   built {ia} min ago")
+    elif DB.exists():   # same wording as `status`
+        print("  index:   partial (written note by note, never fully built — run: plainkeep index)")
+    else:
+        print("  index:   not built (run: plainkeep index)")
+    if data["pending_embeddings"]:
+        print(f"  vectors: {data['pending_embeddings']} note(s) pending embedding (run: plainkeep index)")
     print(f"  commits: {'last commit ' + str(ca) + ' min ago' if ca is not None else 'no commits yet'}"
           + ("" if gd in (0, None) else f", {gd} uncommitted change(s)"))
     if not data["backup_configured"]:

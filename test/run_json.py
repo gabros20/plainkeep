@@ -119,7 +119,7 @@ def main() -> int:
     # --- plainkeep.json/3: every verb carries a display `group`; declared `actions[]` are well-formed ---
     ARG_TYPES = {"string", "int", "enum", "slug", "path", "flag"}
     RISK_ENUM = {"read", "safe_write", "draft_only", "confirm", "deny"}
-    COMPLETE_PROVIDERS = {"note-slug", "asset-slug", "task-id", "hub", "note-type", "status", "layer"}
+    COMPLETE_PROVIDERS = {"note-slug", "asset-slug", "task-id", "hub", "note-type", "status", "tag", "layer"}
     dverbs = doc.get("verbs", [])
     check("every verb carries a non-empty group",
           all(isinstance(v.get("group"), str) and v.get("group") for v in dverbs),

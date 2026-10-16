@@ -94,10 +94,26 @@ def ensure_journal(d: date | None = None) -> tuple[Path, bool]:
     return note, created
 
 
+def index_written(*files) -> None:
+    """Refresh the search index rows of the note(s) a verb just wrote (v2 0.4), so they are findable
+    before the verb returns. Warns, never fails: a write must not fail because of the index (that
+    includes a SystemExit from the write guard, so the whole body is covered)."""
+    try:
+        try:
+            from . import indexlib  # lazy: most verbs never search
+        except ImportError:
+            import indexlib  # type: ignore
+        indexlib.index_paths_safe(list(files))
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        print(f"warning: search index not refreshed ({type(e).__name__}) — run `plainkeep index`",
+              file=sys.stderr)
+
+
 def append_journal(line: str) -> Path:
     """Append one timestamped line to today's journal note (the shared activity record, §8)."""
     note, _ = ensure_journal()
     _io().append_text(note, f"- {datetime.now().strftime('%H:%M')} {line}\n")
+    index_written(note)
     return note
 
 

@@ -1,6 +1,6 @@
 {
   "verb": "wiki",
-  "summary": "open <slug> [--obsidian] | edit | new <type> <name> | backlinks | stale | orphans | canvas <hub|#tag> | list",
+  "summary": "open <slug> [--obsidian] | edit | new <type> <name> | backlinks | stale | orphans | canvas <hub|#tag> | list [--tag <tag>]",
   "usage": "plainkeep wiki <action> [args]",
   "risk": "safe_write",
   "args": [
@@ -17,7 +17,7 @@
     "wiki/",
     "journal/"
   ],
-  "hints": "Navigate/grow the wiki: open/edit/new/backlinks/stale/orphans/canvas/list. `open --obsidian` (or PLAINKEEP_OPEN=obsidian) opens the note in Obsidian via a local obsidian:// URI. `canvas <hub|#tag>` writes a deterministic wiki/canvas/<slug>.canvas (JSON Canvas). Common mistake: a duplicate slug on `new` \u2014 slugs are unique.",
+  "hints": "Navigate/grow the wiki: open/edit/new/backlinks/stale/orphans/canvas/list. `open --obsidian` (or PLAINKEEP_OPEN=obsidian) opens the note in Obsidian via a local obsidian:// URI. `list --tag <tag>` is the exhaustive membership listing (whole frontmatter tag values only; never body text or links) \u2014 use it for \"everything in a collection\" and `search` for discovery. `canvas <hub|#tag>` writes a deterministic wiki/canvas/<slug>.canvas (JSON Canvas). Common mistake: a duplicate slug on `new` \u2014 slugs are unique.",
   "output": {
     "mode": "rows",
     "fields": {
@@ -91,9 +91,11 @@
     },
     {
       "name": "list",
-      "summary": "note counts by type (the default action)",
+      "summary": "note counts by type (the default action); --tag <tag> lists every note carrying that tag",
       "risk": "read",
-      "args": []
+      "args": [
+        { "name": "--tag", "type": "string", "required": false, "help": "list every note whose frontmatter tags contain this whole tag (case-insensitive, optional leading #), sorted by slug: exhaustive, unlike search", "complete": "tag", "example": "clients" }
+      ]
     }
   ]
 }

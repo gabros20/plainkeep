@@ -77,6 +77,19 @@ def main() -> int:
         check("invoice prints it never transmits", "never transmits" in r.stdout, r.stdout)
         r = run("invoice", ops, roots, "nobody", "--amount", "5")
         check("invoice refuses an unknown client", r.returncode == 1, r.stderr)
+        # v2 0.13: a client made before accent-folding keeps its dropped-letter name and is still found
+        (ops / "wiki" / "clients" / "gyf-l-kft.md").write_text(
+            "---\ntype: client\ntitle: Ügyfél Kft\n---\n# Ügyfél Kft\n")
+        r = run("invoice", ops, roots, "Ügyfél Kft", "--amount", "1000")
+        legacy_out = roots / "files" / "clients" / "gyf-l-kft" / "out"
+        check("invoice finds a pre-0.13 client by its old slug",
+              r.returncode == 0 and legacy_out.exists() and list(legacy_out.glob("invoice-*.md")),
+              r.stdout + r.stderr)
+        check("invoice does not mint a second (folded) client tree",
+              not (roots / "files" / "clients" / "ugyfel-kft").exists())
+        r = run("new", ops, roots, "client", "Ügyfél Kft")
+        check("new refuses a name whose pre-0.13 slug already exists", r.returncode == 1
+              and "gyf-l-kft" in (r.stdout + r.stderr), r.stdout + r.stderr)
 
     print(f"{BOLD}archive + invoice (work/business) — {len(results)} checks{RESET}\n")
     passed = sum(1 for _, ok, _ in results if ok)

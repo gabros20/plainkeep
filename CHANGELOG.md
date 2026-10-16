@@ -8,6 +8,22 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ### Added
 - **Retrieval bench (v2 step 0.0): `test/run_bench.py`.** A fixed set of 30 queries (Hungarian exact and inflected forms, answers deep inside long notes, tasks, journal days, superseded decisions, unanswerable questions, exact titles and aliases) scored against a fixture vault through the real `indexlib` in keyword mode by default (hybrid and hybrid+rerank are opt-in via `--modes all`), reported as recall@5, recall@10 and MRR per tag. `baseline.json` records the keyword numbers so each later retrieval change can show what it moved, and `test/bench/gates.json` holds one gate so far: Hungarian keyword recall@5 ≥ 0.6, added with the Unicode-token fix below. `--vault PATH` runs your own queries against a real vault, read-only. Private queries go in `test/bench/queries.private.json`, which is gitignored.
+- **`plainkeep doctor` lints two link patterns (v2 step 0.10).** It warns, never fails, on `[[x]](url)` (a
+  wikilink wrapped as a markdown link, which no renderer resolves) and on a committed symlink whose
+  absolute target lies outside the vault and the engine (it dangles on any other machine).
+- **`api.slugify_folded`; plugin API 1.1 (v2 step 0.13).** `api.slugify` keeps its 1.0 behaviour (ADR-018),
+  so a plugin that finds its notes by `slugify(title)` keeps finding them. `PLAINKEEP_API_VERSION` is now
+  `"1.1"`; a plugin that needs the new export declares `"api": ">=1.1,<2"`.
+
+### Changed
+- **New slugs fold accents (v2 step 0.13).** `Ügyfél szerződés` becomes `ugyfel-szerzodes`, not
+  `gyf-l-szerz-d-s`, in every verb that names a file from a title. ASCII titles are byte-identical and
+  existing notes are never renamed; `doctor` lists, as information, the ones a fold would name differently.
+  `invoice` still finds a client created under its old name, and `new` refuses a name whose old form
+  already exists. `wiki canvas '#tag'` writes a non-ASCII tag's canvas under the folded name, so an
+  old dropped-letter `.canvas` file is left behind, not overwritten.
+- **`doctor`'s link lint also scans `journal/` and `tasks/` (v2 step 0.10),** and counts a symlink into the
+  engine (including through `current`) or into a vault under a symlinked path as inside.
 
 - **Host config file (v2 step 0.5): `config.toml`.** New `bin/lib/hostconfig.py` reads
   `config.toml` from the same directory as the vault registry (`$PLAINKEEP_CONFIG_HOME`, else
@@ -32,6 +48,11 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   triage still falls back to the shell heuristics.
 
 ### Fixed
+- **Escaped pipes survive a shared table (v2 step 0.9).** `share` split table rows on every `|`, so
+  `[[acme\|Acme Corp]]` in a cell became two cells and a dead link; it now splits on unescaped pipes.
+- **`[[slug\|label]]` in a table is a link to `slug` (v2 step 0.9).** The escaped pipe left a trailing
+  backslash on the target, so the link counted as broken. One parser, `bin/lib/wikilink.py`, now serves
+  the index, `wiki`, `render` and `share`.
 - **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
   pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found
   nothing. Tokens are now Unicode word characters, the FTS5 `unicode61` tokenizer folds diacritics so

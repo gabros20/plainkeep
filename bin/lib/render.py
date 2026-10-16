@@ -21,6 +21,13 @@ import subprocess
 import sys
 from pathlib import Path
 
+try:
+    from . import wikilink  # type: ignore
+except ImportError:      # loaded by file path (tests) — sibling is not a package then
+    import sys as _s, os as _o
+    _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
+    import wikilink  # type: ignore
+
 # ANSI
 B, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
 ACCENT = "\033[38;5;173m"   # muted terracotta — matches the docs palette
@@ -29,7 +36,7 @@ CODE = "\033[38;5;108m"
 
 _H = re.compile(r"^(#{1,6})\s+(.*)$")
 _IMG = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")   # ![alt](path) — terminal can't show pixels; show a ref
-_LINK = re.compile(r"\[\[([^\]]+)\]\]")
+_LINK = wikilink.LINK_RE
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _ICODE = re.compile(r"`([^`]+)`")
 

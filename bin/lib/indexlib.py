@@ -27,6 +27,12 @@ try:
     from . import vaultroot  # type: ignore  # (namespace sibling)
 except ImportError:
     import vaultroot  # type: ignore
+try:
+    from . import wikilink  # type: ignore
+except ImportError:      # loaded by file path (tests) — sibling is not a package then
+    import sys as _s, os as _o
+    _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
+    import wikilink  # type: ignore
 
 # The SELECTED data root — no engine-relative fallback (ADR-014 D2, Phase 2 Task 1b). An index built
 # against a guessed root is the quiet half of the same failure a wrong-root write is: it indexes the
@@ -36,7 +42,7 @@ CONTENT = Path(os.environ.get("PLAINKEEP_CONTENT", PLAINKEEP_HOME / "wiki"))
 INDEX_DIR = PLAINKEEP_HOME / ".index"
 DB = INDEX_DIR / "plainkeep.sqlite"
 
-LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+LINK_RE = wikilink.LINK_RE
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 # Paths an external editor scatters that are NEVER content (proposal Part 3.1): Obsidian config +
@@ -145,7 +151,7 @@ def _chunks(text: str) -> list[tuple[str, str]]:
 
 
 def _norm_link(target: str) -> str:
-    return target.split("#", 1)[0].split("|", 1)[0].strip()
+    return wikilink.norm_link(target)
 
 
 def _note_provenance(text: str) -> tuple[str, str]:

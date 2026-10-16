@@ -8,6 +8,15 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ### Added
 - **Retrieval bench (v2 step 0.0): `test/run_bench.py`.** A fixed set of 30 queries (Hungarian exact and inflected forms, answers deep inside long notes, tasks, journal days, superseded decisions, unanswerable questions, exact titles and aliases) scored against a fixture vault through the real `indexlib` in keyword mode by default (hybrid and hybrid+rerank are opt-in via `--modes all`), reported as recall@5, recall@10 and MRR per tag. `baseline.json` records the keyword numbers so each later retrieval change can show what it moved, and `test/bench/gates.json` holds one gate so far: Hungarian keyword recall@5 ≥ 0.6, added with the Unicode-token fix below. `--vault PATH` runs your own queries against a real vault, read-only. Private queries go in `test/bench/queries.private.json`, which is gitignored.
+- **`search` covers tasks, journal and inbox, and filters by collection (v2 step 0.3).** The index used
+  to read only `wiki/`, so a task or a journal day could never be found. It now reads the vault root,
+  restricted to an allowlist (`wiki/`, `tasks/`, `journal/`, `inbox/`), and every hit carries
+  `collection`. `plainkeep search "<q>" --collection wiki|tasks|journal|inbox` restricts every arm
+  before the top-k cut; `--collection wiki` returns what `search` used to. Hit paths are now
+  vault-relative (`wiki/notes/x.md`, not `notes/x.md`). `PLAINKEEP_CONTENT` still points the indexer at
+  one custom tree. **The index schema changed, so the first `plainkeep index` after upgrading rebuilds
+  everything** (old tables and vectors are dropped; until then search returns no hits). Bench: task
+  recall@5 0.0 to 0.75, journal 0.0 to 0.67.
 
 ### Changed
 - **Search finds inflected Hungarian words (v2 step 0.2).** Hungarian suffixes defeated exact-token
@@ -16,7 +25,7 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   adds the notes the exact query missed at half the exact arm's weight: an exact-form hit still
   outranks a prefix-only one, and notes the exact arm already found keep their rank. No stemmer
   dependency. On the bench the Hungarian recall@5 went 0.75 to 1.0 with English MRR unchanged
-  (0.185 to 0.198); the `hu` gate is raised to 1.0.
+  (0.185 to 0.198); after 0.3 widened the corpus it holds at 0.875 and the `hu` gate is 0.85.
 
 ### Fixed
 - **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only

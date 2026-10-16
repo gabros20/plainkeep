@@ -1,6 +1,6 @@
 {
   "schema": "plainkeep.json/3",
-  "ops_version": "4.0.0-dev",
+  "ops_version": "4.0.8",
   "api_version": "1.0",
   "json_envelope": 1,
   "capabilities": {
@@ -1511,20 +1511,36 @@
         {
           "name": "--author",
           "required": false
+        },
+        {
+          "name": "--collection",
+          "type": "enum",
+          "required": false,
+          "enum": [
+            "wiki",
+            "tasks",
+            "journal",
+            "inbox"
+          ],
+          "help": "search one collection only (filtered before the top-k cut)"
         }
       ],
       "reads": [
         ".index/",
-        "wiki/"
+        "wiki/",
+        "tasks/",
+        "journal/",
+        "inbox/"
       ],
       "writes": [
         ".logs/queries.jsonl"
       ],
-      "hints": "Ranked file#heading hits with an FTS5 snippet excerpt (keyword + graph, +vectors if PLAINKEEP_VECTORS). `--author human` excludes agent + derived material; `--author agent` keeps only agent notes (provenance planes). `--open` jumps to the top hit via `plainkeep open`; bare `plainkeep search` in a tty with fzf opens a live search session. Common mistake: running before `plainkeep index`, or too narrow a query \u2014 broaden and reindex.",
+      "hints": "Ranked file#heading hits with an FTS5 snippet excerpt (keyword + graph, +vectors if PLAINKEEP_VECTORS). `--author human` excludes agent + derived material; `--author agent` keeps only agent notes (provenance planes). `--collection wiki|tasks|journal|inbox` searches one collection only (every hit carries its `collection`). `--open` jumps to the top hit via `plainkeep open`; bare `plainkeep search` in a tty with fzf opens a live search session. Common mistake: running before `plainkeep index`, or too narrow a query \u2014 broaden and reindex.",
       "output": {
         "mode": "rows",
         "fields": {
           "path": "string",
+          "collection": "string",
           "heading": "string",
           "score": "number",
           "snippet": "string"

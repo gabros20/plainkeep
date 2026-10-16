@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib import enginetree, output, paths, render  # noqa: E402
-from lib.indexlib import search  # noqa: E402
+from lib.indexlib import CONTENT, search  # noqa: E402
 
 FLAGS = ("--edit", "--reveal", "--obsidian")
 
@@ -58,7 +58,7 @@ def _resolve(target: str):
     hits = search(target)
     if hits:
         rel = hits[0][0]
-        p = paths.WIKI / rel
+        p = CONTENT / rel
         stem = Path(rel).stem
         return {"kind": "search", "slug": stem, "path": p, "edit": p, "reveal": p, "wiki_slug": stem}
     return None

@@ -165,6 +165,65 @@ def main() -> int:
         finally:
             indexlib._vectors_on, indexlib._vec_modules, indexlib._rerank_on = saved
 
+        # 0.3 every collection: a vault-root index, `collection` on each hit, `--collection` before top-k
+        from lib import vaultfx
+        with tempfile.TemporaryDirectory() as vtd:
+            vault = Path(vtd) / "v"
+            for rel, body in {
+                "wiki/notes/zebra-wiki.md": "---\ntitle: Zebra wiki\n---\n\nZebrafish husbandry notes.\n",
+                "tasks/active/T-20261001-01.md": "---\nid: T-20261001-01\ntitle: Zebrafish tank\n---\n\nClean the zebrafish tank.\n",
+                "journal/2026/10/2026-10-01.md": "---\ntype: journal\n---\n\nWatched the zebrafish today.\n",
+                "inbox/cap-20261001-0900.md": "---\ntype: capture\n---\n\nbuy zebrafish food\n",
+                "files/skipme.md": "zebrafish outside every collection\n",
+                ".obsidian/x.md": "zebrafish config\n",
+            }.items():
+                f = vault / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(body, encoding="utf-8")
+            _vid, pk = vaultfx.dispatchable_vault(vault, REPO)
+            venv = {k: v for k, v in os.environ.items() if k not in ("PLAINKEEP_CONTENT", "PLAINKEEP_VECTORS", "PLAINKEEP_RERANK")}
+            venv["PLAINKEEP_HOME"] = str(vault)
+
+            def pkrun(*a):
+                r = subprocess.run([str(pk), *a], capture_output=True, text=True, env=venv)
+                return r.returncode, r.stdout
+
+            pkrun("index")
+            def jrows(out):
+                """`--json` is JSONL: an envelope line (ops_json), then one object per row."""
+                objs = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+                return [o for o in objs if "ops_json" not in o]
+
+            rc, out = pkrun("search", "zebrafish", "--json")
+            rows = jrows(out)
+            got = {r["path"]: r.get("collection") for r in rows}
+            check("collections: all four indexed with their collection",
+                  got == {"wiki/notes/zebra-wiki.md": "wiki", "tasks/active/T-20261001-01.md": "tasks",
+                          "journal/2026/10/2026-10-01.md": "journal", "inbox/cap-20261001-0900.md": "inbox"},
+                  f"rc={rc} {got}")
+            for coll, want in (("tasks", "tasks/active/T-20261001-01.md"), ("journal", "journal/2026/10/2026-10-01.md"),
+                               ("wiki", "wiki/notes/zebra-wiki.md")):
+                rc, out = pkrun("search", "zebrafish", "--collection", coll, "--json")
+                paths_ = [r["path"] for r in jrows(out)]
+                check(f"collections: --collection {coll} returns only that collection", paths_ == [want], f"{paths_}")
+            rc, _ = pkrun("search", "zebrafish", "--collection", "nope")
+            check("collections: unknown --collection is a usage error", rc == 2, f"rc={rc}")
+
+            # schema bump: an index from the previous schema is dropped whole and rebuilt by the next index
+            import sqlite3
+            dbp = vault / ".index" / "plainkeep.sqlite"
+            c2 = sqlite3.connect(dbp)
+            c2.execute("DELETE FROM meta WHERE key='schema'")
+            c2.execute("DROP TABLE chunks")
+            c2.execute("CREATE VIRTUAL TABLE chunks USING fts5(path, heading, body, slug UNINDEXED)")
+            c2.execute("DELETE FROM files")
+            c2.commit()
+            c2.close()
+            pkrun("index")
+            rc, out = pkrun("search", "zebrafish", "--json")
+            check("collections: old-schema index is rebuilt on the next index", "zebra-wiki" in out and "T-20261001-01" in out,
+                  out[:120])
+
         # subprocess smoke of the real CLI
         env = {**os.environ}
         idx = subprocess.run(["python3", str(REPO / "bin/index/run.py")], capture_output=True, text=True, env=env)

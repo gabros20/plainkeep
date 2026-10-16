@@ -2,7 +2,7 @@
 indexlib.py — stage-1 search engine for the Personal OS (§10.2).
 
 Implements exactly what the validated spec calls stage 1:
-  - SQLite FTS5 over the content tree (wiki/tasks/journal), chunked by markdown heading,
+  - SQLite FTS5 over the vault's content collections (wiki/tasks/journal/inbox), chunked by markdown heading,
     incremental by file content hash,
   - the wikilink graph (one-hop expansion) fused with keyword via reciprocal-rank fusion,
   - one rebuildable file at .index/plainkeep.sqlite (the rebuild rule: rm -rf .index && plainkeep index).
@@ -32,7 +32,15 @@ except ImportError:
 # against a guessed root is the quiet half of the same failure a wrong-root write is: it indexes the
 # wrong notes and answers searches from them.
 PLAINKEEP_HOME = vaultroot.active_root()
-CONTENT = Path(os.environ.get("PLAINKEEP_CONTENT", PLAINKEEP_HOME / "wiki"))
+# The indexed collections (v2 0.3): the vault root is the default content root, restricted to this
+# allowlist so `.index/`, `.git/`, `files/`-style trees and engine state are never read as notes.
+# `PLAINKEEP_CONTENT` still points the indexer at one custom tree (everything under it is indexed;
+# a file outside an allowlisted top directory is collection "wiki", the knowledge base).
+COLLECTIONS = ("wiki", "tasks", "journal", "inbox")
+CONTENT = Path(os.environ.get("PLAINKEEP_CONTENT", PLAINKEEP_HOME))
+# Bump when the index tables change shape: connect() drops the old tables and the next `plainkeep
+# index` rebuilds everything (the rebuild rule, done for you). 2 = `collection` column + vault-root paths.
+SCHEMA_VERSION = "2"
 INDEX_DIR = PLAINKEEP_HOME / ".index"
 DB = INDEX_DIR / "plainkeep.sqlite"
 
@@ -96,14 +104,35 @@ def _candidate_texts(paths: list[str], limit: int = 1200) -> dict:
     return out
 
 
+def _migrate(con: sqlite3.Connection) -> None:
+    """Index schema upgrade = the rebuild rule: an index written by another schema version is
+    dropped whole (tables and vectors), and the next `plainkeep index` rebuilds it from the notes."""
+    con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
+    if _meta_get(con, "schema") == SCHEMA_VERSION:
+        return
+    old = {n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if old & {"chunks", "files"}:
+        for t in ("chunks", "files", "links", "embedded", "notemeta"):
+            con.execute(f"DROP TABLE IF EXISTS {t}")
+        try:  # vectors carry the old (content-relative) paths; they are rebuilt with the rest
+            _, vs = _vec_modules()
+            if vs:
+                vs.drop()
+        except Exception:
+            pass
+    _meta_set(con, "schema", SCHEMA_VERSION)
+    con.commit()
+
+
 def connect() -> sqlite3.Connection:
     vaultio.mkdir(INDEX_DIR)
     con = sqlite3.connect(DB)
     con.execute("PRAGMA journal_mode=WAL")
+    _migrate(con)
     con.executescript(
         """
-        CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, hash TEXT);
-        CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(path, heading, body, slug UNINDEXED);
+        CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, hash TEXT, collection TEXT);
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(path, heading, body, slug UNINDEXED, collection UNINDEXED);
         CREATE TABLE IF NOT EXISTS links(src TEXT, dst TEXT);
         CREATE TABLE IF NOT EXISTS embedded(path TEXT PRIMARY KEY, model TEXT);
         CREATE TABLE IF NOT EXISTS notemeta(path TEXT PRIMARY KEY, author TEXT, derived_from TEXT);
@@ -124,6 +153,24 @@ def _meta_set(con, key: str, value: str) -> None:
 
 def _ignored(rel: str) -> bool:
     return any(part in IGNORE_PARTS for part in Path(rel).parts)
+
+
+def collection_of(rel: str) -> str:
+    """The collection a root-relative path belongs to: its top directory when that is an allowlisted
+    one, else "wiki" (a custom PLAINKEEP_CONTENT tree is a knowledge base)."""
+    top = Path(rel).parts[0] if Path(rel).parts else ""
+    return top if top in COLLECTIONS else "wiki"
+
+
+def notes_under(root: Path | str = CONTENT) -> list[Path]:
+    """Every markdown file the indexer reads under `root`, sorted. At the vault root that is the
+    allowlisted collections only; a custom content root is read whole."""
+    root = Path(root)
+    if root.resolve() == PLAINKEEP_HOME.resolve():
+        found = [f for c in COLLECTIONS if (root / c).is_dir() for f in (root / c).rglob("*.md")]
+    else:
+        found = list(root.rglob("*.md"))
+    return sorted(found)
 
 
 def _chunks(text: str) -> list[tuple[str, str]]:
@@ -208,7 +255,7 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
 
     # --- pass 1: keyword/graph (fast), collect the embed worklist ---
     seen, changed, worklist = set(), 0, []
-    for p in sorted(root.rglob("*.md")):
+    for p in notes_under(root):
         rel = str(p.relative_to(root))
         if _ignored(rel):
             continue
@@ -230,15 +277,16 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
             con.execute("DELETE FROM chunks WHERE path=?", (rel,))
             con.execute("DELETE FROM links WHERE src=?", (rel,))
             slug = Path(rel).stem
+            coll = collection_of(rel)
             for head, body in _chunks(content):
-                con.execute("INSERT INTO chunks(path, heading, body, slug) VALUES(?,?,?,?)",
-                            (rel, head, body, slug))
+                con.execute("INSERT INTO chunks(path, heading, body, slug, collection) VALUES(?,?,?,?,?)",
+                            (rel, head, body, slug, coll))
             for tgt in {_norm_link(t) for t in LINK_RE.findall(content)}:
                 con.execute("INSERT INTO links(src, dst) VALUES(?,?)", (rel, tgt))
             au, dv = _note_provenance(content)
             con.execute("INSERT OR REPLACE INTO notemeta(path, author, derived_from) VALUES(?,?,?)",
                         (rel, au, dv))
-            con.execute("INSERT OR REPLACE INTO files(path, hash) VALUES(?,?)", (rel, h))
+            con.execute("INSERT OR REPLACE INTO files(path, hash, collection) VALUES(?,?,?)", (rel, h, coll))
             changed += 1
             if changed % COMMIT_EVERY == 0:
                 con.commit()  # durable progress for the keyword pass
@@ -362,9 +410,10 @@ def _authorship(con) -> dict:
 
 
 def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
-           author: str | None = None) -> list[tuple[str, str, float]]:
+           author: str | None = None, collection: str | None = None) -> list[tuple[str, str, float]]:
     """Return [(path, heading, score)] — FTS5 keyword + one-hop wikilink-graph, fused by RRF.
 
+    `collection` (wiki|tasks|journal|inbox) restricts every arm to that collection BEFORE the top-k cut.
     `author` filters by provenance plane (Part 4.3): 'human' excludes agent-authored AND derived
     material (any note with `derived_from`); 'agent' keeps only `author: agent` notes."""
     if not any(c.isalnum() for c in query):
@@ -376,10 +425,12 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
     con = connect()
     amap = _authorship(con) if author else {}
     fts = _fts_query(query)
+    cfilter, cargs = (" AND collection = ?", (collection,)) if collection else ("", ())
     try:
         rows = con.execute(
-            "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
-            (fts, k * 4),
+            "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ?" + cfilter
+            + " ORDER BY r LIMIT ?",
+            (fts, *cargs, k * 4),
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
@@ -393,8 +444,9 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
     if pfx:  # RRF: prefix arm at half weight, so an exact-form hit still outranks a prefix-only one
         try:
             prows = con.execute(
-                "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
-                (pfx, k * 4),
+                "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ?" + cfilter
+                + " ORDER BY r LIMIT ?",
+                (pfx, *cargs, k * 4),
             ).fetchall()
         except sqlite3.OperationalError:
             prows = []
@@ -407,12 +459,14 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
             if p not in scores:  # only notes the exact arm missed: exact-form ranking stays untouched
                 scores[p] = 0.5 / (60 + i)
     if graph and order:
-        slug_to_file = {Path(p).stem: p for (p,) in con.execute("SELECT path FROM files")}
+        slug_to_file = {Path(p).stem: p for (p,) in
+                        con.execute("SELECT path FROM files ORDER BY collection = 'wiki'")}  # wiki wins a clash
         for i, p in enumerate(order[:k], 1):
             for (dst,) in con.execute("SELECT dst FROM links WHERE src=?", (p,)):
                 fp = slug_to_file.get(dst)
                 if fp:
                     scores[fp] = scores.get(fp, 0.0) + 0.5 / (60 + i)  # RRF: graph arm (discounted)
+    cmap = ({p: c for p, c in con.execute("SELECT path, collection FROM files")} if collection else {})
     con.close()
     # --- vector arm (stage 2): RRF-fuse LanceDB ANN with keyword+graph ---
     if _vectors_on():
@@ -427,6 +481,8 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                     # on, pull a WIDER candidate set so the reranker has the right note to reorder
                     # (recall widening — a precise note keyword+vector ranked low can still win).
                     vcount = 40 if _rerank_on() else k
+                    if collection:
+                        vcount *= 5  # the filter is applied after the ANN cut; widen so it can still fill k
                     seen, vrank = set(), 0
                     for path, head, _s in vs.search(qv, vcount):
                         if path in seen:
@@ -439,6 +495,8 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                         best.setdefault(path, head)
             except Exception:
                 pass  # vectors are an accelerator; never let them break keyword search
+    if collection:
+        scores = {p: sc for p, sc in scores.items() if cmap.get(p) == collection}
     if author:
         def _keep(p: str) -> bool:
             a, d = amap.get(p, ("", ""))

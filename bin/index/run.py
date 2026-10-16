@@ -25,7 +25,7 @@ def main(argv):
     from lib import indexlib
     changed = "--changed" in argv
     if dry:
-        n = len(list(indexlib.CONTENT.rglob("*.md"))) if indexlib.CONTENT.exists() else 0
+        n = len(indexlib.notes_under()) if indexlib.CONTENT.exists() else 0
         return output.emit({"dry_run": True, "would_index": n}, "index",
                            human=lambda _: f"would index {n} note(s) under {indexlib.CONTENT}  (dry run — nothing written)")
 

@@ -92,6 +92,13 @@ def delete_paths(paths: list[str]) -> None:
         tbl.delete(pred)
 
 
+def drop() -> None:
+    """Remove the whole vector table (an index schema change re-embeds from scratch)."""
+    db = connect()
+    if TABLE in db.table_names():
+        db.drop_table(TABLE)
+
+
 def add_batch(records: list[dict], dim: int) -> None:
     """Add many vectors in one call (batched backfill throughput)."""
     if not records:

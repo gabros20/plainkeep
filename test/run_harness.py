@@ -56,8 +56,8 @@ def group_alive(pgid: int) -> bool:
     try:
         os.killpg(pgid, 0)
         return True
-    except ProcessLookupError:
-        return False
+    except (ProcessLookupError, PermissionError):
+        return False        # macOS answers EPERM for a group that is only unreaped zombies
 
 
 def wait_gone(check_fn, secs: float = 8.0) -> bool:

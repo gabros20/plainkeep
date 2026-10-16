@@ -210,6 +210,8 @@ def _run_suite(script: Path, timeout: float) -> tuple[bool, str, str, list[str]]
     _current_pgid = pgid
     notes: list[str] = []
     try:
+        # A grandchild that inherited the stdout/stderr pipe keeps communicate() blocked until the
+        # timeout, so such a leak is reported as TIMEOUT (the group is still killed), not SUITE-NOTE.
         try:
             out, err = proc.communicate(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -254,6 +256,14 @@ def main() -> int:
                     help="run only these suite scripts (repeatable); skips the seal gate")
     ap.add_argument("--lock", default=str(LOCK_FILE), metavar="PATH")
     args = ap.parse_args()
+
+    spec = os.environ.get("PLAINKEEP_TEST_TIMEOUT")
+    if spec:
+        try:
+            float(spec)
+        except ValueError:
+            print(f"run_all: PLAINKEEP_TEST_TIMEOUT={spec!r} is not a number of seconds", file=sys.stderr)
+            return 2
 
     lock = _acquire_lock(Path(args.lock))
     if lock is None:

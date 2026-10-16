@@ -20,6 +20,8 @@ seal()   # hermetic: an empty throwaway registry, never the developer's real vau
 # (`~/plainkeep/...`), so all 59 keep their recorded verdict for the recorded reason. Unconditional
 # rather than setdefault: an inherited value would silently repoint the wall and turn the recorded
 # verdicts into a different question. The expression mirrors bin/lib/wall.py's HOME rule exactly.
+# This `$HOME/plainkeep` value is a classification fixture only: this suite calls classify()/gate() and
+# must never write or spawn. Anything that writes must use scratch_root() (test/lib/hermetic.py).
 os.environ["PLAINKEEP_HOME"] = (os.environ.get("PLAINKEEP_TEST_HOME")
                                 or os.environ.get("PLAINKEEP_ROOTS_HOME")
                                 or os.environ.get("HOME")

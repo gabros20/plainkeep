@@ -9,6 +9,15 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 ### Added
 - **Retrieval bench (v2 step 0.0): `test/run_bench.py`.** A fixed set of 30 queries (Hungarian exact and inflected forms, answers deep inside long notes, tasks, journal days, superseded decisions, unanswerable questions, exact titles and aliases) scored against a fixture vault through the real `indexlib` in keyword mode by default (hybrid and hybrid+rerank are opt-in via `--modes all`), reported as recall@5, recall@10 and MRR per tag. `baseline.json` records the keyword numbers so each later retrieval change can show what it moved, and `test/bench/gates.json` holds one gate so far: Hungarian keyword recall@5 ≥ 0.6, added with the Unicode-token fix below. `--vault PATH` runs your own queries against a real vault, read-only. Private queries go in `test/bench/queries.private.json`, which is gitignored.
 
+### Changed
+- **Search finds inflected Hungarian words (v2 step 0.2).** Hungarian suffixes defeated exact-token
+  matching, so `ügyfelek` never found a note that says `ügyfél`. `search` now runs a second FTS query
+  for every word of five or more characters, matching it as a prefix of `word[:max(4, len-3)]`, and
+  adds the notes the exact query missed at half the exact arm's weight: an exact-form hit still
+  outranks a prefix-only one, and notes the exact arm already found keep their rank. No stemmer
+  dependency. On the bench the Hungarian recall@5 went 0.75 to 1.0 with English MRR unchanged
+  (0.185 to 0.198); the `hu` gate is raised to 1.0.
+
 ### Fixed
 - **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
   pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found

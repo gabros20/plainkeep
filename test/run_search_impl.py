@@ -118,6 +118,17 @@ def main() -> int:
         for q, label in hu_q.items():
             hp = [p for p, _h, _s in search(q, k=5)]
             check(f"unicode: {label} ({q})", hu_want in hp, f"want {hu_want}, got {hp[:3]}")
+        # 0.2 inflection prefix arm: an inflected form reaches the base form, and the exact form still wins
+        for q in ("ügyfelek", "ügyfélnek"):
+            hp = [p for p, _h, _s in search(q, k=5)]
+            check(f"inflection: {q} finds ügyfél note", hu_want in hp, f"want {hu_want}, got {hp[:3]}")
+        (content / "hu-ugyfelkapu.md").write_text(
+            "---\ntitle: Ügyfélkapu\n---\n\n# Ügyfélkapu\n\nAz ügyfélkapu bejelentkezés lépései.\n",
+            encoding="utf-8")
+        index(content, verbose=False)
+        top = [p for p, _h, _s in search("ügyfél", k=5)]
+        check("inflection: exact-form query still ranks the exact note first",
+              top[:1] == [hu_want], f"got {top[:3]}")
         try:
             junk = [p for p, _h, _s in search("__ ... !!", k=5)]
             check("unicode: punctuation-only query has no error", True)

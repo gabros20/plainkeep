@@ -291,13 +291,24 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
     return n
 
 
-def _fts_query(q: str) -> str:
+def _tokens(q: str) -> list[str]:
     # NFC first: a decomposed "u" + combining diaeresis (pasted from macOS) would otherwise split the word
     q = unicodedata.normalize("NFC", q)
     # \w is Unicode-aware (ü, ő, é survive); it also matches "_", so drop tokens with no letter/digit
     # (e.g. "__") rather than hand FTS5 an empty or punctuation-only phrase.
-    toks = [t for t in re.findall(r"\w+", q.lower()) if len(t) > 1 and any(c.isalnum() for c in t)]
-    return " OR ".join(f'"{t}"' for t in toks) or '""'
+    return [t for t in re.findall(r"\w+", q.lower()) if len(t) > 1 and any(c.isalnum() for c in t)]
+
+
+def _fts_query(q: str) -> str:
+    return " OR ".join(f'"{t}"' for t in _tokens(q)) or '""'
+
+
+def _prefix_query(q: str) -> str | None:
+    """The Hungarian inflection arm (v2 0.2): agglutinative suffixes (ügyfél -> ügyfelek, ügyfélnek)
+    defeat exact-token FTS, so every token of 5+ chars also matches as a prefix of its stem
+    candidate `tok[:max(4, len-3)]`. No stemmer dependency. None when no token qualifies."""
+    stems = {t[:max(4, len(t) - 3)] for t in _tokens(q) if len(t) >= 5}
+    return " OR ".join(f'"{s}"*' for s in sorted(stems)) or None
 
 
 LOG_DIR = PLAINKEEP_HOME / ".logs"
@@ -378,6 +389,23 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
             best[path] = head
             order.append(path)
     scores = {p: 1.0 / (60 + i) for i, p in enumerate(order, 1)}  # RRF: keyword arm
+    pfx = _prefix_query(query)
+    if pfx:  # RRF: prefix arm at half weight, so an exact-form hit still outranks a prefix-only one
+        try:
+            prows = con.execute(
+                "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
+                (pfx, k * 4),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            prows = []
+        porder = []
+        for path, head, _r in prows:
+            if path not in porder:
+                porder.append(path)
+            best.setdefault(path, head)
+        for i, p in enumerate(porder, 1):
+            if p not in scores:  # only notes the exact arm missed: exact-form ranking stays untouched
+                scores[p] = 0.5 / (60 + i)
     if graph and order:
         slug_to_file = {Path(p).stem: p for (p,) in con.execute("SELECT path FROM files")}
         for i, p in enumerate(order[:k], 1):

@@ -210,6 +210,17 @@ EXEMPT: dict[str, dict[str, str]] = {
             "the REGISTRY's config directory ($XDG_CONFIG_HOME/plainkeep) — it lives outside every "
             "vault by design, since it is the thing that knows which vaults exist",
     },
+    # HOST CONFIG (v2 0.5). `config.toml` sits in the same config directory as the registry above and
+    # for the same reason: it is per-MACHINE (which search plane, which models, which Ollama host), so it
+    # lives outside every vault. The path comes from `vaultreg.config_dir()` only, never an argument, and
+    # the only writer is `setup search --yes` (confirm-class, previewable with `--dry-run`).
+    "bin/lib/hostconfig.py": {
+        'p.parent.mkdir(parents=True, exist_ok=True)':
+            "the host config's directory ($PLAINKEEP_CONFIG_HOME / $XDG_CONFIG_HOME/plainkeep), the "
+            "registry's own directory — machine config, outside every vault by design",
+        'p.write_text("\\n".join(lines), encoding="utf-8")':
+            "config.toml, written by `setup search --yes` only; derived from vaultreg.config_dir()",
+    },
     # ACTIVATION (ADR-022). `plainkeep job enable` installs a rendered plist into the directory
     # launchd actually reads — `~/Library/LaunchAgents`, or `$PLAINKEEP_LAUNCH_AGENTS_DIR` for the
     # suites. That is the machine, not a vault, so `classify()` answers DENY for it exactly the way

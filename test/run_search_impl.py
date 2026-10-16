@@ -20,6 +20,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 from lib.hermetic import seal
 seal()   # hermetic: an empty throwaway registry, never the developer's real vault
@@ -101,6 +102,57 @@ def main() -> int:
         dpaths = [p for p, _h, _s in search("designatives", k=6)]
         check("wikilink-graph expansion surfaces linked note",
               any("stripe-webhook-retries" in p for p in dpaths), f"{dpaths}")
+
+        # Unicode query tokens: a Hungarian note must be reachable with and without diacritics,
+        # and punctuation-only queries must not raise.
+        hu_name = "hu-ugyfel-szerzodes"
+        (content / f"{hu_name}.md").write_text(
+            "---\ntitle: Ügyfél szerződés\n---\n\n# Ügyfél szerződés\n\n"
+            "Az ügyfél szerződését a jogász átnézte, a szerződés aláírása következik.\n",
+            encoding="utf-8")
+        index(content, verbose=False)
+        hu_want = hu_name + ".md"
+        hu_q = {"ügyfél szerződés": "accented phrase", "ugyfel": "diacritic-free",
+                "szerződés": "accented single word",
+                unicodedata.normalize("NFD", "ügyfél szerződés"): "decomposed (NFD) phrase"}
+        for q, label in hu_q.items():
+            hp = [p for p, _h, _s in search(q, k=5)]
+            check(f"unicode: {label} ({q})", hu_want in hp, f"want {hu_want}, got {hp[:3]}")
+        try:
+            junk = [p for p, _h, _s in search("__ ... !!", k=5)]
+            check("unicode: punctuation-only query has no error", True)
+            check("unicode: punctuation-only query returns no hits", junk == [], f"{junk[:3]}")
+        except Exception as e:  # noqa: BLE001
+            check("unicode: punctuation-only query has no error", False, f"{type(e).__name__}: {e}")
+
+        # the punctuation guard only matters when the vector arm is on, so force it on with a stub
+        # (no lancedb, no embedder): punctuation must stay out of it, a single letter must reach it
+        class _StubEmbed:
+            @staticmethod
+            def embed_query(q):
+                return [0.0]
+
+        class _StubVectors:
+            @staticmethod
+            def count():
+                return 1
+
+            @staticmethod
+            def search(qv, k):
+                return [("exponential-backoff.md", "(top)", 1.0)]
+
+        saved = (indexlib._vectors_on, indexlib._vec_modules, indexlib._rerank_on)
+        indexlib._vectors_on = lambda: True
+        indexlib._vec_modules = lambda: (_StubEmbed, _StubVectors)
+        indexlib._rerank_on = lambda: False
+        try:
+            punct = [p for p, _h, _s in search("__ ... !!", k=5)]
+            check("vectors on: punctuation-only query returns no hits", punct == [], f"{punct[:3]}")
+            single = [p for p, _h, _s in search("C", k=5)]
+            check("vectors on: single-letter query reaches vector arm",
+                  "exponential-backoff.md" in single, f"{single[:3]}")
+        finally:
+            indexlib._vectors_on, indexlib._vec_modules, indexlib._rerank_on = saved
 
         # subprocess smoke of the real CLI
         env = {**os.environ}

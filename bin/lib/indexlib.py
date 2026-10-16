@@ -17,6 +17,7 @@ import os
 import re
 import sqlite3
 import time
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -291,7 +292,11 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
 
 
 def _fts_query(q: str) -> str:
-    toks = [t for t in re.findall(r"[A-Za-z0-9]+", q.lower()) if len(t) > 1]
+    # NFC first: a decomposed "u" + combining diaeresis (pasted from macOS) would otherwise split the word
+    q = unicodedata.normalize("NFC", q)
+    # \w is Unicode-aware (ü, ő, é survive); it also matches "_", so drop tokens with no letter/digit
+    # (e.g. "__") rather than hand FTS5 an empty or punctuation-only phrase.
+    toks = [t for t in re.findall(r"\w+", q.lower()) if len(t) > 1 and any(c.isalnum() for c in t)]
     return " OR ".join(f'"{t}"' for t in toks) or '""'
 
 
@@ -351,12 +356,19 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
 
     `author` filters by provenance plane (Part 4.3): 'human' excludes agent-authored AND derived
     material (any note with `derived_from`); 'agent' keeps only `author: agent` notes."""
+    if not any(c.isalnum() for c in query):
+        # no word in the query at all (punctuation only): the vector arm would still return neighbours
+        # for it, so answer no hits; the query is still logged
+        if log:
+            log_query(query, [])
+        return []
     con = connect()
     amap = _authorship(con) if author else {}
+    fts = _fts_query(query)
     try:
         rows = con.execute(
             "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
-            (_fts_query(query), k * 4),
+            (fts, k * 4),
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []

@@ -537,6 +537,22 @@ def main(argv):
     elif tracked:
         ok("no committed symlink points at an absolute path outside the vault and engine")
 
+    # 5c. slug fold (v2 0.13) — informational. New slugs fold accents (`ugyfel`); notes made earlier may
+    # carry the old dropped-letter form (`gyf-l`). Nothing is renamed.
+    if wiki_dir.is_dir():
+        differ = []
+        # an existing slug is ASCII by construction, so the question is whether re-slugifying its TITLE
+        # now gives a different file name than the one on disk
+        for md in wiki_dir.rglob("*.md"):
+            title = paths.fm_field(md, "title").strip("\"' ")
+            if title and not title.isascii() and paths.slugify(title) != md.stem \
+                    and paths.slugify_legacy(title) == md.stem:
+                differ.append(f"{md.relative_to(wiki_dir)} -> {paths.slugify(title)}.md")
+        if differ:
+            shown = "; ".join(differ[:5]) + (f" (+{len(differ) - 5} more)" if len(differ) > 5 else "")
+            ok(f"info: {len(differ)} note name(s) predate accent-folding slugs and would differ now: {shown} "
+               "(nothing is renamed; rename a note yourself if you want the new form)")
+
     # 6. index
     db = paths.PLAINKEEP_HOME / ".index" / "plainkeep.sqlite"
     (ok if db.exists() else warn)("index built" if db.exists() else "index not built (run: plainkeep index)")

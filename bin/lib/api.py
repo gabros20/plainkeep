@@ -31,7 +31,10 @@ PLAINKEEP_HOME = paths.PLAINKEEP_HOME
 WIKI = paths.WIKI
 INBOX = paths.INBOX
 append_journal = paths.append_journal
-slugify = paths.slugify
+# api.slugify is frozen at the 1.0 contract (ADR-018): a plugin that looks a note up by slugify(title)
+# must keep finding the file it wrote before 0.13. New code wants the folded form.
+slugify = paths.slugify_legacy
+slugify_folded = paths.slugify
 today = paths.today
 fm_field = paths.fm_field
 link_targets = paths.link_targets
@@ -70,7 +73,7 @@ pluginenv.attach(paths.PLAINKEEP_HOME, Path(__file__).resolve().parents[1])
 
 __all__ = [
     "PLAINKEEP_API_VERSION",
-    "PLAINKEEP_HOME", "WIKI", "INBOX", "append_journal", "slugify", "today", "fm_field", "link_targets",
+    "PLAINKEEP_HOME", "WIKI", "INBOX", "append_journal", "slugify", "slugify_folded", "today", "fm_field", "link_targets",
     "classify",
     "load_types", "type_dir", "is_type", "render_note",
     "run_agent",

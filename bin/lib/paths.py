@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 
@@ -109,9 +110,23 @@ def git(*args) -> str:
         return ""
 
 
-def slugify(s: str, n: int = 60) -> str:
+# Letters NFKD does not decompose into base + combining mark, folded by hand (v2 0.13). Anything else
+# outside [a-z0-9] after folding is a separator, as before.
+_FOLD = str.maketrans({"ß": "ss", "ø": "o", "æ": "ae", "œ": "oe", "ł": "l", "đ": "d", "ð": "d",
+                       "þ": "th", "ı": "i"})
+
+
+def slugify_legacy(s: str, n: int = 60) -> str:
+    """The pre-0.13 slug: accented letters are DROPPED (`Ügyfél` -> `gyf-l`). Frozen for `api.slugify`."""
     s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
     return (s[:n].rstrip("-")) or "note"
+
+
+def slugify(s: str, n: int = 60) -> str:
+    """Accent-folding slug: `Ügyfél szerződés` -> `ugyfel-szerzodes`. ASCII input is unchanged."""
+    s = unicodedata.normalize("NFKD", s.lower().translate(_FOLD))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return slugify_legacy(s, n)
 
 
 def link_targets(text: str) -> list[str]:

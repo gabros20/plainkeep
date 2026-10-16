@@ -323,6 +323,33 @@ def main() -> int:
         check("wiki new creates a slugged note", (h / "wiki" / "notes" / "gamma-idea.md").exists(), r.stdout + r.stderr)
         r = run(h, "wiki", "new", "note", "Gamma Idea")
         check("wiki new refuses a duplicate slug", r.returncode == 1, r.stdout + r.stderr)
+        # v2 0.13: accents fold; ASCII slugs are byte-identical to the pre-0.13 rule
+        r = run(h, "wiki", "new", "note", "Ügyfél szerződés")
+        check("wiki new folds accents (Ügyfél szerződés -> ugyfel-szerzodes.md)",
+              (h / "wiki" / "notes" / "ugyfel-szerzodes.md").exists(), r.stdout + r.stderr)
+        code = ("import sys, re, json; sys.path.insert(0, 'bin'); from lib import paths\n"
+                "old = lambda s, n=60: (re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')[:n].rstrip('-')) or 'note'\n"
+                "cases = ['Gamma Idea', 'Q3 2026 -- Plan!', '  spaced  out  ', 'a_b/c.d', 'UPPER', '', '---', 'x' * 90,\n"
+                "         'Acme (the company)', 'v1.2.3-rc1', 'a-' * 40]\n"
+                "bad = [c for c in cases if paths.slugify(c) != old(c)]\n"
+                "fold = {'Ügyfél szerződés': 'ugyfel-szerzodes', 'Őrült Űr': 'orult-ur', 'Straße': 'strasse',\n"
+                "        'Łódź': 'lodz', 'Øl æble': 'ol-aeble', 'Đurđevak': 'durdevak'}\n"
+                "bad += [k for k, v in fold.items() if paths.slugify(k) != v]\n"
+                "legacy = paths.slugify_legacy('Ügyfél') == 'gyf-l'\n"
+                "print(json.dumps({'bad': bad, 'legacy': legacy}))\n")
+        rs = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(REPO),
+                            env={**os.environ, "PLAINKEEP_HOME": str(h)})
+        try:
+            got = json.loads(rs.stdout)
+        except Exception:
+            got = {"bad": ["<no output>"], "legacy": False}
+        check("slugify: ASCII table is byte-identical to the old rule; fold table matches", not got["bad"],
+              f"{got['bad']} {rs.stderr}")
+        check("slugify_legacy keeps the old dropped-letter behaviour", got["legacy"], rs.stdout)
+        note(h, "notes/gyf-l.md", "note", "Ügyfél", "2026-01-01")
+        rd = run(h, "doctor")
+        check("doctor lists a pre-fold slug that would differ now, as info (no warn, exit 0)",
+              "gyf-l.md -> ugyfel.md" in rd.stdout and rd.returncode == 0, rd.stdout)
         r = run(h, "wiki", "backlinks", "beta")
         check("wiki backlinks finds the linker", "alpha" in r.stdout, r.stdout)
         r = run(h, "wiki", "orphans")

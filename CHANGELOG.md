@@ -48,6 +48,28 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   dependency. On the bench the Hungarian recall@5 went 0.75 to 1.0 with English MRR unchanged
   (0.185 to 0.198); after 0.3 widened the corpus it holds at 0.875 and the `hu` gate is 0.85.
 
+- **Host config file (v2 step 0.5): `config.toml`.** New `bin/lib/hostconfig.py` reads
+  `config.toml` from the same directory as the vault registry (`$PLAINKEEP_CONFIG_HOME`, else
+  `$XDG_CONFIG_HOME/plainkeep`, else `~/.config/plainkeep`). Keys: `search.vectors`, `search.rerank`,
+  `models.enrich`, `models.triage`, `ollama.host`. Precedence is flag, then environment variable, then
+  config, then default, so a non-interactive `ssh host plainkeep search …` gets hybrid search without
+  a shell profile. `setup search --yes` writes `search.vectors = true` instead of advising an `export`,
+  and `setup status` prints each arm's effective value and where it came from. `doctor` suggests
+  deleting `env.sh` once the config holds the same values (it never deletes it). The test seal drops
+  `OLLAMA_HOST`; the config path is already a scratch directory under `seal()`. `test/run_hostconfig.py`. `setup search --dry-run` writes nothing, `setup search --yes` persists the switch even on a host that is already ready, and the `env.sh` hint appears only when the file holds nothing but exports the config repeats.
+
+### Changed
+- **`orient` no longer calls a commit a backup (v2 step 0.6).** `--json` gains `last_commit_age_min`,
+  `backup_configured` and `backup_last_ok` (ISO timestamp of the last verified `backup run`, or null);
+  `backup_age_min` stays as a deprecated alias equal to `last_commit_age_min`. The dashboard prints a
+  `commits:` line for git and a separate `backup:` line that says "not configured" when no restic target
+  exists. `backup run` records `.logs/backup-last-ok.json` (gitignored, so machine-local) after a passing `restic check`.
+
+- **Triage defaults to `gemma4:e2b` (v2 step 0.12).** The ollama agent used `gemma3:1b`; it is now
+  `gemma4:e2b`, a separate default from enrich's `gemma4:e4b` (`PLAINKEEP_AGENT_MODEL` still overrides).
+  `models` gains a `triage` stage, so `models pull --all` (and `setup models`) pulls it. Without Ollama,
+  triage still falls back to the shell heuristics.
+
 ### Fixed
 - **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
   pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found

@@ -15,7 +15,14 @@ import json
 import os
 import urllib.request
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+try:
+    from . import hostconfig  # type: ignore  # (namespace sibling)
+except ImportError:                      # loaded by file path with no package (test suites do)
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import hostconfig  # type: ignore
+
+OLLAMA_HOST = hostconfig.ollama_host()
 
 # (doc_prefix, query_prefix, dim). dim is the model's native output (Matryoshka can truncate later).
 PROFILES = {

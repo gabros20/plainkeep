@@ -72,8 +72,20 @@ interpreter with no per-agent PATH ordering.
 The interpreter is handled for you. Two things still must reach the agent's shell:
 
 - **`PLAINKEEP_HOME`** — so `plainkeep` and its venv resolve to *your* vault, not a default.
-- **`PLAINKEEP_VECTORS=1` / `PLAINKEEP_RERANK=1`** — the opt-in flags that turn the vector/rerank arms *on* at
-  query time. The venv makes them importable; these flags make search *use* them.
+- **`search.vectors` / `search.rerank`** — the opt-in switches that turn the vector/rerank arms *on* at
+  query time. The venv makes them importable; these make search *use* them. Set them once in the host
+  config file, `~/.config/plainkeep/config.toml` (or `$XDG_CONFIG_HOME/plainkeep/`):
+
+  ```toml
+  [search]
+  vectors = true
+  rerank = true
+  ```
+
+  Every plainkeep process reads it, including a non-interactive `ssh host plainkeep search …`, so no shell
+  profile is involved. `plainkeep setup search --yes` writes `search.vectors = true` for you. Precedence:
+  CLI flag, then environment (`PLAINKEEP_VECTORS=1` / `PLAINKEEP_RERANK=1`, which still override), then the
+  file, then the default. The same file holds `models.enrich`, `models.triage` and `ollama.host`.
 
 An interactive login shell sources `~/.zshrc`, so these are already present.
 

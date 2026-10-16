@@ -90,12 +90,16 @@ def _render_result(layer_id: str, before: dict, res: dict, dry: bool = False) ->
         lines.append(f"{layer_id}: dry run (nothing installed/written)")
     if before["status"] == "ready":
         lines.append(f"{layer_id}: already ready")
+        if res.get("config"):
+            lines.append(f"  {res['config']}")
     elif res["confirm_needed"]:
         lines.append(f"{layer_id}: needs confirmation")
     elif res["ran"]:
         lines.append(f"{layer_id}: {'would advance' if dry else 'advanced'}")
         for cmd in res["ran"]:
             lines.append(f"  {verb}: {cmd}")
+        if res.get("config"):
+            lines.append(f"  {res['config']}")
     elif res["handoff"]:
         lines.append(f"{layer_id}: handoff required")
     else:

@@ -27,6 +27,8 @@ seal()   # hermetic: an empty throwaway registry, never the developer's real vau
 # Unconditional, not setdefault: the cases below are fixed and so are their expected verdicts, so an
 # inherited PLAINKEEP_HOME must not silently repoint the wall and turn 59 recorded verdicts into a
 # different question. The expression mirrors lib/guardrail.py's own HOME rule exactly.
+# This `$HOME/plainkeep` value is a classification fixture only: this suite calls classify()/gate() and
+# must never write or spawn. Anything that writes must use scratch_root() (test/lib/hermetic.py).
 os.environ["PLAINKEEP_HOME"] = (os.environ.get("PLAINKEEP_TEST_HOME") or "/Users/tamas") + "/plainkeep"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))

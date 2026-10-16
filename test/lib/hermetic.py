@@ -77,7 +77,34 @@ ENV_LAUNCH_AGENTS_DIR = "PLAINKEEP_LAUNCH_AGENTS_DIR"
 # `not_applicable` and writes nothing; a suite that wants targets creates them under its own root.
 ENV_AGENT_HOME = "PLAINKEEP_AGENT_HOME"
 
+# THE DEVELOPER'S SHELL ENVIRONMENT IS SEALED OUT FOR THE SAME REASON (v2 0.14).
+#
+# Two classes of inherited variable change what a suite measures, and neither shows in a green run:
+#   * PLAINKEEP_HOME — `scratch_root()` honours an inherited one ("never overrides a caller's
+#     choice"), so a developer who exports their real vault had `run_notetypes` append to its audit
+#     log and `run_originals` create journal/ entries in it. Measured against a decoy vault.
+#   * the engine knobs below — with PLAINKEEP_VECTORS / PLAINKEEP_RERANK exported, a suite that
+#     never names them runs hybrid retrieval and fails (`run_search_impl` `wikilink-graph`).
+# They are popped on the FIRST seal() of a process tree; a suite that needs one sets it explicitly
+# AFTER seal(). `PLAINKEEP_TEST_KEEP_HOME=1` is the opt-in for deliberately pointing the suites at a
+# vault. ENV_SEALED_MARK is inherited by children, so a helper subprocess that seals again does not
+# strip a PLAINKEEP_HOME its parent suite set on purpose.
+ENV_KEEP_HOME = "PLAINKEEP_TEST_KEEP_HOME"
+ENV_SEALED_MARK = "PLAINKEEP_TEST_SEALED"
+ENGINE_KNOBS = ("PLAINKEEP_VECTORS", "PLAINKEEP_RERANK", "PLAINKEEP_CONTENT",
+                "PLAINKEEP_ENRICH_MODEL", "PLAINKEEP_AGENT_MODEL")
+
 _sealed: str | None = None
+
+
+def _seal_env() -> None:
+    if os.environ.get(ENV_SEALED_MARK):
+        return
+    os.environ[ENV_SEALED_MARK] = "1"
+    for k in ENGINE_KNOBS:
+        os.environ.pop(k, None)
+    if os.environ.get(ENV_KEEP_HOME) != "1":
+        os.environ.pop(ENV_HOME, None)
 
 
 def seal() -> str:
@@ -90,6 +117,7 @@ def seal() -> str:
     not put it back. The gate in run_all.py cannot see that: it proves seal() is CALLED, never that
     the seal is still held."""
     global _sealed
+    _seal_env()
     if _sealed is not None:
         os.environ[ENV_CONFIG_HOME] = _sealed
         _seal_machine(_sealed)

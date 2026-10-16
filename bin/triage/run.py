@@ -79,6 +79,7 @@ def record_rule(rule: str):
     else:
         txt += f"\n## Filing rules\n- {rule}\n"
     vaultio.write_text(conv, txt, encoding="utf-8")
+    paths.index_written(conv)
 
 
 def items():
@@ -122,6 +123,7 @@ def cmd_drafts(argv, dry, yes, js):
                                   .strip().lower() or "a")
         if choice in ("r", "reject"):
             p.unlink()
+            paths.index_written(p)   # prune the moved/deleted note's search rows
             _commit(rel, f"organize: reject agent draft {p.stem}")
             paths.append_journal(f"triage drafts: rejected {p.stem} (deleted)")
             print("    rejected (deleted)")
@@ -131,6 +133,7 @@ def cmd_drafts(argv, dry, yes, js):
             text = p.read_text(encoding="utf-8")
             vaultio.write_text(p, re.sub(r"(?m)^status:\s*draft\s*$", "status: active", text, count=1),
                          encoding="utf-8")
+            paths.index_written(p)
             _commit(rel, f"organize: promote agent draft {p.stem} -> active")
             paths.append_journal(f"triage drafts: promoted {p.stem} -> active")
             print("    promoted -> active")
@@ -157,6 +160,7 @@ def cmd_decide(argv):
     text = parse_item(p)
     new = make_task(text) if decision == "task" else make_note(text)
     p.unlink()
+    paths.index_written(p)   # prune the moved/deleted note's search rows
     filed = str(new.relative_to(paths.PLAINKEEP_HOME))
     paths.append_journal(f"triaged {p.name} -> {filed} (decide {decision})")
     return output.emit({"item": p.name, "decision": decision, "filed": filed}, "triage",
@@ -178,12 +182,14 @@ def cmd_drafts_decide(argv):
         return output.emit({"slug": slug, "decision": "skip"}, "triage", human=lambda _: f"skipped {slug}")
     if decision == "reject":
         p.unlink()
+        paths.index_written(p)   # prune the moved/deleted note's search rows
         _commit(rel, f"organize: reject agent draft {slug}")
         paths.append_journal(f"triage drafts: rejected {slug} (deleted)")
         return output.emit({"slug": slug, "decision": "reject", "deleted": True}, "triage",
                            human=lambda _: f"rejected {slug} (deleted)")
     text = p.read_text(encoding="utf-8")
     vaultio.write_text(p, re.sub(r"(?m)^status:\s*draft\s*$", "status: active", text, count=1), encoding="utf-8")
+    paths.index_written(p)
     _commit(rel, f"organize: promote agent draft {slug} -> active")
     paths.append_journal(f"triage drafts: promoted {slug} -> active")
     return output.emit({"slug": slug, "decision": "accept", "status": "active"}, "triage",
@@ -234,6 +240,7 @@ def main(argv):
             continue
         new = make_task(text) if choice == "task" else make_note(text)
         p.unlink()
+        paths.index_written(p)   # prune the moved/deleted note's search rows
         paths.append_journal(f"triaged {p.name} -> {new.relative_to(paths.PLAINKEEP_HOME)}")
         print(f"    filed -> {new.relative_to(paths.PLAINKEEP_HOME)}")
         if (not yes) and choice != kind:  # override -> offer to learn the rule (§10)

@@ -2446,6 +2446,7 @@
               "type": "string",
               "required": false,
               "help": "list every note whose frontmatter tags contain this whole tag (case-insensitive, optional leading #), sorted by slug: exhaustive, unlike search",
+              "complete": "tag",
               "example": "clients"
             }
           ]

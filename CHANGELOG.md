@@ -13,9 +13,13 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   restricted to an allowlist (`wiki/`, `tasks/`, `journal/`, `inbox/`), and every hit carries
   `collection`. `plainkeep search "<q>" --collection wiki|tasks|journal|inbox` restricts every arm
   before the top-k cut; `--collection wiki` returns what `search` used to. Hit paths are now
-  vault-relative (`wiki/notes/x.md`, not `notes/x.md`). `PLAINKEEP_CONTENT` still points the indexer at
-  one custom tree. **The index schema changed, so the first `plainkeep index` after upgrading rebuilds
-  everything** (old tables and vectors are dropped; until then search returns no hits). Bench: task
+  vault-relative (`wiki/notes/x.md`, not `notes/x.md`); lines already in `.logs/queries.jsonl` keep the
+  old wiki-relative form. `PLAINKEEP_CONTENT` still points the indexer at one custom tree. **The index
+  schema changed.** The first command that opens the index migrates it in place: existing rows (and
+  their vectors and embedding records) are renamed to `wiki/<path>`, so nothing is re-embedded, and
+  `status`/`orient` read "not built" until the next `plainkeep index`, which then reads tasks, journal
+  and inbox. If the in-place step fails the index is dropped instead and `plainkeep index` rebuilds
+  everything (a vault with vectors re-embeds, which takes hours; search returns no hits until then). Bench: task
   recall@5 0.0 to 0.75, journal 0.0 to 0.67.
 
 - **A note is searchable the moment a verb writes it (v2 step 0.4).** `capture`, `new`, `wiki new`, `task`
@@ -24,8 +28,13 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   it with no `plainkeep index` in between. Only the keyword rows are written; a changed note's
   embedding is left pending for the next `plainkeep index`, and `status` and `orient` report
   `pending_embeddings` (0 when vectors are off). If the index cannot be updated the verb prints a
-  one-line warning and the write stands. Cost: 1.4 ms median per write in-process, about 10 to 30 ms
-  on a whole `capture`.
+  one-line warning and the write stands. `triage`, `organize apply` and `archive` refresh the notes
+  they move or rewrite, and a pruned note drops its vector too. Index freshness is now honest:
+  `status`, `orient` and `doctor` read when `plainkeep index` last finished (not the sqlite file's
+  mtime, which every write touches), so an index made only of per-write rows reads "partial" or "not
+  built". `search --open` and the fzf picker hand `open` the hit's vault-relative path, so a journal or
+  inbox hit opens that file. Cost: 1.4 ms median per write in-process, about 10 to 30 ms on a whole
+  `capture`.
 
 - **`search` says when it cut the list, and `wiki list --tag` lists everything (v2 step 0.15).** `search`
   returned its top 10 silently, so a collection of 35 notes sharing one tag looked like 10. Now
@@ -36,7 +45,7 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   `plainkeep wiki list --tag <tag>` is the exhaustive, deterministic listing: it matches whole
   frontmatter `tags` values (case-insensitive, optional leading `#`, `a-b` is one value), never body
   text, links or a prefix/suffix of another tag, sorted by slug, one row per note (`title`, `slug`,
-  `type`, `path`); `wiki canvas '#tag'` shares the same matching. The bench gained an `exhaustive` query
+  `type`, `path`); `wiki canvas '#tag'` shares the same matching, `--tag` completes from the live tags (new `tag` completion provider), and two notes that share a stem are both listed. The bench gained an `exhaustive` query
   (the 13th of 13 matches) that only `--all` reaches, with a `recall@all` gate.
 
 ### Changed
@@ -46,7 +55,7 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   adds the notes the exact query missed at half the exact arm's weight: an exact-form hit still
   outranks a prefix-only one, and notes the exact arm already found keep their rank. No stemmer
   dependency. On the bench the Hungarian recall@5 went 0.75 to 1.0 with English MRR unchanged
-  (0.185 to 0.198); after 0.3 widened the corpus it holds at 0.875 and the `hu` gate is 0.85.
+  (0.185); after 0.3 widened the corpus it holds at 0.875 and the `hu` gate is 0.85.
 
 - **Host config file (v2 step 0.5): `config.toml`.** New `bin/lib/hostconfig.py` reads
   `config.toml` from the same directory as the vault registry (`$PLAINKEEP_CONFIG_HOME`, else

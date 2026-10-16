@@ -94,7 +94,7 @@
       "summary": "note counts by type (the default action); --tag <tag> lists every note carrying that tag",
       "risk": "read",
       "args": [
-        { "name": "--tag", "type": "string", "required": false, "help": "list every note whose frontmatter tags contain this whole tag (case-insensitive, optional leading #), sorted by slug: exhaustive, unlike search", "example": "clients" }
+        { "name": "--tag", "type": "string", "required": false, "help": "list every note whose frontmatter tags contain this whole tag (case-insensitive, optional leading #), sorted by slug: exhaustive, unlike search", "complete": "tag", "example": "clients" }
       ]
     }
   ]

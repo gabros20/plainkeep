@@ -365,6 +365,168 @@ def main() -> int:
                 rc, _o, _e = pk3("search", "quasar", *bad)
                 check(f"cap: bad flags {' '.join(bad)} are a usage error", rc == 2, f"rc={rc}")
 
+        # --- review r1: open handoff, migration, honest freshness, vector prune, snippets ---
+        with tempfile.TemporaryDirectory() as vtd:
+            vault = Path(vtd) / "v"
+            for rel, body in {
+                "wiki/notes/flow.md": "---\ntype: note\ntitle: Flow A\ntags: [shared-tag]\n---\n# Flow A\n\nplatypusbrook ügyfél\n",
+                "wiki/clients/flow.md": "---\ntype: note\ntitle: Flow B\ntags: [shared-tag]\n---\n# Flow B\n\nbody\n",
+                "journal/2026/10/2026-10-02.md": "---\ntype: journal\n---\n\nsaw a platypusbrook\n",
+                "wiki/notes/dates.md": "---\ntype: note\ntitle: Dates\n---\n# Dates\n\n2026-10-02 platypusbrook\n",
+            }.items():
+                f = vault / rel
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_text(body, encoding="utf-8")
+            _vid, pk = vaultfx.dispatchable_vault(vault, REPO)
+            venv = {k: v for k, v in os.environ.items() if k not in ("PLAINKEEP_CONTENT", "PLAINKEEP_VECTORS", "PLAINKEEP_RERANK")}
+            venv["PLAINKEEP_HOME"] = str(vault)
+
+            def pk4(*a):
+                r = subprocess.run([str(pk), *a], capture_output=True, text=True, env=venv)
+                return r.returncode, r.stdout, r.stderr
+
+            def rows4(out):
+                objs = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+                return objs[0], objs[1:]
+
+            # M3: a vault with no full index is "partial" after a write, not "built"
+            pk4("capture", "zebracorn first")
+            _rc, out, _e = pk4("status", "--json")
+            st = json.loads(out)["data"]
+            check("freshness: a one-note index created by a write is not reported as built",
+                  st["index_age_min"] is None, f"{st['index_age_min']}")
+            _rc, out, _e = pk4("status")
+            check("freshness: status says partial", "partial" in out, out[-160:])
+            pk4("index")
+            _rc, out, _e = pk4("status", "--json")
+            check("freshness: a finished plainkeep index reads as built", json.loads(out)["data"]["index_age_min"] is not None)
+            pk4("capture", "zebracorn second")
+            _rc, out, _e = pk4("status", "--json")
+            check("freshness: later writes do not make the index look fresher", json.loads(out)["data"]["index_age_min"] is not None)
+
+            # M1: search --open / open of a journal hit lands on that journal file
+            _rc, out, _e = pk4("search", "platypusbrook", "--collection", "journal", "--open")
+            check("open: search --open on a journal hit resolves the journal file, not a wiki lookalike",
+                  "journal/2026/10/2026-10-02.md" in out, out.strip()[:120])
+            _rc, out, _e = pk4("open", "journal/2026/10/2026-10-02.md", "--json")
+            check("open: a vault-relative path from a hit opens that file",
+                  json.loads(out)["data"]["kind"] == "journal", out[:120])
+
+            # m2: wiki list --tag lists both notes that share a stem
+            _rc, out, _e = pk4("wiki", "list", "--tag", "shared-tag", "--json")
+            tagged = sorted(r["path"] for r in rows4(out)[1])
+            check("tag list: two notes sharing a stem are both listed",
+                  tagged == ["wiki/clients/flow.md", "wiki/notes/flow.md"], f"{tagged}")
+            # N2: --tag on another action is a usage error
+            rc, _o, _e = pk4("wiki", "orphans", "--tag", "x")
+            check("tag list: --tag with another action is a usage error", rc == 2, f"rc={rc}")
+
+            # m6: a prefix-only hit gets a snippet
+            _rc, out, _e = pk4("search", "ügyfelek", "--json")
+            sn = [r.get("snippet") for r in rows4(out)[1] if r["path"] == "wiki/notes/flow.md"]
+            check("snippet: a prefix-only (inflected) hit shows an excerpt", bool(sn and sn[0]), f"{sn}")
+
+            # m4: triage moves an inbox item; the index follows without a full index
+            pk4("capture", "quokkafarm needs feeding")
+            inbox = sorted((vault / "inbox").glob("cap-*quokkafarm*.md")) or \
+                [f for f in sorted((vault / "inbox").glob("cap-*.md")) if "quokkafarm" in f.read_text(encoding="utf-8")]
+            if inbox:
+                pk4("triage", "decide", inbox[0].name, "note")
+                _rc, out, _e = pk4("search", "quokkafarm", "--json")
+                ps = [r["path"] for r in rows4(out)[1]]
+                check("triage: the filed note is searchable and the inbox item is gone from the index",
+                      any(x.startswith("wiki/") for x in ps) and not any(x.startswith("inbox/") for x in ps), f"{ps}")
+
+            # m3: SystemExit from the index must not escape a write
+            prog = ("import sys\nsys.path.insert(0, %r)\nimport indexlib, paths\n"
+                    "def boom(_): raise SystemExit(5)\nindexlib.index_paths = boom\n"
+                    "paths.index_written('x.md')\nprint('survived')\n") % str(REPO / "bin" / "lib")
+            r = subprocess.run([sys.executable, "-c", prog], capture_output=True, text=True, env=venv)
+            check("write-safety: a SystemExit inside the index step does not abort the verb",
+                  r.returncode == 0 and "survived" in r.stdout and "warning" in r.stderr, f"rc={r.returncode} {r.stderr[-120:]}")
+
+        # M2 + m5: an index from the previous schema migrates in place (no re-embed, --changed still works)
+        import sqlite3 as _sq
+        with tempfile.TemporaryDirectory() as vtd:
+            vault = Path(vtd) / "v"
+            (vault / "wiki" / "notes").mkdir(parents=True)
+            (vault / "tasks" / "active").mkdir(parents=True)
+            (vault / "wiki" / "notes" / "old.md").write_text("---\ntitle: Old\n---\n# Old\n\nmigratedword here\n", encoding="utf-8")
+            (vault / "tasks" / "active" / "T-20260101-01.md").write_text("---\ntitle: T\n---\n# T\n\ntaskword migratedword\n", encoding="utf-8")
+            _vid, pk = vaultfx.dispatchable_vault(vault, REPO)
+            venv = {k: v for k, v in os.environ.items() if k not in ("PLAINKEEP_CONTENT", "PLAINKEEP_VECTORS", "PLAINKEEP_RERANK")}
+            venv["PLAINKEEP_HOME"] = str(vault)
+
+            def mk_v1(drop_links: bool):
+                db = vault / ".index" / "plainkeep.sqlite"
+                db.parent.mkdir(exist_ok=True)
+                if db.exists():
+                    db.unlink()
+                c = _sq.connect(db)
+                c.executescript("""
+                    CREATE TABLE files(path TEXT PRIMARY KEY, hash TEXT);
+                    CREATE VIRTUAL TABLE chunks USING fts5(path, heading, body, slug UNINDEXED);
+                    CREATE TABLE links(src TEXT, dst TEXT);
+                    CREATE TABLE embedded(path TEXT PRIMARY KEY, model TEXT);
+                    CREATE TABLE notemeta(path TEXT PRIMARY KEY, author TEXT, derived_from TEXT);
+                    CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+                """)
+                c.execute("INSERT INTO files VALUES('notes/old.md','abc')")
+                c.execute("INSERT INTO chunks VALUES('notes/old.md','(top)','migratedword here','old')")
+                c.execute("INSERT INTO embedded VALUES('notes/old.md','m')")
+                c.execute("INSERT INTO meta VALUES('last_index_ts','9999999999')")   # far future: --changed would skip everything
+                if drop_links:
+                    c.execute("DROP TABLE links")   # makes the in-place migration fail -> falls back to the drop
+                c.commit()
+                c.close()
+
+            def hits_for(q):
+                r = subprocess.run([str(pk), "search", q, "--json"], capture_output=True, text=True, env=venv)
+                return [json.loads(ln)["path"] for ln in r.stdout.splitlines() if ln.strip() and "ops_json" not in ln]
+
+            mk_v1(False)
+            before = hits_for("migratedword")   # first touch triggers the migration
+            check("migration: old wiki rows survive in place under the wiki/ prefix", before == ["wiki/notes/old.md"], f"{before}")
+            c = _sq.connect(vault / ".index" / "plainkeep.sqlite")
+            emb = c.execute("SELECT path FROM embedded").fetchall()
+            hasstamp = c.execute("SELECT 1 FROM meta WHERE key='last_index_ts'").fetchone()
+            c.close()
+            check("migration: embedding records keep their (prefixed) paths, so nothing is re-embedded",
+                  emb == [("wiki/notes/old.md",)], f"{emb}")
+            check("migration: the stale build stamp is gone", hasstamp is None)
+            subprocess.run([str(pk), "index", "--changed"], capture_output=True, text=True, env=venv)
+            after = hits_for("taskword")
+            check("migration: index --changed after the bump finds the other collections",
+                  after == ["tasks/active/T-20260101-01.md"], f"{after}")
+            mk_v1(True)
+            subprocess.run([str(pk), "index", "--changed"], capture_output=True, text=True, env=venv)
+            both = sorted(hits_for("migratedword"))
+            check("migration: when the in-place path fails the index is dropped and --changed still rebuilds it",
+                  both == ["tasks/active/T-20260101-01.md", "wiki/notes/old.md"], f"{both}")
+
+        # M4 + N4: stubbed vector plane (no lancedb needed)
+        class _VS:
+            deleted: list = []
+
+            @staticmethod
+            def delete_path(p):
+                _VS.deleted.append(p)
+
+        saved = indexlib._vectors_on, indexlib._vec_modules
+        try:
+            indexlib._vectors_on = lambda: True
+            indexlib._vec_modules = lambda: (object(), _VS)
+            gone = content / "ephemeral-note.md"
+            gone.write_text("---\ntitle: E\n---\n\nephemeralword\n", encoding="utf-8")
+            indexlib.index_paths([gone])
+            gone.unlink()
+            indexlib.index_paths([gone])
+            check("vector prune: a note pruned by index_paths also loses its vector", "ephemeral-note.md" in _VS.deleted, f"{_VS.deleted}")
+            indexlib._vec_modules = lambda: (None, None)
+            check("pending: vectors on but no usable embedder reports 0, not every note", indexlib.pending_embeddings() == 0)
+        finally:
+            indexlib._vectors_on, indexlib._vec_modules = saved
+
         # subprocess smoke of the real CLI
         env = {**os.environ}
         idx = subprocess.run(["python3", str(REPO / "bin/index/run.py")], capture_output=True, text=True, env=env)

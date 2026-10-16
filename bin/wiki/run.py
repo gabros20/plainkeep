@@ -55,14 +55,22 @@ def _norm_tag(t: str) -> str:
     return unicodedata.normalize("NFC", t.strip()).lstrip("#").strip().casefold()
 
 
-def _tag_members(notes, tag: str) -> set:
-    """Slugs whose frontmatter `tags` contain `tag` as a WHOLE normalized value (case-folded, optional
-    leading `#`; `a-b` is one value). Never body text or wikilinks, never a prefix/suffix of another tag.
-    Shared by `canvas '#tag'` and `list --tag`."""
+def _tagged_paths(tag: str) -> list:
+    """Every wiki note whose frontmatter `tags` contain `tag` as a WHOLE normalized value (case-folded,
+    optional leading `#`; `a-b` is one value), sorted by (slug, path). Never body text or wikilinks,
+    never a prefix/suffix of another tag. Walks the files, not the slug map, so two notes that share a
+    stem are both listed."""
     want = _norm_tag(tag)
-    if not want:
-        return set()
-    return {s for s, p in notes.items() if want in {_norm_tag(t) for t in paths.fm_list(p, "tags")}}
+    if not want or not paths.WIKI.exists():
+        return []
+    found = [p for p in paths.WIKI.rglob("*.md")
+             if want in {_norm_tag(t) for t in paths.fm_list(p, "tags")}]
+    return sorted(found, key=lambda p: (p.stem, p.as_posix()))
+
+
+def _tag_members(notes, tag: str) -> set:
+    """Slugs tagged `tag` (see `_tagged_paths`), for `canvas '#tag'`."""
+    return {p.stem for p in _tagged_paths(tag)}
 
 
 def _canvas_model(notes, hub, tagset, depth):
@@ -158,6 +166,8 @@ def main(argv):
         tag_arg = argv[i + 1] if i + 1 < len(argv) else ""
         del argv[i:i + 2]
     argv = [a for a in argv if a not in ("--dry-run", "--obsidian", "--stdout", "--depth")]
+    if tag_arg is not None and (argv[0] if argv else "list") != "list":
+        output.fail(output.EXIT_USAGE, "--tag belongs to `plainkeep wiki list --tag <tag>`", verb="wiki")
     action = argv[0] if argv else "list"
     notes = _notes()
 
@@ -303,10 +313,10 @@ def main(argv):
     elif action == "list" and tag_arg is not None:
         if not _norm_tag(tag_arg):
             output.fail(output.EXIT_USAGE, "usage: plainkeep wiki list --tag <tag>", verb="wiki")
-        members = sorted(_tag_members(notes, tag_arg))   # exhaustive + deterministic: sorted by slug
-        rows = [{"title": paths.fm_field(notes[s], "title") or paths.title_of(notes[s]), "slug": s,
-                 "type": paths.fm_field(notes[s], "type") or "?",
-                 "path": notes[s].relative_to(paths.PLAINKEEP_HOME).as_posix()} for s in members]
+        members = _tagged_paths(tag_arg)   # exhaustive + deterministic: sorted by slug, then path
+        rows = [{"title": paths.fm_field(f, "title") or paths.title_of(f), "slug": f.stem,
+                 "type": paths.fm_field(f, "type") or "?",
+                 "path": f.relative_to(paths.PLAINKEEP_HOME).as_posix()} for f in members]
 
         def render_tagged(rs):
             return "\n".join([f"{len(rs)} note(s) tagged '{_norm_tag(tag_arg)}':",

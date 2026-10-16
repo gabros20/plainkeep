@@ -1,27 +1,27 @@
 {
-  "commit": "9c17475",
+  "commit": "73695f6",
   "content_root": "wiki",
   "gates": [],
   "modes": {
     "keyword": {
       "by_tag": {
         "deep": {
-          "mrr": 0.44,
+          "mrr": 0.375,
           "n": 5,
           "recall@10": 1.0,
-          "recall@5": 1.0
+          "recall@5": 0.8
         },
         "en": {
-          "mrr": 0.287,
+          "mrr": 0.185,
           "n": 19,
           "recall@10": 0.632,
-          "recall@5": 0.526
+          "recall@5": 0.421
         },
         "exact": {
-          "mrr": 0.667,
+          "mrr": 0.26,
           "n": 4,
           "recall@10": 1.0,
-          "recall@5": 1.0
+          "recall@5": 0.75
         },
         "hu": {
           "mrr": 0.0,
@@ -47,8 +47,14 @@
           "recall@10": 0.0,
           "recall@5": 0.0
         },
+        "paraphrase": {
+          "mrr": 0.181,
+          "n": 3,
+          "recall@10": 1.0,
+          "recall@5": 0.667
+        },
         "superseded": {
-          "mrr": 0.196,
+          "mrr": 0.2,
           "n": 3,
           "recall@10": 1.0,
           "recall@5": 0.333
@@ -61,10 +67,10 @@
         }
       },
       "overall": {
-        "mrr": 0.202,
+        "mrr": 0.13,
         "n": 27,
         "recall@10": 0.444,
-        "recall@5": 0.37
+        "recall@5": 0.296
       },
       "per_query": [
         {
@@ -111,24 +117,24 @@
         },
         {
           "id": "deep-01",
-          "rank": 3,
+          "rank": 5,
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
-            "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/notes/webhook-outage-postmortem-2026-08.md",
-            "wiki/notes/retry-budget.md"
+            "wiki/notes/client-onboarding-checklist.md",
+            "wiki/areas/engineering-practice.md",
+            "wiki/runbooks/postgres-failover-runbook.md"
           ]
         },
         {
           "id": "deep-02",
-          "rank": 3,
+          "rank": 5,
           "top5": [
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/projects/webhook-relay.md",
-            "wiki/notes/decision-fly-io-for-staging.md",
-            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/research/queue-backend-comparison.md",
             "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/notes/decision-redis-streams-for-webhook-queue.md"
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
           ]
         },
         {
@@ -138,8 +144,8 @@
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/research/queue-backend-comparison.md",
-            "wiki/areas/engineering-practice.md",
-            "wiki/runbooks/postgres-failover-runbook.md"
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
           ]
         },
         {
@@ -150,18 +156,18 @@
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/notes/webhook-outage-postmortem-2026-08.md",
             "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/notes/retry-budget.md"
+            "wiki/notes/decision-fly-io-for-staging.md"
           ]
         },
         {
           "id": "deep-05",
-          "rank": 5,
+          "rank": 7,
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
-            "wiki/runbooks/postgres-failover-runbook.md",
             "wiki/notes/webhook-outage-postmortem-2026-08.md",
-            "wiki/notes/infra-meeting-log-2026-q3.md"
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/areas/engineering-practice.md"
           ]
         },
         {
@@ -248,10 +254,10 @@
         },
         {
           "id": "superseded-02",
-          "rank": 9,
+          "rank": 8,
           "top5": [
-            "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-fly-io-for-staging.md",
             "wiki/notes/webhook-outage-postmortem-2026-08.md",
             "wiki/runbooks/postgres-failover-runbook.md"
@@ -274,9 +280,9 @@
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
-            "wiki/notes/retry-budget.md",
             "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/notes/webhook-outage-postmortem-2026-08.md"
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/research/queue-backend-comparison.md"
           ]
         },
         {
@@ -298,18 +304,18 @@
             "wiki/runbooks/postgres-failover-runbook.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/notes/client-onboarding-checklist.md",
-            "wiki/notes/code-review-checklist.md"
+            "wiki/clients/kovacs-es-tarsa-kft.md"
           ]
         },
         {
           "id": "exact-01",
-          "rank": 1,
+          "rank": 8,
           "top5": [
-            "wiki/notes/retry-budget.md",
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/notes/webhook-retry-policy.md",
-            "wiki/research/queue-backend-comparison.md"
+            "wiki/research/queue-backend-comparison.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
           ]
         },
         {
@@ -336,13 +342,13 @@
         },
         {
           "id": "exact-04",
-          "rank": 1,
+          "rank": 4,
           "top5": [
-            "wiki/notes/tax-filing-calendar.md",
             "wiki/notes/vat-reverse-charge-notes.md",
             "wiki/notes/invoice-payment-deadlines.md",
-            "wiki/notes/atalanyado-es-afa.md",
-            "wiki/areas/invoicing-and-tax.md"
+            "wiki/notes/vat-deadlines-reminder.md",
+            "wiki/notes/tax-filing-calendar.md",
+            "wiki/notes/atalanyado-es-afa.md"
           ]
         }
       ],

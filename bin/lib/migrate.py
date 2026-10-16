@@ -581,7 +581,12 @@ def _clip(text: str, limit: int = 1600) -> str:
         return text or "(no output)"
     head = limit // 3
     tail = limit - head
-    return (text[:head] + f"\n  … {len(text) - head - tail} character(s) elided …\n" + text[-tail:])
+    middle = text[head:len(text) - tail]
+    # The tail used to be where `doctor` put its verdict; it now prints a dozen advisory rows after
+    # the FAIL lines, so the verdict can sit in the elided middle. A `FAIL` row is never elided.
+    kept = [ln for ln in middle.splitlines() if re.sub(r"\x1b\[[0-9;]*m", "", ln).lstrip().startswith("FAIL")]
+    keep = ("\n" + "\n".join(kept)) if kept else ""
+    return (text[:head] + f"\n  … {len(middle)} character(s) elided …" + keep + "\n" + text[-tail:])
 
 
 def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bool = True,

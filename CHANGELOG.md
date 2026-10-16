@@ -99,6 +99,9 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   triage still falls back to the shell heuristics.
 
 ### Fixed
+- **A migration's printed doctor failure survives the clip (v2 Stage 0 integration).** `migrate`
+  clips a failing probe's output to head + tail, and `doctor` now prints advisory rows after its FAIL
+  lines, so the failing row could land in the elided middle. `FAIL` rows are now always kept.
 - **Escaped pipes survive a shared table (v2 step 0.9).** `share` split table rows on every `|`, so
   `[[acme\|Acme Corp]]` in a cell became two cells and a dead link; it now splits on unescaped pipes.
 - **`[[slug\|label]]` in a table is a link to `slug` (v2 step 0.9).** The escaped pipe left a trailing

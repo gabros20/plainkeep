@@ -112,6 +112,23 @@ def main() -> int:
         else:
             print(f"{YEL}note{RESET} stage-3 rerank backend unavailable — `pip install fastembed` to enable it")
 
+        # 6b) a pruned note's vector goes with it
+        gone_rel = "notes/chunking.md"
+        (content / gone_rel).unlink()
+        indexlib.index_paths([content / gone_rel])
+        left = {r["path"] for r in vectorstore.connect().open_table(vectorstore.TABLE).head(100).to_pylist()}
+        results.append(("index_paths prunes the vector of a deleted note", not any(x.endswith(gone_rel) for x in left),
+                        f"{sorted(left)}"))
+
+        # 7) (runs last: it rewrites the stored paths) schema migration, vector half: prefix_paths rewrites path and id in place (no re-embed)
+        before = sorted(r["path"] for r in vectorstore.connect().open_table(vectorstore.TABLE).head(100).to_pylist())
+        vectorstore.prefix_paths("wiki/")
+        recs = vectorstore.connect().open_table(vectorstore.TABLE).head(100).to_pylist()
+        results.append(("prefix_paths rewrites path and id in place",
+                        sorted(r["path"] for r in recs) == sorted("wiki/" + b for b in before)
+                        and all(r["id"] == r["path"] for r in recs) and len(recs) == len(NOTES) - 1,
+                        f"{[(r['id'], r['path']) for r in recs][:2]}"))
+
     print(f"{BOLD}Stage-2 hybrid (LanceDB + EmbeddingGemma) — {len(results)} checks{RESET}\n")
     passed = 0
     for name, ok, detail in results:

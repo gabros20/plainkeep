@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib import enginetree, output, paths, render  # noqa: E402
-from lib.indexlib import CONTENT, search  # noqa: E402
+from lib.indexlib import COLLECTIONS, CONTENT, search  # noqa: E402
 
 FLAGS = ("--edit", "--reveal", "--obsidian")
 
@@ -40,8 +40,25 @@ def _wiki_notes() -> dict:
     return out
 
 
+def _indexed_file(target: str):
+    """`target` as a vault-relative path to a note inside an indexed collection, else None. This is the
+    handoff from `search --open`/fzf: a hit's stem alone cannot name a journal day or an inbox capture."""
+    if "/" not in target or not target.endswith(".md"):
+        return None
+    top = target.split("/", 1)[0]
+    if top not in COLLECTIONS or ".." in Path(target).parts:
+        return None
+    f = paths.PLAINKEEP_HOME / target
+    return f if f.is_file() else None
+
+
 def _resolve(target: str):
     """Return a resolution dict {kind, slug, path, edit, reveal, wiki_slug} or None."""
+    rel = _indexed_file(target)
+    if rel:   # a vault-relative path from a search hit (journal day, inbox capture, ...)
+        coll = target.split("/", 1)[0]
+        return {"kind": coll, "slug": rel.stem, "path": rel, "edit": rel, "reveal": rel,
+                "wiki_slug": rel.stem if coll == "wiki" else None}
     f = _find_task(target)
     if f:
         return {"kind": "task", "slug": target, "path": f, "edit": f, "reveal": f, "wiki_slug": None}

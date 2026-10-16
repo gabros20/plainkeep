@@ -15,6 +15,11 @@ def _count(d: Path, pat: str) -> int:
     return len(list(d.glob(pat))) if d.exists() else 0
 
 
+def _last_full_index():
+    from lib import indexlib
+    return indexlib.last_full_index_ts()
+
+
 def _pending() -> int:
     from lib import indexlib
     return indexlib.pending_embeddings()
@@ -28,8 +33,9 @@ def main(argv):
     wiki = _count(paths.WIKI, "**/*.md")
 
     index_age = None
-    if DB.exists():
-        index_age = int((datetime.now() - datetime.fromtimestamp(DB.stat().st_mtime)).total_seconds() // 60)
+    stamp = _last_full_index()   # the last finished `plainkeep index`, not the sqlite mtime (writes touch that)
+    if stamp is not None:
+        index_age = int((datetime.now() - datetime.fromtimestamp(stamp)).total_seconds() // 60)
     git_dirty = None
     try:
         dirty = subprocess.run(["git", "-C", str(paths.PLAINKEEP_HOME), "status", "--porcelain"],
@@ -58,8 +64,10 @@ def main(argv):
             print(f"    ⏸ {f.stem}  {paths.title_of(f)}")
         print(f"  inbox:   {inbox} item(s) to triage")
         print(f"  wiki:    {wiki} note(s)")
-        if DB.exists():
+        if stamp is not None:
             print(f"  index:   built {index_age} min ago" if index_age else "  index:   built just now")
+        elif DB.exists():
+            print("  index:   partial (written note by note, never fully built — run: plainkeep index)")
         else:
             print("  index:   not built (run: plainkeep index)")
         if data["pending_embeddings"]:

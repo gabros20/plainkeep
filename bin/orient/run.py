@@ -95,7 +95,9 @@ def _pending_embeddings() -> int:
 def _gather() -> dict:
     active, waiting = _tasks("active"), _tasks("waiting")
     inbox = len(list(paths.INBOX.glob("*.md"))) if paths.INBOX.exists() else 0
-    index_age = _age_min(DB.stat().st_mtime) if DB.exists() else None
+    from lib import indexlib
+    stamp = indexlib.last_full_index_ts()   # last finished `plainkeep index`; the sqlite mtime moves on every write
+    index_age = _age_min(stamp) if stamp is not None else None
     commit_age = _last_commit_age()
     backup_configured, backup_ok = _backup_state()
     return {

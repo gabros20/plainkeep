@@ -505,7 +505,13 @@ def main(argv):
 
     # 6. index
     db = paths.PLAINKEEP_HOME / ".index" / "plainkeep.sqlite"
-    (ok if db.exists() else warn)("index built" if db.exists() else "index not built (run: plainkeep index)")
+    from lib import indexlib
+    if indexlib.last_full_index_ts() is not None:
+        ok("index built")
+    elif db.exists():
+        warn("index partial — notes were indexed one write at a time but `plainkeep index` never finished (run: plainkeep index)")
+    else:
+        warn("index not built (run: plainkeep index)")
 
     # 7. sync-wall (Part 0.4): a .git tree must NEVER live under iCloud/Dropbox/Syncthing
     home_real = _real(paths.PLAINKEEP_HOME)

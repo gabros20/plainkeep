@@ -35,8 +35,7 @@ def _live_session() -> int:
     if not sel:
         return output.EXIT_OK
     parts = sel.split()
-    slug = Path((parts[1] if len(parts) > 1 else sel).split("#", 1)[0]).stem
-    return _open(slug)
+    return _open((parts[1] if len(parts) > 1 else sel).split("#", 1)[0])   # the hit's vault-relative path
 
 
 def main(argv):
@@ -88,7 +87,7 @@ def main(argv):
     if do_open:
         if not hits:
             output.fail(output.EXIT_NOT_FOUND, f"no hit to open for '{query}'", verb="search")
-        return _open(Path(hits[0][0]).stem)
+        return _open(hits[0][0])
 
     def render_hits(rs):
         if not rs:

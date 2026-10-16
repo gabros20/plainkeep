@@ -106,16 +106,66 @@ def _candidate_texts(paths: list[str], limit: int = 1200) -> dict:
     return out
 
 
+def _migrate_in_place(con: sqlite3.Connection) -> None:
+    """Schema 1 -> 2 without losing work. Schema-1 paths were relative to `<vault>/wiki`, so every
+    existing row becomes `wiki/<path>` in collection `wiki`; hashes and embedding records stay valid,
+    so the next `plainkeep index` only has to read tasks/, journal/ and inbox/. All-or-nothing: any
+    error rolls the lexical half back and the caller falls back to dropping the index."""
+    con.execute("BEGIN")
+    try:
+        con.execute("ALTER TABLE chunks RENAME TO chunks_v1")
+        con.execute("CREATE VIRTUAL TABLE chunks USING fts5(path, heading, body, slug UNINDEXED, collection UNINDEXED)")
+        con.execute("INSERT INTO chunks(path, heading, body, slug, collection) "
+                    "SELECT 'wiki/' || path, heading, body, slug, 'wiki' FROM chunks_v1")
+        con.execute("DROP TABLE chunks_v1")
+        con.execute("ALTER TABLE files ADD COLUMN collection TEXT")
+        con.execute("UPDATE files SET path = 'wiki/' || path, collection = 'wiki'")
+        con.execute("UPDATE links SET src = 'wiki/' || src")
+        con.execute("UPDATE embedded SET path = 'wiki/' || path")
+        con.execute("UPDATE notemeta SET path = 'wiki/' || path")
+        con.execute("DELETE FROM meta WHERE key = 'last_index_ts'")   # --changed must not skip the new collections
+        con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema', ?)", (SCHEMA_VERSION,))
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+
+
 def _migrate(con: sqlite3.Connection) -> None:
-    """Index schema upgrade = the rebuild rule: an index written by another schema version is
-    dropped whole (tables and vectors), and the next `plainkeep index` rebuilds it from the notes."""
+    """Index schema upgrade. Preferred: migrate in place (lexical rows, then the vector paths
+    best-effort). If anything fails, or the content root is not the default vault root, fall back to
+    the rebuild rule: drop the tables and vectors, and the next `plainkeep index` rebuilds them."""
     con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
     if _meta_get(con, "schema") == SCHEMA_VERSION:
         return
     old = {n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if old & {"chunks", "files"}:
+        have_cols = {r[1] for r in con.execute("PRAGMA table_info(files)")}
+        migrated = False
+        if "collection" not in have_cols and not os.environ.get("PLAINKEEP_CONTENT"):
+            try:
+                _migrate_in_place(con)
+                migrated = True
+            except Exception:
+                migrated = False
+            if migrated:
+                try:
+                    _, vs = _vec_modules()
+                    if vs:
+                        vs.prefix_paths("wiki/")
+                except Exception:  # vectors can't be rewritten: lexical stays, vectors are re-embedded
+                    try:
+                        _, vs = _vec_modules()
+                        if vs:
+                            vs.drop()
+                        con.execute("DELETE FROM embedded")
+                        con.commit()
+                    except Exception:
+                        pass
+                return
         for t in ("chunks", "files", "links", "embedded", "notemeta"):
             con.execute(f"DROP TABLE IF EXISTS {t}")
+        con.execute("DELETE FROM meta WHERE key != 'schema'")   # a stale build stamp would make --changed skip everything
         try:  # vectors carry the old (content-relative) paths; they are rebuilt with the rest
             _, vs = _vec_modules()
             if vs:
@@ -243,6 +293,13 @@ def _drop_rows(con, rel: str) -> None:
     for t, col in (("chunks", "path"), ("links", "src"), ("files", "path"), ("embedded", "path"),
                    ("notemeta", "path")):
         con.execute(f"DELETE FROM {t} WHERE {col}=?", (rel,))
+    if _vectors_on():   # a pruned note must not keep answering from the vector arm
+        try:
+            _, vs = _vec_modules()
+            if vs:
+                vs.delete_path(rel)
+        except Exception:
+            pass
 
 
 def index_paths(paths: list) -> int:
@@ -286,9 +343,26 @@ def index_paths_safe(paths: list) -> None:
     one-line warning on stderr and the write stands."""
     try:
         index_paths(paths)
-    except Exception as e:  # noqa: BLE001
+    except (Exception, SystemExit) as e:  # noqa: BLE001  (SystemExit: the write guard's refusal)
         print(f"warning: search index not refreshed ({type(e).__name__}: {e}) — run `plainkeep index`",
               file=_sys.stderr)
+
+
+def last_full_index_ts() -> float | None:
+    """When a full (or --changed) `plainkeep index` last finished, or None if it never has. Unlike the
+    sqlite file's mtime this is NOT moved by per-write refreshes (index_paths), so it answers "is the
+    index complete", not "was it touched". Read-only: never creates the index."""
+    if not DB.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        try:
+            raw = con.execute("SELECT value FROM meta WHERE key='last_index_ts'").fetchone()
+        finally:
+            con.close()
+        return float(raw[0]) if raw and raw[0] else None
+    except Exception:
+        return None
 
 
 def pending_embeddings() -> int:
@@ -300,9 +374,10 @@ def pending_embeddings() -> int:
         emb, _vs = _vec_modules()
         con = connect()
         try:
-            model = emb.model_name() if emb else None
-            return sum(1 for (rel,) in con.execute("SELECT path FROM files")
-                       if model is None or _embed_stale(con, rel, model))
+            if emb is None:   # vectors on but unusable: `plainkeep index` cannot embed either (doctor says why)
+                return 0
+            model = emb.model_name()
+            return sum(1 for (rel,) in con.execute("SELECT path FROM files") if _embed_stale(con, rel, model))
         finally:
             con.close()
     except Exception:
@@ -428,6 +503,12 @@ def _fts_query(q: str) -> str:
     return " OR ".join(f'"{t}"' for t in _tokens(q)) or '""'
 
 
+def _lexical_match(q: str) -> str:
+    """The FTS expression both lexical arms together match: exact words OR the prefix arm's stems."""
+    pfx = _prefix_query(q)
+    return f"({_fts_query(q)}) OR ({pfx})" if pfx else _fts_query(q)
+
+
 def _prefix_query(q: str) -> str | None:
     """The Hungarian inflection arm (v2 0.2): agglutinative suffixes (ügyfél -> ügyfelek, ügyfélnek)
     defeat exact-token FTS, so every token of 5+ chars also matches as a prefix of its stem
@@ -469,7 +550,7 @@ def snippets(query: str, wanted, k: int = 40) -> dict:
         rows = con.execute(
             "SELECT path, snippet(chunks, 2, '<', '>', '…', 12) AS s, bm25(chunks) AS r "
             "FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
-            (_fts_query(query), k),
+            (_lexical_match(query), k),
         ).fetchall()
         for path, s, _r in rows:
             if path in wanted and path not in out:

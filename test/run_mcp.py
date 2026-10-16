@@ -69,7 +69,7 @@ def main() -> int:
         (vault / "wiki" / "notes" / "widget.md").write_text(
             "---\ntype: note\ntitle: Widget design\nstatus: active\ntags: [demo]\n---\n"
             "# Widget design\n\nThe widget subsystem is the heart of the demo.\n", encoding="utf-8")
-        env = {**os.environ, "PLAINKEEP_HOME": str(vault)}
+        env = {**os.environ, "PLAINKEEP_HOME": str(vault), "PLAINKEEP_ENGINE_HOME": str(engine_home)}
         subprocess.run([str(ops), "index"], capture_output=True, text=True, env=env)
 
         resp = drive(ops, env, [
@@ -117,8 +117,8 @@ def main() -> int:
     check("confirm call is flagged isError", r4.get("isError") is True)
     payload = json.loads(r4.get("content", [{}])[0].get("text", "{}"))
     check("confirm call returns ops_confirm_needed", payload.get("ops_confirm_needed") is True, str(payload)[:120])
-    check("confirm call gives the exact --yes re-run",
-          payload.get("rerun") == "plainkeep plugin add local/x --yes", payload.get("rerun", ""))
+    check("confirm call gives the exact --approved re-run",
+          payload.get("rerun") == "plainkeep plugin add local/x --approved", payload.get("rerun", ""))
 
     # unknown method → JSON-RPC method-not-found, gracefully
     check("unknown method → -32601", resp.get(5, {}).get("error", {}).get("code") == -32601)

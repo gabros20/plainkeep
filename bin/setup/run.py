@@ -73,7 +73,7 @@ def _confirm_message(layer_id: str) -> str:
 
 def _action_failed(layer_id: str, exc: Exception) -> None:
     layer = next(layer for layer in setuplib.LAYERS if layer.id == layer_id)
-    yes = " --yes" if layer.gate == "confirm" else ""
+    yes = " --approved" if layer.gate == "confirm" else ""
     hint = f"fix the reported setup prerequisite, then re-run: plainkeep setup {layer_id}{yes}"
     if isinstance(exc, subprocess.CalledProcessError):
         cmd = " ".join(str(part) for part in (exc.cmd if isinstance(exc.cmd, (list, tuple)) else [exc.cmd]))
@@ -114,19 +114,19 @@ def _advance_one(layer_id: str, *, yes: bool, dry: bool = False) -> int:
     before = setuplib.status(layer_id)[0]
     layer = next(layer for layer in setuplib.LAYERS if layer.id == layer_id)
     # A --dry-run is a READ (the guardrail already downgrades it): it previews the plan with fake=True
-    # and NEVER requires --yes, even for a confirm-class layer (Task 7a). The confirm gate fires ONLY
+    # and NEVER requires --approved, even for a confirm-class layer (Task 7a). The confirm gate fires ONLY
     # for a genuinely-attemptable layer (FIX 4): a blocked/not_applicable (or already-ready) layer is
-    # skipped, not installed, so demanding --yes for it would be a spurious exit 3.
+    # skipped, not installed, so demanding --approved for it would be a spurious exit 3.
     if not dry and before["status"] not in SKIP_STATUSES and layer.gate == "confirm" and not yes:
         output.fail(output.EXIT_CONFIRM, _confirm_message(layer_id),
-                    hint=f"re-run: plainkeep setup {layer_id} --yes", verb="setup")
+                    hint=f"re-run: plainkeep setup {layer_id} --approved", verb="setup")
     try:
         res = setuplib.advance(layer_id, yes=(yes or dry), fake=(_fake() or dry))
     except (subprocess.CalledProcessError, FileNotFoundError, OSError) as exc:
         _action_failed(layer_id, exc)
     payload = {**res, "layer": layer_id, "status": before["status"]}
     # The same two lines the confirm prompt carries, on the MACHINE channel too: an agent driving
-    # `plainkeep setup models --yes --json` never sees the prompt, and it is the caller most likely to
+    # `plainkeep setup models --approved --json` never sees the prompt, and it is the caller most likely to
     # be surprised by a multi-GB download it did not budget for.
     if layer_id == "models":
         payload["halves"] = list(setuplib.MODELS_HALVES)
@@ -144,7 +144,7 @@ def _handoffs() -> list[str]:
         handoffs.append(backups["next"])
     # The standing "load launchd plists" handoff is GONE: `ready` now means the jobs are loaded
     # (ADR-022), so printing it was telling the operator to do the thing that had just been done.
-    # A layer that is rendered-but-not-loaded carries `plainkeep job enable --all --yes` in its own
+    # A layer that is rendered-but-not-loaded carries `plainkeep job enable --all --approved` in its own
     # `next`, which `_advance_all` already folds into this list.
     handoffs.append("push git changes")
     return list(dict.fromkeys(handoffs))
@@ -189,21 +189,21 @@ def _advance_all(*, yes: bool, dry: bool = False) -> int:
     per-layer outcomes; a failure in one independent layer does NOT abort the rest. Layers that are
     already ready, blocked on a missing prerequisite, or not applicable to this host are skipped (not
     attempted), and never contribute to the exit code. Overall exit: 1 iff some ATTEMPTED layer
-    failed; 0 otherwise. `--dry-run` previews the plan (fake=True) and needs no --yes."""
+    failed; 0 otherwise. `--dry-run` previews the plan (fake=True) and needs no --approved."""
     rows = {row["id"]: row for row in setuplib.status()}
     # Confirm gate (skipped for a dry-run, which is a read): name the confirm-class layers that would
     # actually be ATTEMPTED. Only genuinely-attemptable layers count (FIX 4) — a layer that is already
     # ready, blocked on a missing prerequisite, or not_applicable is skipped by the attempt loop below,
-    # so it must not force a --yes it will never use (that was a spurious exit 3 on, e.g., a host with
-    # no ollama demanding --yes for a blocked search layer).
+    # so it must not force a --approved it will never use (that was a spurious exit 3 on, e.g., a host with
+    # no ollama demanding --approved for a blocked search layer).
     if not dry:
         confirm = [layer.id for layer in setuplib.LAYERS
                    if layer.id in AUTO_LAYERS and layer.gate == "confirm"
                    and rows[layer.id]["status"] not in SKIP_STATUSES]
         if confirm and not yes:
             output.fail(output.EXIT_CONFIRM,
-                        f"setup layers need --yes: {', '.join(confirm)}",
-                        hint="re-run: plainkeep setup --all --yes", verb="setup")
+                        f"setup layers need --approved: {', '.join(confirm)}",
+                        hint="re-run: plainkeep setup --all --approved", verb="setup")
     results = []
     attempted_failed = False
     for layer_id in AUTO_LAYERS:
@@ -250,7 +250,7 @@ def _advance_all(*, yes: bool, dry: bool = False) -> int:
 # A system whose premise is that the day opens and closes without being asked cannot ship that
 # premise behind a prompt the operator has to know to say yes to — the default WAS the offering, and
 # it was off. It remains one skippable prompt (Enter now accepts instead of declining), it is
-# safe_write and reversible with `plainkeep job disable --all --yes`, and the prompt names the actual
+# safe_write and reversible with `plainkeep job disable --all --approved`, and the prompt names the actual
 # jobs and times rather than the word "Schedules", because a default that installs something is one
 # whose text has to carry its own consent.
 WIZARD_DEFAULTS = {"skeleton": True, "search": False, "models": False, "automation": True, "ui": True}
@@ -281,7 +281,7 @@ def _automation_prompt() -> str:
     # The prompt names WHERE it writes, not only what it schedules (r1/I1). "schedule your day?" and
     # "install launch agents into ~/Library/LaunchAgents?" are different questions, and the second is
     # the one being answered — it is the fact that makes this layer confirm-class.
-    where = " (installs launch agents in ~/Library/LaunchAgents; undo: plainkeep job disable --all --yes)"
+    where = " (installs launch agents in ~/Library/LaunchAgents; undo: plainkeep job disable --all --approved)"
     if not listed:
         return ("schedule your day unattended — daily start (07:30) and close (18:30), hourly index, "
                 "nightly consolidate, weekly organize scan + backup check?" + where)
@@ -349,7 +349,7 @@ def _wizard_times(ask, say) -> list[str]:
     visible. Called BEFORE the layer advances, so the very first `job enable` installs the chosen
     times rather than the shipped ones plus a re-run.
 
-    Prompts belong to the WIZARD alone: `setup automation --yes` and `setup --all --yes` are what an
+    Prompts belong to the WIZARD alone: `setup automation --approved` and `setup --all --approved` are what an
     agent or a script runs, and they leave whatever times the registry holds exactly alone.
 
     IT DELIVERS WHAT THE PROMPTS PROMISED, AND ONLY THAT (r1/M3, r2/B1) — and there are TWO prompts.
@@ -435,7 +435,7 @@ def _run_wizard(rows, ask, say) -> dict:
     say("plainkeep setup — guided first run")
     say("  safe defaults are pre-selected; press Enter to accept each.")
     say("  scheduling your day (plainkeep's whole point) defaults to ON — reversible any time with")
-    say("    plainkeep job disable --all --yes")
+    say("    plainkeep job disable --all --approved")
     say("  search / models default to OFF (no vectors, no model pulls).")
     say("  the terminal UI (plainkeep ui) defaults to ON — a small verified binary download.")
     for row in rows:
@@ -501,14 +501,14 @@ def _wizard(*, json_on: bool, dry: bool) -> int:
     if json_on or dry or not sys.stdin.isatty():
         output.fail(output.EXIT_USAGE,
                     "plainkeep setup --wizard is interactive-only (needs a tty; not with --json or --dry-run)",
-                    hint="non-interactive instead: `plainkeep setup --all --yes` to apply, "
+                    hint="non-interactive instead: `plainkeep setup --all --approved` to apply, "
                          "`plainkeep setup --json` to inspect, `plainkeep setup --all --dry-run` to preview",
                     verb="setup")
     _run_wizard(setuplib.status(), input, print)
     return output.EXIT_OK
 
 
-USAGE = "usage: plainkeep setup [<layer> [--yes] | --all [--yes] | --wizard] [--dry-run]"
+USAGE = "usage: plainkeep setup [<layer> [--approved] | --all [--approved] | --wizard] [--dry-run]"
 
 
 def main(argv: list[str]) -> int:
@@ -527,11 +527,11 @@ def main(argv: list[str]) -> int:
 
 def _main(argv: list[str]) -> int:
     json_on, argv = output.parse_argv(argv)
-    yes = "--yes" in argv or "-y" in argv
+    yes = output.consented(argv)
     all_ = "--all" in argv
-    dry = "--dry-run" in argv  # a true preview: advance with fake=True, write nothing, never need --yes
+    dry = "--dry-run" in argv  # a true preview: advance with fake=True, write nothing, never need --approved
     wizard = "--wizard" in argv
-    argv = [a for a in argv if a not in ("--yes", "-y", "--all", "--dry-run", "--wizard")]
+    argv = [a for a in argv if a not in (*output.CONSENT_FLAGS, "--all", "--dry-run", "--wizard")]
     if wizard:
         if all_ or argv:
             output.fail(output.EXIT_USAGE,

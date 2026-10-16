@@ -27,7 +27,7 @@ exactly as they see an agent.
 ## Install
 
 ```sh
-plainkeep setup ui --yes
+plainkeep setup ui --approved
 ```
 
 This downloads a self-contained compiled binary (no Node required) for your platform from the
@@ -55,7 +55,7 @@ plainkeep ui
   the top.
 - **Compound verbs** (task, wiki, files, …) show an action picker; each action's form prompts only
   for its declared arguments — enums become selects, known values become pickers.
-- **Confirm-class actions** run first *without* `--yes`. The verb refuses (exit 3), the UI shows
+- **Confirm-class actions** run first *without* `--approved`. The verb refuses (exit 3), the UI shows
   the refusal and offers the confirmed re-run. The UI never pre-confirms anything.
 - **Dry-run preview**: actions that support `--dry-run` offer a preview before the real run — a
   dry-run is a read, so it needs no confirmation.
@@ -73,7 +73,7 @@ installed `plainkeep-ui`. Updates ride the normal engine update — there is no 
 ```sh
 ./script/update      # engine update brings the new expected UI version
 plainkeep setup            # dashboard shows:  ui  partial  "update available: installed X → Y"
-plainkeep setup ui --yes   # downloads the exact release the engine expects
+plainkeep setup ui --approved   # downloads the exact release the engine expects
 ```
 
 How it works: the engine ships the version it expects in `bin/ui/version.txt` (an engine file, so
@@ -86,7 +86,7 @@ tag, so a vault always gets the binary its engine was tested with.
 
 | Symptom | Fix |
 |---|---|
-| `plainkeep ui` says "not installed" | `plainkeep setup ui --yes` (or set `PLAINKEEP_UI_BIN=/path/to/plainkeep-ui`) |
+| `plainkeep ui` says "not installed" | `plainkeep setup ui --approved` (or set `PLAINKEEP_UI_BIN=/path/to/plainkeep-ui`) |
 | Layer reports `blocked` | install the GitHub CLI: `brew install gh`, then `gh auth login` |
 | Layer reports `not_applicable` | no prebuilt binary for this platform — build from source (below) |
 | Update never appears | your engine predates versioned UI — run `./script/update` first |
@@ -96,7 +96,7 @@ tag, so a vault always gets the binary its engine was tested with.
 
 **Build from source** (contributor checkout with `cli/` present, needs [Bun](https://bun.sh) **>=
 1.2.21** — older bun drops empty-string arguments when spawning a child, so the build refuses):
-`plainkeep setup ui --yes` compiles automatically when no release is reachable, or manually:
+`plainkeep setup ui --approved` compiles automatically when no release is reachable, or manually:
 
 ```sh
 cd cli && bun install

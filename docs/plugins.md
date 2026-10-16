@@ -66,8 +66,8 @@ one from your imports:
 ```
 
 ```sh
-plainkeep plugin sync greeter --yes      # installs them into <vault>/.plugin-deps/
-plainkeep plugin sync --yes              # every installed pack
+plainkeep plugin sync greeter --approved      # installs them into <vault>/.plugin-deps/
+plainkeep plugin sync --approved              # every installed pack
 ```
 
 The overlay lives in **your vault**, not in the engine. That is the point: the engine is a versioned,
@@ -82,12 +82,12 @@ as `plainkeep <pkg>`. If your vault still has a `plugins/.deps/` from an earlier
 reads it: delete it.
 
 Only the declarations in `plugins.lock.json` reach pip. `sync` takes exactly two options beyond
-`--yes` — `--no-index` and `--find-links=<local dir>`, for an air-gapped wheelhouse — and refuses
+`--approved` — `--no-index` and `--find-links=<local dir>`, for an air-gapped wheelhouse — and refuses
 anything else rather than passing it through, because an arbitrary pip argument is a way to install a
 package no pack ever declared. What actually landed is recorded back into the lockfile's `overlay`
 entry, so the overlay's contents can be audited against the declarations. The one thing that invalidates
 the overlay is the **interpreter** changing underneath it (a `--target` install can carry compiled
-extensions); `plainkeep doctor` says so, and `plugin sync --yes` rebuilds it.
+extensions); `plainkeep doctor` says so, and `plugin sync --approved` rebuilds it.
 
 If a module is missing at runtime you get a refusal naming your pack and the module — declared but
 not installed says *run sync*, undeclared says *declare it first* — rather than a traceback.
@@ -100,7 +100,7 @@ trust** — installing third-party code is a risk-surface change like any other.
 **Already `pip install`ed into `<vault>/.venv`?** It keeps working: the dispatcher still prefers that
 interpreter when it exists, so those packages are importable exactly as before. But nothing records
 them, so they do not travel with the vault and nothing rebuilds them. Declare them in `plugin.json`
-and run `plugin sync --yes` to move them onto the contract.
+and run `plugin sync --approved` to move them onto the contract.
 
 ### Package a pack (distributable)
 
@@ -134,12 +134,12 @@ Its `plugin.json`:
 ### Install, trust, update, remove
 
 ```sh
-plainkeep plugin add you/plainkeep-greeter@v0.1.0 --yes   # shallow-clone into plugins/greeter/ (a local path works too)
+plainkeep plugin add you/plainkeep-greeter@v0.1.0 --approved   # shallow-clone into plugins/greeter/ (a local path works too)
 plainkeep plugin list                               # name · version · pinned commit · trust state · verbs
-plainkeep plugin trust greeter --yes                # lift the ceiling to the pack's declared risks
-plainkeep plugin update greeter --yes               # explicit re-pin; refuses to cross min_ops_version
-plainkeep plugin remove greeter --yes               # delete dir + lock entry
-plainkeep plugin sync greeter --yes                 # install its declared dependencies into this vault
+plainkeep plugin trust greeter --approved                # lift the ceiling to the pack's declared risks
+plainkeep plugin update greeter --approved               # explicit re-pin; refuses to cross min_ops_version
+plainkeep plugin remove greeter --approved               # delete dir + lock entry
+plainkeep plugin sync greeter --approved                 # install its declared dependencies into this vault
 ```
 
 `.plugin-deps/` itself is a rebuildable cache — gitignore it; `plugins.lock.json` is what you commit.
@@ -177,12 +177,12 @@ Read this before installing anything.
 | Command | What it does |
 |---|---|
 | `plainkeep new verb <name>` | scaffold `plugins/local/<name>/{run.py,cmd.json}` |
-| `plainkeep plugin add <owner/repo>[@tag] --yes` | shallow-clone into `plugins/<pack>/` (a local path works too) |
+| `plainkeep plugin add <owner/repo>[@tag] --approved` | shallow-clone into `plugins/<pack>/` (a local path works too) |
 | `plainkeep plugin list` | show name · version · pinned commit · trust state · verbs |
-| `plainkeep plugin trust <name> --yes` | lift the ceiling to the pack's declared risks |
-| `plainkeep plugin update <name> --yes` | explicit re-pin; refuses to cross `min_ops_version` |
-| `plainkeep plugin remove <name> --yes` | delete the dir + lock entry |
-| `plainkeep plugin sync [<name>] --yes [--no-index] [--find-links=<dir>]` | install declared `dependencies` into `.plugin-deps/` |
+| `plainkeep plugin trust <name> --approved` | lift the ceiling to the pack's declared risks |
+| `plainkeep plugin update <name> --approved` | explicit re-pin; refuses to cross `min_ops_version` |
+| `plainkeep plugin remove <name> --approved` | delete the dir + lock entry |
+| `plainkeep plugin sync [<name>] --approved [--no-index] [--find-links=<dir>]` | install declared `dependencies` into `.plugin-deps/` |
 
 ---
 

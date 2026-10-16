@@ -135,7 +135,7 @@ set 'close_nudge' -&gt; daily 22:00  <span class="tk-dim">(was daily 18:30)</spa
   wrote jobs/registry.json
 
 <span class="tk-warn">⚠</span> the schedule still runs the OLD time for 'close_nudge'
-  make it live:  <span class="tk-str">plainkeep job enable close_nudge --yes</span></pre>
+  make it live:  <span class="tk-str">plainkeep job enable close_nudge --approved</span></pre>
           </div>
           </div>
           <div class="terminal-panel">
@@ -159,7 +159,7 @@ set 'close_nudge' -&gt; daily 22:00  <span class="tk-dim">(was daily 18:30)</spa
           </div>
           <div class="state-card">
             <span class="state-card__name">installed</span>
-            <p>A copy has been handed to your Mac's scheduler. Turning that on (<code>job enable --yes</code>) asks you first, because it writes outside your vault.</p>
+            <p>A copy has been handed to your Mac's scheduler. Turning that on (<code>job enable --approved</code>) asks you first, because it writes outside your vault.</p>
           </div>
           <div class="state-card">
             <span class="state-card__name">loaded</span>
@@ -170,7 +170,7 @@ set 'close_nudge' -&gt; daily 22:00  <span class="tk-dim">(was daily 18:30)</spa
         <ul class="feature-section__copy reveal" style="margin-top:2rem; max-width: var(--measure);">
           <li>Only harmless job types can be scheduled — anything that would need your yes can never run unattended.</li>
           <li>Nothing is lost by declining: every job is a normal command you can run by hand (<code>plainkeep job run start</code>).</li>
-          <li>One command turns it all off: <code>plainkeep job disable --all --yes</code>. (Scheduling is macOS for now; on Linux the jobs stay runnable by hand or from any scheduler you already use.)</li>
+          <li>One command turns it all off: <code>plainkeep job disable --all --approved</code>. (Scheduling is macOS for now; on Linux the jobs stay runnable by hand or from any scheduler you already use.)</li>
         </ul>
       </div>
     </section>
@@ -309,7 +309,7 @@ untouched 90+ days:
 <span class="tk-prompt">$</span> plainkeep files distill talk                          <span class="tk-dim"># draft concept notes from it</span>
 <span class="tk-prompt">$</span> plainkeep organize                                    <span class="tk-dim"># scan for links/dupes → proposals only</span>
 <span class="tk-prompt">$</span> plainkeep organize review                             <span class="tk-dim"># page through each diff yourself</span>
-<span class="tk-prompt">$</span> plainkeep organize apply --yes                        <span class="tk-dim"># apply ONLY what you approved</span></pre>
+<span class="tk-prompt">$</span> plainkeep organize apply --approved                        <span class="tk-dim"># apply ONLY what you approved</span></pre>
           </div>
         </div>
 
@@ -360,9 +360,9 @@ untouched 90+ days:
             <div class="terminal-panel__body">
 <pre><span class="tk-prompt">$</span> plainkeep backup run
 <span class="tk-err">✗</span> backing up needs your explicit yes
-  <span class="tk-dim">re-run:</span> <span class="tk-str">plainkeep backup run --yes</span>
+  <span class="tk-dim">re-run:</span> <span class="tk-str">plainkeep backup run --approved</span>
 
-<span class="tk-prompt">$</span> plainkeep backup run --yes
+<span class="tk-prompt">$</span> plainkeep backup run --approved
 <span class="tk-ok">✓</span> encrypted snapshot uploaded <span class="tk-dim">(append-only key)</span>
 
 <span class="tk-prompt">$</span> plainkeep share wiki/notes/rrf.md
@@ -388,8 +388,8 @@ untouched 90+ days:
 <pre><span class="tk-prompt">$</span> plainkeep new verb standup
 <span class="tk-ok">✓</span> scaffolded <span class="tk-str">plugins/local/standup/</span> <span class="tk-dim">(run.py + cmd.json)</span>
 
-<span class="tk-prompt">$</span> plainkeep plugin add you/plainkeep-pomodoro --yes
-<span class="tk-prompt">$</span> plainkeep plugin trust plainkeep-pomodoro --yes
+<span class="tk-prompt">$</span> plainkeep plugin add you/plainkeep-pomodoro --approved
+<span class="tk-prompt">$</span> plainkeep plugin trust plainkeep-pomodoro --approved
 <span class="tk-dim"># until trusted, a plugin can't act without asking</span></pre>
             </div>
           </div>
@@ -443,7 +443,7 @@ untouched 90+ days:
   <span class="tk-warn">!</span> backups     Durability              <span class="tk-warn">blocked</span>  optional  restic is required
     <span class="tk-dim">next: brew install restic</span>
   <span class="tk-dim">◐</span> ui          Terminal UI             partial  optional  <span class="tk-warn">update available</span>
-    <span class="tk-dim">next: plainkeep setup ui --yes</span></pre>
+    <span class="tk-dim">next: plainkeep setup ui --approved</span></pre>
           </div>
         </div>
 

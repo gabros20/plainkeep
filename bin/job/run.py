@@ -15,8 +15,8 @@ proves a file was written, not that launchd ever read it. `enable`/`disable` do 
 is visible instead of assumed.
 
 The step keeps its weight rather than losing it: `enable` and `disable` are CONFIRM-class subactions
-(`--yes`, or exit 3), because they write outside the vault (`~/Library/LaunchAgents`) and mutate a
-live launchd domain. `--dry-run` previews both without needing `--yes` — it is a read.
+(`--approved`, or exit 3), because they write outside the vault (`~/Library/LaunchAgents`) and mutate a
+live launchd domain. `--dry-run` previews both without needing `--approved` — it is a read.
 
 A COPY, not a symlink. `apply`'s old hint linked the vault's rendered file into LaunchAgents; recent
 macOS is unreliable about symlinked plists (bootstrap intermittently refuses them), and a symlink
@@ -107,7 +107,7 @@ def _plist(name, job) -> str:
 
 
 USAGE = ("usage: plainkeep job list | run <name> | apply | set <name> <schedule> | status | "
-         "enable [<name>…|--all] --yes | disable [<name>…|--all] --yes")
+         "enable [<name>…|--all] --approved | disable [<name>…|--all] --approved")
 
 # `job set`'s four schedule flags → the registry key each writes. One flag per invocation: a job has
 # exactly one cadence, so accepting two would mean silently picking one of them.
@@ -168,7 +168,7 @@ def _set(names, schedule, jobs, dry) -> int:
     the surface that edits it.
 
     IT DOES NOT ACTIVATE ANYTHING. Re-enabling here is the tempting thing and would quietly make a
-    safe_write action write outside the vault and mutate a live launchd domain without the `--yes`
+    safe_write action write outside the vault and mutate a live launchd domain without the `--approved`
     that `enable` exists to demand. So a `set` on a job launchd is already running says so, and names
     the one command that closes the gap. `job status`'s drift column and doctor's advisory row report
     the same fact from the other side, with no new plumbing."""
@@ -233,7 +233,7 @@ def _set(names, schedule, jobs, dry) -> int:
     row = launchdlib.job_states({"jobs": {name: res["job"]}})[0]
     installed, loaded = bool(row.get("installed")), bool(row.get("loaded"))
     stale = installed or loaded
-    remedy = f"plainkeep job enable {name} --yes" if stale else ""
+    remedy = f"plainkeep job enable {name} --approved" if stale else ""
     data = {"action": "set", "name": name, "schedule": res["schedule"], "previous": res["previous"],
             "seeded": res["seeded"], "job": res["job"], "stale": stale, "remedy": remedy,
             "installed": installed, "loaded": loaded, "registry": "jobs/registry.json"}
@@ -268,7 +268,7 @@ def _set(names, schedule, jobs, dry) -> int:
                   f"(launchd has not loaded it){RESET}")
             print(f"  install the new schedule and load it:  {remedy}")
         else:
-            print(f"\n  schedule it:  plainkeep job enable {name} --yes"
+            print(f"\n  schedule it:  plainkeep job enable {name} --approved"
                   "     see what's live:  plainkeep job status")
 
     return output.emit(data, "job", human=render)
@@ -295,7 +295,7 @@ def _targets(action, names, jobs, all_):
                     f"plainkeep job {action} takes either job names or --all, not both", verb="job")
     if not all_ and not names:
         output.fail(output.EXIT_USAGE,
-                    f"usage: plainkeep job {action} [<name>…|--all] [--yes] [--dry-run]   "
+                    f"usage: plainkeep job {action} [<name>…|--all] [--approved] [--dry-run]   "
                     f"(one of: {', '.join(jobs)})", verb="job")
     if all_:
         return ([n for n, j in jobs.items() if j.get("risk") in SCHEDULABLE],
@@ -416,9 +416,9 @@ def main(argv):
     # alone would leave "08:00" behind as a positional.
     schedule, argv = _schedule_flags(argv)
     dry = "--dry-run" in argv
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     all_ = "--all" in argv
-    argv = [a for a in argv if a not in ("--dry-run", "--yes", "-y", "--all")]
+    argv = [a for a in argv if a not in ("--dry-run", *output.CONSENT_FLAGS, "--all")]
     action = argv[0] if argv else "list"
     if schedule is not None and action != "set":
         output.fail(output.EXIT_USAGE,
@@ -441,7 +441,7 @@ def main(argv):
                 out.append(f"  {r['name']:<14} {DIM}{r['schedule']:<16}{RESET} {r['command']:<26} "
                            f"[{r['risk']}]{flag}")
             out.append("\n  run one now:  plainkeep job run <name>"
-                       "     schedule them:  plainkeep job enable --all --yes"
+                       "     schedule them:  plainkeep job enable --all --approved"
                        "     what's live:  plainkeep job status")
             return "\n".join(out)
         return output.emit_rows(rows, "job", human=render)
@@ -528,7 +528,7 @@ def main(argv):
                 print(f"{YEL}skipped (not schedulable): {', '.join(skipped)}{RESET}")
             # `apply` renders; ACTIVATING what it rendered is its own confirm-class step, and it is a
             # command here rather than a shell recipe to paste (ADR-022).
-            print("\nactivate the schedule:  plainkeep job enable --all --yes")
+            print("\nactivate the schedule:  plainkeep job enable --all --approved")
             print("check what launchd has:  plainkeep job status")
 
         output.emit(data, "job", human=render)
@@ -542,7 +542,7 @@ def main(argv):
             _legal_or_refuse(action, targets, jobs, external)
         agents = launchdlib.launch_agents_dir()
         if dry:
-            # A --dry-run is a READ (the guardrail downgrades it), so it never needs --yes and never
+            # A --dry-run is a READ (the guardrail downgrades it), so it never needs --approved and never
             # calls launchctl: it prints the exact files and service targets it WOULD touch.
             data = {"dry_run": True, "action": action, "targets": targets, "skipped": skipped,
                     "launch_agents_dir": str(agents)}
@@ -558,8 +558,8 @@ def main(argv):
         if not yes:
             output.fail(output.EXIT_CONFIRM, _CONFIRM[action],
                         hint=f"re-run: plainkeep job {action} "
-                             f"{'--all' if all_ else ' '.join(targets)} --yes"
-                             f"   (preview first: add --dry-run instead of --yes)", verb="job")
+                             f"{'--all' if all_ else ' '.join(targets)} --approved"
+                             f"   (preview first: add --dry-run instead of --approved)", verb="job")
         if not launchdlib.launchctl_available():
             output.fail(output.EXIT_UNEXPECTED,
                         "launchd is not available on this host — scheduling is macOS-only",
@@ -603,8 +603,8 @@ def main(argv):
                 out.append(f"  {r['name']:<14} {'yes' if r['rendered'] else ' - ':<4} "
                            f"{'yes' if r['installed'] else ' - ':<4} {'yes' if r['loaded'] else ' - ':<4} "
                            f"{state}{drift}")
-            out.append("\n  activate:  plainkeep job enable --all --yes"
-                       "     turn off:  plainkeep job disable --all --yes")
+            out.append("\n  activate:  plainkeep job enable --all --approved"
+                       "     turn off:  plainkeep job disable --all --approved")
             return "\n".join(out)
         return output.emit_rows(rows, "job", human=render)
 

@@ -273,7 +273,7 @@ function pluginLock(): Record<string, unknown> {
 // the verb belongs to a pack recorded in plugins.lock.json that has NOT been trusted — a pack's
 // self-declared risk never takes effect at install. null for engine verbs, for user-placed packs
 // with no lock entry (plugins/local, $PLAINKEEP_PATH), and for explicitly trusted packs.
-function pluginCeiling(verb: string): "confirm" | null {
+export function pluginCeiling(verb: string): "confirm" | null {
   const src = sourceOf(verb);
   if (!src || !src.startsWith("plugin:")) return null;
   const pack = src.slice("plugin:".length);
@@ -305,6 +305,9 @@ function pluginCeiling(verb: string): "confirm" | null {
   return "confirm";
 }
 
+// 0.16: --approved is the canonical consent flag; --yes and -y are permanent aliases (spellings are never removed).
+const CONSENT_FLAGS = ["--approved", "--yes", "-y"];
+
 // Dispatcher per-verb gate: enforce the declared risk class (new/undeclared verbs default to
 // confirm). `risk` override is for tests; in normal use it is read from the verb's cmd.json.
 export function gate(verb: string, args: string[], riskOverride?: unknown): Decision {
@@ -316,7 +319,7 @@ export function gate(verb: string, args: string[], riskOverride?: unknown): Deci
   let risk: unknown = riskOverride;
   if (!pythonTruthy(risk)) risk = riskOf(verb);
   if (!pythonTruthy(risk)) risk = "confirm";
-  const yes = args.includes("--yes") || args.includes("-y");
+  const yes = CONSENT_FLAGS.some((f) => args.includes(f));
   const dry = args.includes("--dry-run");
   if (risk === "deny") {
     return { verdict: DENY, reason: `'${verb}' is deny-class — never run`, riskClass: "deny" };
@@ -329,7 +332,7 @@ export function gate(verb: string, args: string[], riskOverride?: unknown): Deci
   }
   if (capped && (risk === "read" || risk === "safe_write")) risk = "confirm";
   if (risk === "confirm" && !yes) {
-    return { verdict: CONFIRM, reason: `'${verb}' is confirm-class — re-run with --yes to proceed`, riskClass: "confirm" };
+    return { verdict: CONFIRM, reason: `'${verb}' is confirm-class — re-run with --approved to proceed`, riskClass: "confirm" };
   }
   // Final allow: Python `Decision(ALLOW, f"{risk}", risk)` — render the raw risk value as Python does.
   const rendered = pythonStr(risk);
@@ -355,7 +358,7 @@ function log(verb: string, args: string[], d: Decision): void {
 // The exact re-run line a confirm-class refusal prints — self-teaching, not a class name.
 function remediation(verb: string, args: string[]): string {
   const parts = ["plainkeep", verb, ...args];
-  if (!args.includes("--yes") && !args.includes("-y")) parts.push("--yes");
+  if (!CONSENT_FLAGS.some((f) => args.includes(f))) parts.push("--approved");
   return "re-run: " + parts.join(" ");
 }
 

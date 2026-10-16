@@ -204,7 +204,7 @@ class RegistryMissing(RegistryError):
 # only, and `disable` stays deliberately permissive — a job whose risk class was tightened after it
 # was enabled is exactly the one an operator most needs to be able to turn off — so `disable` did
 # `unlink` on a path built from an unvalidated key. With a hand-made `com.plainkeep.*` hop directory
-# inside the LaunchAgents dir, `job disable --all --yes` removed a file outside it. Validating here,
+# inside the LaunchAgents dir, `job disable --all --approved` removed a file outside it. Validating here,
 # upstream of every reader, is the only placement that cannot be routed around by adding a surface.
 NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 NAME_RULE = ("is not a plain identifier "
@@ -454,9 +454,9 @@ def set_schedule(name: str, schedule: dict, *, dry_run: bool = False) -> dict:
 
     IT NEVER TOUCHES LAUNCHD. Re-enabling after a successful write is the tempting thing — the
     operator clearly wants the new time to be live — and it would make a safe_write action install
-    plists outside the vault and mutate a running launchd domain without the `--yes` that `enable`
+    plists outside the vault and mutate a running launchd domain without the `--approved` that `enable`
     exists to demand. The caller states the gap instead; `job status`'s drift column shows it, and
-    `plainkeep job enable <name> --yes` closes it.
+    `plainkeep job enable <name> --approved` closes it.
 
     Returns `{name, schedule, previous, seeded, job}`; raises `RegistryError`/`ScheduleError`."""
     if not name_ok(name):

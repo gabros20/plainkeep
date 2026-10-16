@@ -1,7 +1,7 @@
 {
   "verb": "triage",
   "summary": "propose filing of inbox/ items into tasks or wiki; human approves | drafts: promote agent-drafted notes",
-  "usage": "plainkeep triage [--dry-run|--yes] | drafts [--dry-run|--yes]",
+  "usage": "plainkeep triage [--dry-run|--approved] | drafts [--dry-run|--approved]",
   "risk": "safe_write",
   "args": [
     {
@@ -20,7 +20,7 @@
     "journal/",
     "wiki/conventions.md"
   ],
-  "hints": "Propose filing of inbox/ items into a task or note; the human approves. `plainkeep triage drafts` pages agent-drafted notes (author:agent, status:draft) from `plainkeep files distill` as a promotion queue: accept -> active, reject -> delete, one git commit each. --json lists proposals/drafts without acting. Common mistake: expecting it to auto-file without --yes.",
+  "hints": "Propose filing of inbox/ items into a task or note; the human approves. `plainkeep triage drafts` pages agent-drafted notes (author:agent, status:draft) from `plainkeep files distill` as a promotion queue: accept -> active, reject -> delete, one git commit each. --json lists proposals/drafts without acting. Common mistake: expecting it to auto-file without --approved.",
   "output": {
     "mode": "rows",
     "fields": {

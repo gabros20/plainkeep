@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-plainkeep triage [--dry-run|--yes] | drafts [--dry-run|--yes] — PROPOSE filing of inbox/ items into a task
+plainkeep triage [--dry-run|--approved] | drafts [--dry-run|--approved] — PROPOSE filing of inbox/ items into a task
 or a wiki note; the human approves (§4.1, §10). Interactive by default; --dry-run shows proposals
-only; --yes accepts all.
+only; --approved accepts all.
 
 Classification here is the deterministic pure-shell fallback (no agent required). When an agent is
 wired (PLAINKEEP_AGENT), it would improve the proposal — but the system works without it.
@@ -125,7 +125,7 @@ def cmd_drafts(argv, dry, yes, js):
             p.unlink()
             paths.index_written(p)   # prune the moved/deleted note's search rows
             _commit(rel, f"organize: reject agent draft {p.stem}")
-            paths.append_journal(f"triage drafts: rejected {p.stem} (deleted)")
+            paths.append_journal(f"triage drafts: rejected {p.stem} (deleted)" + (output.consent_note(argv) if yes else ""))
             print("    rejected (deleted)")
         elif choice in ("s", "skip"):
             print("    skipped")
@@ -135,7 +135,7 @@ def cmd_drafts(argv, dry, yes, js):
                          encoding="utf-8")
             paths.index_written(p)
             _commit(rel, f"organize: promote agent draft {p.stem} -> active")
-            paths.append_journal(f"triage drafts: promoted {p.stem} -> active")
+            paths.append_journal(f"triage drafts: promoted {p.stem} -> active" + (output.consent_note(argv) if yes else ""))
             print("    promoted -> active")
     if dry:
         print("\n(dry run — nothing changed)")
@@ -199,7 +199,7 @@ def cmd_drafts_decide(argv):
 def main(argv):
     js, argv = output.parse_argv(argv)
     dry = "--dry-run" in argv
-    yes = "--yes" in argv or "-y" in argv
+    yes = output.consented(argv)
     if argv and argv[0] == "decide":
         return cmd_decide(argv[1:])
     if argv and argv[0] == "drafts":
@@ -241,7 +241,8 @@ def main(argv):
         new = make_task(text) if choice == "task" else make_note(text)
         p.unlink()
         paths.index_written(p)   # prune the moved/deleted note's search rows
-        paths.append_journal(f"triaged {p.name} -> {new.relative_to(paths.PLAINKEEP_HOME)}")
+        paths.append_journal(f"triaged {p.name} -> {new.relative_to(paths.PLAINKEEP_HOME)}"
+                             + (output.consent_note(argv) if yes else ""))
         print(f"    filed -> {new.relative_to(paths.PLAINKEEP_HOME)}")
         if (not yes) and choice != kind:  # override -> offer to learn the rule (§10)
             if input("    record a filing rule for next time? [y/N] ").strip().lower() == "y":

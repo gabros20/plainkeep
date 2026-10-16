@@ -17,17 +17,17 @@ One command provisions everything, and the dispatcher finds it automatically:
 
 ```bash
 cd "$PLAINKEEP_HOME"          # e.g. ~/plainkeep
-plainkeep setup search --yes  # .venv + lancedb/fastembed + embed model + index — one command
+plainkeep setup search --approved  # .venv + lancedb/fastembed + embed model + index — one command
 ```
 
-`plainkeep setup search --yes` does four things:
+`plainkeep setup search --approved` does four things:
 
 1. Creates `$PLAINKEEP_HOME/.venv`.
 2. Installs *only* the search deps (`lancedb` + `fastembed`) into it — read from the engine's `pyproject.toml` `[search]` extra, which is also what `uv.lock` is resolved against (ADR-020).
 3. Pulls the embedding model.
 4. Builds the index.
 
-Preview it first with `plainkeep setup search --dry-run`. That writes nothing and needs no `--yes`.
+Preview it first with `plainkeep setup search --dry-run`. That writes nothing and needs no `--approved`.
 
 ### How the dispatcher picks its interpreter
 
@@ -58,7 +58,7 @@ interpreter with no per-agent PATH ordering.
 
 > [!NOTE]
 > The `.venv` is the single home for **all** optional deps, not just search. `plainkeep setup models
-> --yes` installs the file-processing deps (Pillow, trafilatura, mlx-vlm) into the same venv. So
+> --approved` installs the file-processing deps (Pillow, trafilatura, mlx-vlm) into the same venv. So
 > `plainkeep files`, `plainkeep enrich`, and `plainkeep doctor` see them under the same
 > dispatcher-preferred interpreter. This page focuses on search, but the interpreter contract covers
 > both.
@@ -83,7 +83,7 @@ The interpreter is handled for you. Two things still must reach the agent's shel
   ```
 
   Every plainkeep process reads it, including a non-interactive `ssh host plainkeep search …`, so no shell
-  profile is involved. `plainkeep setup search --yes` writes `search.vectors = true` for you. Precedence:
+  profile is involved. `plainkeep setup search --approved` writes `search.vectors = true` for you. Precedence:
   CLI flag, then environment (`PLAINKEEP_VECTORS=1` / `PLAINKEEP_RERANK=1`, which still override), then the
   file, then the default. The same file holds `models.enrich`, `models.triage` and `ollama.host`.
 
@@ -155,7 +155,7 @@ If a check fails:
 | Symptom | Fix |
 |---|---|
 | `plainkeep setup search` reports `blocked` | Run the exact command in its `next` field (e.g. install ollama). |
-| `plainkeep doctor` prints `PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3` | The venv wasn't created or is missing deps. Re-run `plainkeep setup search --yes` (or preview with `--dry-run`). |
+| `plainkeep doctor` prints `PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3` | The venv wasn't created or is missing deps. Re-run `plainkeep setup search --approved` (or preview with `--dry-run`). |
 
 `plainkeep index` still succeeds keyword-only. It never crashes on a missing vector plane. That graceful
 fallback is by design — see the CHANGELOG / issue #3.

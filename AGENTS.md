@@ -4,7 +4,7 @@ You are operating someone's personal operating system: their knowledge, tasks an
 Read this file first, then read the **operating manual** — the `operate-plainkeep` skill — before
 doing anything. This file is the contract; that skill is the manual.
 
-`plainkeep setup agents --yes` installs the manual into every agent skills directory on the
+`plainkeep setup agents --approved` installs the manual into every agent skills directory on the
 machine (`~/.claude/skills/`, `~/.agents/skills/`, `~/.hermes/skills/`, `~/.grok/skills/`), so it
 is normally already loaded as one of your skills. If it is not, ask the tool where it lives —
 `plainkeep vault status` reports the engine root, and the manual is
@@ -33,7 +33,7 @@ verbs is `plainkeep.json` (run `plainkeep help`). NEVER invent a verb or work ar
    file belongs there (tax, legal, medical, family), you may only PROPOSE the move and
    tell the human to do it — you never write there.
 3. NEVER transmit anything externally — no email, push, deploy, post, or payment. You
-   produce DRAFTS. The human sends. Verbs that could transmit refuse without a human `--yes`.
+   produce DRAFTS. The human sends. Verbs that could transmit refuse without a human `--approved`.
 4. NEVER read `.env` files or print secret values. Secret references (`op://…`) may be
    named, never resolved.
 5. `~/files/**/in/` (client originals) is APPEND-ONLY. A new original may ARRIVE there (that is what

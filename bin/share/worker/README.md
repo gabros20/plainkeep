@@ -51,7 +51,7 @@ plainkeep share init --endpoint https://plainkeep-share.<subdomain>.workers.dev
 `PUBLISH_TOKEN` is optional: if the secret is unset, `PUT /` stays open (graceful for a fresh deploy
 before you've run the secret step). Once set, every publish must send a matching `X-Publish-Token`
 header or the worker returns `401` — this is what stops a discovered endpoint from being used as a
-free anonymous file host. `plainkeep share init --yes` generates the token, runs `wrangler secret put
+free anonymous file host. `plainkeep share init --approved` generates the token, runs `wrangler secret put
 PUBLISH_TOKEN` for you, and writes it to `.share/config.json` (vault-private, same handling as the
 `admin_token`s already in `.share/ledger.json`).
 
@@ -65,7 +65,7 @@ Free tier: 100k requests/day, 1k KV writes/day — a collection coalesces into O
   an accepted tradeoff, not an oversight — see `docs/design/proposals/2026-07-10-capability-url-share.md`
   and ADR-008 (`docs/DECISIONS.md`) for why no zero-knowledge variant also satisfies "one link an
   agent can fetch."
-- `plainkeep share` publishes only; it is confirm-class (`--yes`) because a PUT is a transmission. The
+- `plainkeep share` publishes only; it is confirm-class (`--approved`) because a PUT is a transmission. The
   human sends the resulting link.
 - The worker is vendored inside the engine boundary (`bin/share/worker/`) so fixes distribute via
   `script/update`.

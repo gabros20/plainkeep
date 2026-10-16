@@ -29,6 +29,12 @@ def run(home: Path, verb: str, *args):
 
 
 def main() -> int:
+    # Every engine verb declares a top-level `risk`: a missing one silently becomes confirm in the
+    # gate (a merge once dropped it from `models`, and `models list` started demanding consent).
+    missing = sorted(f.parent.name for f in (REPO / "bin").glob("*/cmd.json")
+                     if "risk" not in json.loads(f.read_text(encoding="utf-8")))
+    check("every engine cmd.json declares a top-level risk", not missing, f"missing: {missing}")
+
     with tempfile.TemporaryDirectory() as td:
         home = Path(td)
 

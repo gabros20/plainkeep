@@ -1,7 +1,7 @@
 {
   "verb": "backup",
   "summary": "commit/push nag (bare); restic family + git-bundle net: init|status|run|drill|bundle",
-  "usage": "plainkeep backup [status | run [--target local|cloud] --yes | drill --yes | bundle [--dry-run] | init --yes]",
+  "usage": "plainkeep backup [status | run [--target local|cloud] --approved | drill --approved | bundle [--dry-run] | init --approved]",
   "risk": "safe_write",
   "args": [
     {
@@ -20,7 +20,7 @@
     "~/files/backups/bundles/",
     "journal/"
   ],
-  "hints": "Bare `plainkeep backup` is the UNCHANGED read-only commit/push nag (exit 1 = at risk; never pushes for you). Subcommands add the restic durability floor (auto-detected; degrades with an install hint): init (human-run once, --yes, writes .backup/config.json with op:// REFERENCES + renders the launchd plist), status (snapshot age per target, exit 1 if stale >48h or unconfigured), run [--target local|cloud] (cloud is --yes ALWAYS; the scheduled cloud push runs from launchd DIRECTLY with an append-only B2 key, outside this verb), drill (--yes; restore latest snapshot to tmp and diff), bundle (git bundle --all of ~/plainkeep + every ~/work repo into ~/files/backups/bundles/ with retention). Common mistake: expecting bare backup to run restic — it only nags; use `plainkeep backup run`.",
+  "hints": "Bare `plainkeep backup` is the UNCHANGED read-only commit/push nag (exit 1 = at risk; never pushes for you). Subcommands add the restic durability floor (auto-detected; degrades with an install hint): init (human-run once, --approved, writes .backup/config.json with op:// REFERENCES + renders the launchd plist), status (snapshot age per target, exit 1 if stale >48h or unconfigured), run [--target local|cloud] (cloud is --approved ALWAYS; the scheduled cloud push runs from launchd DIRECTLY with an append-only B2 key, outside this verb), drill (--approved; restore latest snapshot to tmp and diff), bundle (git bundle --all of ~/plainkeep + every ~/work repo into ~/files/backups/bundles/ with retention). Common mistake: expecting bare backup to run restic — it only nags; use `plainkeep backup run`.",
   "output": {
     "mode": "scalar",
     "fields": {
@@ -49,7 +49,7 @@
     },
     {
       "name": "run",
-      "summary": "restic backup of the working set; cloud always needs --yes",
+      "summary": "restic backup of the working set; cloud always needs --approved",
       "risk": "confirm",
       "dry_run": true,
       "args": [
@@ -58,7 +58,7 @@
     },
     {
       "name": "drill",
-      "summary": "restore the latest snapshot to a temp dir and diff; needs --yes",
+      "summary": "restore the latest snapshot to a temp dir and diff; needs --approved",
       "risk": "confirm",
       "args": []
     },
@@ -71,7 +71,7 @@
     },
     {
       "name": "init",
-      "summary": "write .backup/config.json + render the launchd plist (human-run once); needs --yes",
+      "summary": "write .backup/config.json + render the launchd plist (human-run once); needs --approved",
       "risk": "confirm",
       "tty": true,
       "args": [

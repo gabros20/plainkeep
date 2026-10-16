@@ -1,7 +1,7 @@
 {
   "verb": "job",
   "summary": "list | run <name> | apply | set <name> | enable | disable | status — scheduler-neutral jobs (§15); apply renders launchd plists, enable activates them, set changes the times",
-  "usage": "plainkeep job [list|run <name>|apply|set <name> --daily HH:MM|status|enable [<name>…|--all] --yes|disable [<name>…|--all] --yes]",
+  "usage": "plainkeep job [list|run <name>|apply|set <name> --daily HH:MM|status|enable [<name>…|--all] --approved|disable [<name>…|--all] --approved]",
   "risk": "safe_write",
   "args": [
     {
@@ -19,7 +19,7 @@
     ".logs/jobs/",
     "journal/"
   ],
-  "hints": "Scheduler-neutral jobs: list/run/apply/set/enable/disable/status. Only read/safe_write may be scheduled. `apply` renders the plists; `enable` installs + loads them into launchd (confirm-class — needs --yes); `set` edits jobs/registry.json (a vault write — agents may run it freely) and NEVER touches launchd, so a changed time needs `plainkeep job enable <name> --yes` to go live; `status` shows rendered/installed/loaded per job. Common mistake: a job with inline shell logic — a job calls exactly ONE verb.",
+  "hints": "Scheduler-neutral jobs: list/run/apply/set/enable/disable/status. Only read/safe_write may be scheduled. `apply` renders the plists; `enable` installs + loads them into launchd (confirm-class — needs --approved); `set` edits jobs/registry.json (a vault write — agents may run it freely) and NEVER touches launchd, so a changed time needs `plainkeep job enable <name> --approved` to go live; `status` shows rendered/installed/loaded per job. Common mistake: a job with inline shell logic — a job calls exactly ONE verb.",
   "output": {
     "mode": "rows",
     "fields": {
@@ -105,7 +105,7 @@
     },
     {
       "name": "enable",
-      "summary": "install the plists into ~/Library/LaunchAgents and load them into launchd; needs --yes",
+      "summary": "install the plists into ~/Library/LaunchAgents and load them into launchd; needs --approved",
       "risk": "confirm",
       "dry_run": true,
       "args": [
@@ -125,7 +125,7 @@
     },
     {
       "name": "disable",
-      "summary": "unload from launchd and remove the ~/Library/LaunchAgents copies; needs --yes",
+      "summary": "unload from launchd and remove the ~/Library/LaunchAgents copies; needs --approved",
       "risk": "confirm",
       "dry_run": true,
       "args": [

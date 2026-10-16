@@ -1,7 +1,7 @@
 {
   "verb": "models",
   "summary": "download/offload/test surface for the model layer: list|status|stop|pull|test per stage (stt, ocr, vlm, enrich, triage, embed, rerank)",
-  "usage": "plainkeep models list | status | stop [--all] [<model>] | pull [--stage <s>|--all] --yes | test <stage> [--model <m>] [--input <file>] --yes",
+  "usage": "plainkeep models list | status | stop [--all] [<model>] | pull [--stage <s>|--all] --approved | test <stage> [--model <m>] [--input <file>] --approved",
   "risk": "safe_write",
   "args": [
     {
@@ -16,7 +16,7 @@
   "writes": [
     "ollama's local model store (pull only; outside ~/plainkeep)"
   ],
-  "hints": "Per-stage model management, env-config-driven (proposal docs/design/proposals/2026-07-07-search-enrichment-pipeline.md §2.1). `list` shows each stage's configured model, runtime, and whether it's pulled/available — pure probes, never loads a model. `status` is `ollama ps` (resident models). `stop [--all]` unloads a resident model (`ollama stop`) — free of --yes, it just reloads on next use. `pull [--stage <s>|--all]` and `test <stage> [--model <m>] [--input <file>]` both self-gate: without --yes they refuse with EXIT_CONFIRM(3) and print the exact re-run, because both can pull gigabytes; test then runs the stage's configured (or --model override) model on a sample/--input and prints output + timing, so you can A/B a candidate before adopting it by setting its env var. stt/rerank are pip-managed runtimes, not ollama models — pull skips them with a note. Common mistake: expecting `pull`/`test` to run without --yes — they never do, by design.",
+  "hints": "Per-stage model management, env-config-driven (proposal docs/design/proposals/2026-07-07-search-enrichment-pipeline.md §2.1). `list` shows each stage's configured model, runtime, and whether it's pulled/available — pure probes, never loads a model. `status` is `ollama ps` (resident models). `stop [--all]` unloads a resident model (`ollama stop`) — free of --approved, it just reloads on next use. `pull [--stage <s>|--all]` and `test <stage> [--model <m>] [--input <file>]` both self-gate: without --approved they refuse with EXIT_CONFIRM(3) and print the exact re-run, because both can pull gigabytes; test then runs the stage's configured (or --model override) model on a sample/--input and prints output + timing, so you can A/B a candidate before adopting it by setting its env var. stt/rerank are pip-managed runtimes, not ollama models — pull skips them with a note. Common mistake: expecting `pull`/`test` to run without --approved — they never do, by design.",
   "output": {
     "mode": "rows",
     "fields": {
@@ -41,7 +41,7 @@
     },
     {
       "name": "stop",
-      "summary": "unload a resident model (reloads on next use; no --yes)",
+      "summary": "unload a resident model (reloads on next use; no --approved)",
       "risk": "safe_write",
       "args": [
         { "name": "model", "type": "string", "required": false, "help": "the model to stop (omit with --all)" },
@@ -50,7 +50,7 @@
     },
     {
       "name": "pull",
-      "summary": "download a stage's model (can be gigabytes); needs --yes",
+      "summary": "download a stage's model (can be gigabytes); needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "--stage", "type": "enum", "required": false, "enum": ["stt", "ocr", "vlm", "enrich", "triage", "embed", "rerank"], "help": "which stage's model to pull (omit with --all)" },
@@ -59,7 +59,7 @@
     },
     {
       "name": "test",
-      "summary": "run a stage's model on a sample/--input and print output + timing; needs --yes",
+      "summary": "run a stage's model on a sample/--input and print output + timing; needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "stage", "type": "enum", "required": true, "enum": ["stt", "ocr", "vlm", "enrich", "triage", "embed", "rerank"], "help": "which stage to test" },

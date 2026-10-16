@@ -23,7 +23,7 @@ sentence that becomes a downloader if nobody defines it, so:
      would be doing the one thing the whole update contract exists to make atomic.
   4. **Doctor never reaches the network.** No fetch, no `uv sync`, no `pip`, no model pull. Where a
      dependency is missing, the row NAMES the command that would install it and stops there — the
-     `setup` verbs are where a download happens, behind their own `--yes`.
+     `setup` verbs are where a download happens, behind their own `--approved`.
 
 Enforcement, not assertion (ADR-019 D1/D2): `test/run_engineupdate.py::case_doctor_never_mutates`
 snapshots the whole vault and the whole engine install root, runs the real `plainkeep doctor` through
@@ -382,7 +382,7 @@ def main(argv):
         want = f"{sys.version_info.major}.{sys.version_info.minor}"
         if overlay.get("python") and overlay["python"] != want:
             warn(f"plugins: the dependency overlay was installed for python {overlay['python']}, "
-                 f"this interpreter is {want} — re-run `plainkeep plugin sync --yes`")
+                 f"this interpreter is {want} — re-run `plainkeep plugin sync --approved`")
         else:
             ok(f"plugins: dependency overlay matches this interpreter (python {want})")
 
@@ -738,7 +738,7 @@ def main(argv):
                  f"{', '.join(drifted)} (re-render: plainkeep job apply)")
         if unloaded:
             warn(f"{len(unloaded)} scheduled job(s) rendered but not loaded into launchd: "
-                 f"{', '.join(unloaded)} (activate: plainkeep job enable --all --yes)")
+                 f"{', '.join(unloaded)} (activate: plainkeep job enable --all --approved)")
         if rendered and not drifted and not unloaded:
             ok(f"{len(rendered)} scheduled job(s) rendered and loaded into launchd")
 

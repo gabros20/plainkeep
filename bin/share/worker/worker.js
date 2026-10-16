@@ -85,7 +85,7 @@ export default {
       // deployed Worker has no secrets, which made "deployed but not yet configured" an open,
       // unauthenticated write endpoint. Absence of the secret is now a refusal, not a bypass.
       if (!env.PUBLISH_TOKEN) {
-        return json({ error: "worker has no PUBLISH_TOKEN", hint: "run: plainkeep share init --yes" }, 503);
+        return json({ error: "worker has no PUBLISH_TOKEN", hint: "run: plainkeep share init --approved" }, 503);
       }
       if (request.headers.get("X-Publish-Token") !== env.PUBLISH_TOKEN) {
         return json({ error: "publish token required", hint: "run: plainkeep share init" }, 401);

@@ -392,7 +392,7 @@ def case_init_refusals(tmp: Path) -> None:
 
     r = init(tmp / "no-consent")
     check("init: refuses without --yes (exit 3, with the re-run line)",
-          r.returncode == EXIT_CONFIRM and "--yes" in (r.stdout + r.stderr),
+          r.returncode == EXIT_CONFIRM and "--approved" in (r.stdout + r.stderr),
           f"rc={r.returncode} {(r.stdout + r.stderr)[:200]}")
     check("init: ...and created nothing", not (tmp / "no-consent").exists())
 

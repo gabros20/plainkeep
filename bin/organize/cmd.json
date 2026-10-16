@@ -1,7 +1,7 @@
 {
   "verb": "organize",
   "summary": "self-organization loop: scan -> review -> apply typed ops (proposal queue, never direct edits)",
-  "usage": "plainkeep organize scan [--dry-run] | review [--accept|--reject|--defer <ids|all>] [--dry-run|--yes] | apply [--yes|--dry-run] [--safe-only] [--max-ops N] [--max-lines N]",
+  "usage": "plainkeep organize scan [--dry-run] | review [--accept|--reject|--defer <ids|all>] [--dry-run|--approved] | apply [--approved|--dry-run] [--safe-only] [--max-ops N] [--max-lines N]",
   "risk": "safe_write",
   "args": [
     {
@@ -19,7 +19,7 @@
     "wiki/ (apply only, one git commit per op)",
     "journal/"
   ],
-  "hints": "The self-organization loop. scan does ZERO-LLM candidate generation into a typed proposal queue inbox/organize/<date>.jsonl (CLOSED op catalog: add_link, refresh_hub, normalize_tag, fix_frontmatter, retitle, flag_duplicate, propose_merge; validated at write AND read time). A model (PLAINKEEP_AGENT) only RANKS confidences; with none, heuristics. review appends accept/reject/defer status lines (audit ledger, latest wins) and shows the exact diff each op would produce. apply (needs --yes, NEVER schedulable; apply --dry-run previews the exact replay and writes nothing) deterministically replays APPROVED ops only, one commit per op, with an edit budget (20 ops / 300 lines, flags may only lower it) and protected paths (conventions/index/hubs/pinned) review-only; retitle/propose_merge/deletions never auto-apply. --safe-only applies only the four additive primitives above 0.8. Common mistake: expecting apply to run a model (it never does) or to touch a protected path.",
+  "hints": "The self-organization loop. scan does ZERO-LLM candidate generation into a typed proposal queue inbox/organize/<date>.jsonl (CLOSED op catalog: add_link, refresh_hub, normalize_tag, fix_frontmatter, retitle, flag_duplicate, propose_merge; validated at write AND read time). A model (PLAINKEEP_AGENT) only RANKS confidences; with none, heuristics. review appends accept/reject/defer status lines (audit ledger, latest wins) and shows the exact diff each op would produce. apply (needs --approved, NEVER schedulable; apply --dry-run previews the exact replay and writes nothing) deterministically replays APPROVED ops only, one commit per op, with an edit budget (20 ops / 300 lines, flags may only lower it) and protected paths (conventions/index/hubs/pinned) review-only; retitle/propose_merge/deletions never auto-apply. --safe-only applies only the four additive primitives above 0.8. Common mistake: expecting apply to run a model (it never does) or to touch a protected path.",
   "output": {
     "mode": "rows",
     "fields": {
@@ -54,7 +54,7 @@
     },
     {
       "name": "apply",
-      "summary": "deterministically replay APPROVED ops (one commit per op); needs --yes",
+      "summary": "deterministically replay APPROVED ops (one commit per op); needs --approved",
       "risk": "confirm",
       "dry_run": true,
       "args": [

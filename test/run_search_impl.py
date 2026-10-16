@@ -224,6 +224,69 @@ def main() -> int:
             check("collections: old-schema index is rebuilt on the next index", "zebra-wiki" in out and "T-20261001-01" in out,
                   out[:120])
 
+        # 0.4 index on write: a verb's note is searchable with no `plainkeep index` in between
+        with tempfile.TemporaryDirectory() as vtd:
+            vault = Path(vtd) / "v"
+            vault.mkdir()
+            _vid, pk = vaultfx.dispatchable_vault(vault, REPO)
+            venv = {k: v for k, v in os.environ.items() if k not in ("PLAINKEEP_CONTENT", "PLAINKEEP_VECTORS", "PLAINKEEP_RERANK")}
+            venv["PLAINKEEP_HOME"] = str(vault)
+
+            def pkrun2(*a):
+                r = subprocess.run([str(pk), *a], capture_output=True, text=True, env=venv)
+                return r.returncode, r.stdout, r.stderr
+
+            def found(q):
+                _rc, out, _e = pkrun2("search", q, "--json")
+                return [json.loads(ln).get("path") for ln in out.splitlines()
+                        if ln.strip() and "ops_json" not in ln]
+
+            pkrun2("capture", "quokkas are marsupials")
+            hit = found("quokkas")
+            check("index-on-write: capture is searchable immediately",
+                  any(h.startswith("inbox/cap-") for h in hit), f"{hit}")
+            check("index-on-write: the capture's journal line is searchable (journal collection)",
+                  any(h.startswith("journal/") for h in found("quokkas")), f"{found('quokkas')}")
+            pkrun2("task", "add", "feed the axolotl")
+            check("index-on-write: task add is searchable", any(h.startswith("tasks/active/") for h in found("axolotl")),
+                  f"{found('axolotl')}")
+            tid = next((Path(h).stem for h in found("axolotl") if h.startswith("tasks/")), None)
+            if tid:
+                pkrun2("task", "done", tid)
+                hs = found("axolotl")
+                check("index-on-write: moved task is re-indexed at its new path, old path gone",
+                      any(h.startswith("tasks/done/") for h in hs) and not any(h.startswith("tasks/active/") for h in hs),
+                      f"{hs}")
+            pkrun2("wiki", "new", "note", "Platypus burrows")
+            check("index-on-write: wiki new is searchable", any(h.startswith("wiki/") for h in found("platypus")),
+                  f"{found('platypus')}")
+            # a broken index must warn, never fail the write
+            (vault / ".index" / "plainkeep.sqlite").write_bytes(b"not a database")
+            rc, out, err = pkrun2("capture", "wombats too")
+            check("index-on-write: an unusable index warns on stderr and the capture still lands",
+                  rc == 0 and "warning" in err and len(list((vault / "inbox").glob("cap-*.md"))) == 2,
+                  f"rc={rc} err={err[:100]}")
+
+            # cost per write (measured, reported): index_paths on one small note, in a fresh interpreter
+            fx = vault / "wiki" / "notes"
+            fx.mkdir(parents=True, exist_ok=True)
+            (vault / ".index" / "plainkeep.sqlite").unlink()
+            prog = (
+                "import sys, time\nfrom pathlib import Path\nsys.path.insert(0, %r)\nimport indexlib\n"
+                "fx = Path(%r)\ns = []\nfor i in range(20):\n"
+                "    f = fx / f'cost-{i}.md'\n"
+                "    f.write_text('---\\ntitle: cost %%d\\n---\\n\\n# cost\\n\\n' %% i + 'lorem ipsum dolor sit amet ' * 40 + f'[[cost-{i+1}]]\\n')\n"
+                "    t = time.perf_counter(); indexlib.index_paths([f]); s.append((time.perf_counter() - t) * 1000)\n"
+                "s.sort(); print(s[len(s)//2], s[-1])\n"
+            ) % (str(REPO / "bin" / "lib"), str(fx))
+            r = subprocess.run([sys.executable, "-c", prog], capture_output=True, text=True, env=venv)
+            try:
+                med, mx = (float(x) for x in r.stdout.split())
+            except ValueError:
+                med, mx = 9999.0, 9999.0
+            print(f"  [measure] index_paths per write: median {med:.1f} ms, max {mx:.1f} ms {r.stderr[-200:]}")
+            check("index-on-write: median cost per write < 50 ms", med < 50, f"{med:.1f} ms")
+
         # subprocess smoke of the real CLI
         env = {**os.environ}
         idx = subprocess.run(["python3", str(REPO / "bin/index/run.py")], capture_output=True, text=True, env=env)

@@ -62,6 +62,7 @@ def create_task(title: str, intent: str | None = None, status: str = "active",
                                       source=source, title=title[:70],
                                       intent=(intent if intent is not None else title)),
                  encoding="utf-8")
+    paths.index_written(f)
     return f
 
 
@@ -79,4 +80,5 @@ def create_note(text: str, folder: str = "notes", typ: str = "note", status: str
     vaultio.write_text(f, f"---\ntype: {typ}\ntitle: {title}\nstatus: {status}\ncreated: {paths.today()}\n"
                  f"updated: {paths.today()}\ntags: []\naliases: []\n---\n# {title}\n\n{text}\n",
                  encoding="utf-8")
+    paths.index_written(f)
     return f

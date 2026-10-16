@@ -18,6 +18,15 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   everything** (old tables and vectors are dropped; until then search returns no hits). Bench: task
   recall@5 0.0 to 0.75, journal 0.0 to 0.67.
 
+- **A note is searchable the moment a verb writes it (v2 step 0.4).** `capture`, `new`, `wiki new`, `task`
+  (add and move), `bookmark`, `files ingest` shadow notes and hub links, `start`, `close` and every
+  journal line now refresh that file's search rows before returning, so `capture` then `search` finds
+  it with no `plainkeep index` in between. Only the keyword rows are written; a changed note's
+  embedding is left pending for the next `plainkeep index`, and `status` and `orient` report
+  `pending_embeddings` (0 when vectors are off). If the index cannot be updated the verb prints a
+  one-line warning and the write stands. Cost: 1.4 ms median per write in-process, about 10 to 30 ms
+  on a whole `capture`.
+
 ### Changed
 - **Search finds inflected Hungarian words (v2 step 0.2).** Hungarian suffixes defeated exact-token
   matching, so `ügyfelek` never found a note that says `ügyfél`. `search` now runs a second FTS query

@@ -220,6 +220,93 @@ def _embed_text(content: str, limit: int = 2000) -> str:
     return content.replace("---", " ")[:limit].strip()
 
 
+def _write_rows(con, rel: str, content: str, h: str) -> None:
+    """Replace every lexical row (chunks, links, provenance, hash) of one file. The single place a
+    file's FTS rows are written, shared by the full `index()` and the per-write `index_paths()`."""
+    con.execute("DELETE FROM chunks WHERE path=?", (rel,))
+    con.execute("DELETE FROM links WHERE src=?", (rel,))
+    slug = Path(rel).stem
+    coll = collection_of(rel)
+    for head, body in _chunks(content):
+        con.execute("INSERT INTO chunks(path, heading, body, slug, collection) VALUES(?,?,?,?,?)",
+                    (rel, head, body, slug, coll))
+    for tgt in {_norm_link(t) for t in LINK_RE.findall(content)}:
+        con.execute("INSERT INTO links(src, dst) VALUES(?,?)", (rel, tgt))
+    au, dv = _note_provenance(content)
+    con.execute("INSERT OR REPLACE INTO notemeta(path, author, derived_from) VALUES(?,?,?)", (rel, au, dv))
+    con.execute("INSERT OR REPLACE INTO files(path, hash, collection) VALUES(?,?,?)", (rel, h, coll))
+
+
+def _drop_rows(con, rel: str) -> None:
+    for t, col in (("chunks", "path"), ("links", "src"), ("files", "path"), ("embedded", "path"),
+                   ("notemeta", "path")):
+        con.execute(f"DELETE FROM {t} WHERE {col}=?", (rel,))
+
+
+def index_paths(paths: list) -> int:
+    """Refresh the LEXICAL rows of just these files (v2 0.4) so a note written by a verb is searchable
+    before the verb returns. A missing path is pruned (a moved/deleted note). Embeddings are not
+    computed here: a changed file loses its `embedded` row, which is what `pending_embeddings()` counts,
+    and the next full `plainkeep index` embeds it. Returns the number of files (re)indexed."""
+    con = connect()
+    n = 0
+    try:
+        for raw in paths:
+            p = Path(raw)
+            if not p.is_absolute():
+                p = PLAINKEEP_HOME / p
+            try:
+                rel = str(p.relative_to(CONTENT))
+            except ValueError:
+                continue
+            at_root = CONTENT.resolve() == PLAINKEEP_HOME.resolve()
+            if _ignored(rel) or p.suffix != ".md" or (at_root and Path(rel).parts[0] not in COLLECTIONS):
+                continue
+            if not p.exists():
+                _drop_rows(con, rel)
+                continue
+            content = p.read_text(encoding="utf-8")
+            h = hashlib.sha1(content.encode()).hexdigest()
+            row = con.execute("SELECT hash FROM files WHERE path=?", (rel,)).fetchone()
+            if row and row[0] == h:
+                continue
+            _write_rows(con, rel, content, h)
+            con.execute("DELETE FROM embedded WHERE path=?", (rel,))
+            n += 1
+        con.commit()
+    finally:
+        con.close()
+    return n
+
+
+def index_paths_safe(paths: list) -> None:
+    """`index_paths` for write verbs: a write must never fail because of the index, so any error is a
+    one-line warning on stderr and the write stands."""
+    try:
+        index_paths(paths)
+    except Exception as e:  # noqa: BLE001
+        print(f"warning: search index not refreshed ({type(e).__name__}: {e}) — run `plainkeep index`",
+              file=_sys.stderr)
+
+
+def pending_embeddings() -> int:
+    """Files whose vector is missing or from another model — 0 when the vector plane is off, since
+    nothing is waiting for an embedder then. Never raises (status/orient call it)."""
+    if not _vectors_on() or not DB.exists():
+        return 0
+    try:
+        emb, _vs = _vec_modules()
+        con = connect()
+        try:
+            model = emb.model_name() if emb else None
+            return sum(1 for (rel,) in con.execute("SELECT path FROM files")
+                       if model is None or _embed_stale(con, rel, model))
+        finally:
+            con.close()
+    except Exception:
+        return 0
+
+
 def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool = False) -> int:
     """Build/refresh the index. Resumable + batched so a large vault's multi-hour embedding
     backfill survives interruption (each FTS commit and each embed batch is durable; a re-run
@@ -274,19 +361,7 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
         if not changed_file and not need_embed:
             continue  # unchanged AND already embedded with this model — skip (resume fast-path)
         if changed_file:
-            con.execute("DELETE FROM chunks WHERE path=?", (rel,))
-            con.execute("DELETE FROM links WHERE src=?", (rel,))
-            slug = Path(rel).stem
-            coll = collection_of(rel)
-            for head, body in _chunks(content):
-                con.execute("INSERT INTO chunks(path, heading, body, slug, collection) VALUES(?,?,?,?,?)",
-                            (rel, head, body, slug, coll))
-            for tgt in {_norm_link(t) for t in LINK_RE.findall(content)}:
-                con.execute("INSERT INTO links(src, dst) VALUES(?,?)", (rel, tgt))
-            au, dv = _note_provenance(content)
-            con.execute("INSERT OR REPLACE INTO notemeta(path, author, derived_from) VALUES(?,?,?)",
-                        (rel, au, dv))
-            con.execute("INSERT OR REPLACE INTO files(path, hash, collection) VALUES(?,?,?)", (rel, h, coll))
+            _write_rows(con, rel, content, h)
             changed += 1
             if changed % COMMIT_EVERY == 0:
                 con.commit()  # durable progress for the keyword pass

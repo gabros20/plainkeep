@@ -198,6 +198,7 @@ def main(argv):
         vaultio.mkdir(d)
         f = d / f"{slug}.md"
         vaultio.write_text(f, notetype.render(typ, title=name, slug=slug), encoding="utf-8")
+        paths.index_written(f)
         paths.append_journal(f"wiki new {typ}: {slug}")
         data = {"path": str(rel), "type": typ, "slug": slug}
         return output.emit(data, "wiki", human=lambda _: f"created -> {rel}")

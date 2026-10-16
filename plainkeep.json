@@ -1246,6 +1246,7 @@
           "inbox": "int",
           "proposals": "int",
           "index_age_min": "int",
+          "pending_embeddings": "int",
           "backup_age_min": "int",
           "git_dirty": "int",
           "journal_tail": "array",
@@ -1829,6 +1830,7 @@
           "inbox": "int",
           "wiki": "int",
           "index_age_min": "int",
+          "pending_embeddings": "int",
           "git_dirty": "int"
         }
       },

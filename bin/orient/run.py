@@ -70,6 +70,11 @@ def _proposals() -> int:
     return len(list(d.glob("*.jsonl"))) if d.exists() else 0
 
 
+def _pending_embeddings() -> int:
+    from lib import indexlib
+    return indexlib.pending_embeddings()
+
+
 def _gather() -> dict:
     active, waiting = _tasks("active"), _tasks("waiting")
     inbox = len(list(paths.INBOX.glob("*.md"))) if paths.INBOX.exists() else 0
@@ -77,7 +82,8 @@ def _gather() -> dict:
     return {
         "active": len(active), "waiting": len(waiting),
         "inbox": inbox, "proposals": _proposals(),
-        "index_age_min": index_age, "backup_age_min": _last_commit_age(),
+        "index_age_min": index_age, "pending_embeddings": _pending_embeddings(),
+        "backup_age_min": _last_commit_age(),
         "git_dirty": _git_dirty(),
         "journal_tail": _journal_tail(),
         "top_tasks": [{"id": f.stem, "title": paths.title_of(f), "status": "active"} for f in active[:5]]
@@ -108,6 +114,8 @@ def _dashboard(data: dict):
           (f", {data['proposals']} organize proposal file(s)" if data["proposals"] else ""))
     ia, ba, gd = data["index_age_min"], data["backup_age_min"], data["git_dirty"]
     print(f"  index:   {'built ' + str(ia) + ' min ago' if ia is not None else 'not built (run: plainkeep index)'}")
+    if data["pending_embeddings"]:
+        print(f"  vectors: {data['pending_embeddings']} note(s) pending embedding (run: plainkeep index)")
     print(f"  backup:  {'last commit ' + str(ba) + ' min ago' if ba is not None else 'no commits yet'}"
           + ("" if gd in (0, None) else f", {gd} uncommitted change(s)"))
     if data["recent_notes"]:

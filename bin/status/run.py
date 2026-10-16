@@ -15,6 +15,11 @@ def _count(d: Path, pat: str) -> int:
     return len(list(d.glob(pat))) if d.exists() else 0
 
 
+def _pending() -> int:
+    from lib import indexlib
+    return indexlib.pending_embeddings()
+
+
 def main(argv):
     _, argv = output.parse_argv(argv)
     active = sorted((paths.TASKS / "active").glob("T-*.md")) if (paths.TASKS / "active").exists() else []
@@ -39,7 +44,7 @@ def main(argv):
         "active_tasks": [{"id": f.stem, "title": paths.title_of(f)} for f in active],
         "waiting_tasks": [{"id": f.stem, "title": paths.title_of(f)} for f in waiting],
         "inbox": inbox, "wiki": wiki,
-        "index_age_min": index_age, "git_dirty": git_dirty,
+        "index_age_min": index_age, "pending_embeddings": _pending(), "git_dirty": git_dirty,
     }
 
     def render(_):
@@ -57,6 +62,8 @@ def main(argv):
             print(f"  index:   built {index_age} min ago" if index_age else "  index:   built just now")
         else:
             print("  index:   not built (run: plainkeep index)")
+        if data["pending_embeddings"]:
+            print(f"  vectors: {data['pending_embeddings']} note(s) pending embedding (run: plainkeep index)")
         if git_dirty is not None:
             print(f"  git:     {'clean' if git_dirty == 0 else str(git_dirty) + ' uncommitted change(s)'}")
 

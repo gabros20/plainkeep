@@ -14,7 +14,7 @@ Amikor új ügyfél érkezik, ezt a listát veszem végig, hogy az első hét ne
 ## Az első napon
 - aláírt szerződés és titoktartási nyilatkozat a mappában
 - közös csatorna létrehozása (egy e-mail-lista, nem hat különböző)
-- kapcsolattartó neve, telefonszáma és elérhetősége a hubnoteban
+- kapcsolattartó neve, telefonszáma és elérhetősége a hubnote-ban
 
 ## Az első héten
 - hozzáférések kérése, jelszókezelőn keresztül

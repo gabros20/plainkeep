@@ -45,6 +45,24 @@ def main() -> int:
     alias_ok = "exponential-backoff#jitter" not in broken_targets and "designatives|the studio" not in broken_targets
     results.append(("anchor/alias links resolve (not broken)", alias_ok, f"broken={issues['broken_links']}"))
 
+    # 0.9 — the ENGINE's shared parser (bin/lib/wikilink.py): `[[slug\\|label]]` inside a table row
+    import importlib.util
+    ENG = Path(__file__).resolve().parent.parent / "bin" / "lib"
+    spec = importlib.util.spec_from_file_location("wikilink", ENG / "wikilink.py")
+    wl = importlib.util.module_from_spec(spec); spec.loader.exec_module(wl)
+    for raw, want in [("slug", "slug"), ("slug|label", "slug"), ("slug\\|label", "slug"),
+                      ("slug#head|label", "slug"), ("slug#head\\|label", "slug"), (" slug \\| label ", "slug")]:
+        results.append((f"norm_link({raw!r})", wl.norm_link(raw) == want, f"got {wl.norm_link(raw)!r}"))
+    row = "| [[acme\\|Acme Corp]] | [[beta]] |"
+    got = [wl.norm_link(t) for t in wl.LINK_RE.findall(row)]
+    results.append(("table row targets", got == ["acme", "beta"], f"got {got}"))
+    results.append(("split_link label", wl.split_link("acme\\|Acme Corp") == ("acme", "Acme Corp"),
+                    f"got {wl.split_link('acme\\|Acme Corp')}"))
+    sspec = importlib.util.spec_from_file_location("sharelib_t", ENG / "sharelib.py")
+    sl = importlib.util.module_from_spec(sspec); sspec.loader.exec_module(sl)
+    html_out = sl._md_inline("[[acme\\|Acme Corp]]", {"acme"})
+    results.append(("share renders escaped-pipe link", html_out == '<a href="#note-acme">Acme Corp</a>', f"got {html_out}"))
+
     print(f"{BOLD}Wiki link-reliability edges{RESET} — {len(corpus['notes'])} notes, {len(results)} checks\n")
     passed = 0
     for name, ok, detail in results:

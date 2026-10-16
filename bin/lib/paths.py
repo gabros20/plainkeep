@@ -7,11 +7,16 @@ from datetime import date, datetime
 from pathlib import Path
 
 try:
-    from . import enginetree, vaultroot  # type: ignore  # (namespace siblings)
+    from . import enginetree, vaultroot, wikilink  # type: ignore  # (namespace siblings)
 except ImportError:      # imported top-level by a verb that put bin/ on sys.path
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import enginetree  # type: ignore
     import vaultroot  # type: ignore
+    import wikilink  # type: ignore
+
+LINK_RE = wikilink.LINK_RE
+norm_link = wikilink.norm_link
+split_link = wikilink.split_link
 
 # The SELECTED data root — from PLAINKEEP_HOME, with NO engine-relative fallback (ADR-014 D2/D3,
 # Phase 2 Task 1b). The `Path(__file__).resolve().parents[2]` that used to sit here is the "the
@@ -109,12 +114,9 @@ def slugify(s: str, n: int = 60) -> str:
     return (s[:n].rstrip("-")) or "note"
 
 
-LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
-
-
 def link_targets(text: str) -> list[str]:
-    """Normalized [[wikilink]] targets (strip #heading / |alias)."""
-    return [t.split("#", 1)[0].split("|", 1)[0].strip() for t in LINK_RE.findall(text)]
+    """Normalized [[wikilink]] targets (strip #heading / |alias / table-escape backslash)."""
+    return [wikilink.norm_link(t) for t in LINK_RE.findall(text)]
 
 
 def fm_field(path: Path, key: str) -> str:

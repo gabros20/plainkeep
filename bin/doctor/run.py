@@ -60,6 +60,11 @@ def _plugin_overlay() -> dict | None:
     return o if isinstance(o, dict) else None
 
 
+_FENCE = re.compile(r"(?ms)^(```|~~~).*?^\1[^\n]*$")
+_ICODE = re.compile(r"`[^`\n]*`")
+_WIKI_MD_LINK = re.compile(r"\[\[[^\]\n]+\]\]\([^)\s]*\)")
+
+
 def ok(m): checks.append(("ok", m))
 def warn(m): checks.append(("warn", m))
 def fail(m): checks.append(("fail", m))
@@ -489,6 +494,48 @@ def main(argv):
         (fail if wiki_bin else ok)("wiki is plaintext-only" if not wiki_bin else f"binaries tracked in wiki: {wiki_bin}")
     else:
         warn("not a git repo (or nothing tracked) — skipped secret/binary scan")
+
+    # 5b. link lint (v2 0.10) — WARN only. Two patterns that read as links and are not:
+    #   `[[x]](url)`  an Obsidian wikilink wrapped as a markdown link; neither renderer resolves it.
+    #   a committed symlink with an ABSOLUTE target outside the vault and the engine; it dangles on
+    #   any other machine (or after the engine moves), and git carries it as if it were content.
+    wiki_dir = paths.PLAINKEEP_HOME / "wiki"
+    if wiki_dir.is_dir():
+        hits = []
+        for md in wiki_dir.rglob("*.md"):
+            try:
+                body = md.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            body = _FENCE.sub("", body)
+            body = _ICODE.sub("", body)
+            if _WIKI_MD_LINK.search(body):
+                hits.append(str(md.relative_to(paths.PLAINKEEP_HOME)))
+        if hits:
+            shown = ", ".join(hits[:5]) + (f" (+{len(hits) - 5} more)" if len(hits) > 5 else "")
+            warn(f"{len(hits)} note(s) use `[[x]](url)`, a wikilink wrapped as a markdown link: {shown} "
+                 "(write `[[x]]` or `[label](url)`)")
+        else:
+            ok("no `[[x]](url)` links in wiki notes")
+    roots = [Path(_real(paths.PLAINKEEP_HOME)), Path(_real(paths.ENGINE))]
+    stray = []
+    for ln in paths.git("ls-files", "-s").splitlines():
+        meta, _, rel = ln.partition("\t")
+        if not meta.startswith("120000") or not rel:
+            continue
+        try:
+            tgt = os.readlink(paths.PLAINKEEP_HOME / rel)
+        except OSError:
+            continue
+        if os.path.isabs(tgt):
+            real = Path(os.path.normpath(tgt))
+            if not any(real == r or r in real.parents for r in roots):
+                stray.append(f"{rel} -> {tgt}")
+    if stray:
+        warn(f"{len(stray)} committed symlink(s) with an absolute target outside the vault and engine: "
+             f"{'; '.join(stray[:5])} (use a relative target, or untrack it)")
+    elif tracked:
+        ok("no committed symlink points at an absolute path outside the vault and engine")
 
     # 6. index
     db = paths.PLAINKEEP_HOME / ".index" / "plainkeep.sqlite"

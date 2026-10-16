@@ -8,8 +8,14 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ### Added
 - **Retrieval bench (v2 step 0.0): `test/run_bench.py`.** A fixed set of 30 queries (Hungarian exact and inflected forms, answers deep inside long notes, tasks, journal days, superseded decisions, unanswerable questions, exact titles and aliases) scored against a fixture vault through the real `indexlib` in keyword mode by default (hybrid and hybrid+rerank are opt-in via `--modes all`), reported as recall@5, recall@10 and MRR per tag. `baseline.json` records the keyword numbers so each later retrieval change can show what it moved, and `test/bench/gates.json` holds one gate so far: Hungarian keyword recall@5 ≥ 0.6, added with the Unicode-token fix below. `--vault PATH` runs your own queries against a real vault, read-only. Private queries go in `test/bench/queries.private.json`, which is gitignored.
+- **`plainkeep doctor` lints two link patterns (v2 step 0.10).** It warns, never fails, on `[[x]](url)` (a
+  wikilink wrapped as a markdown link, which no renderer resolves) and on a committed symlink whose
+  absolute target lies outside the vault and the engine (it dangles on any other machine).
 
 ### Fixed
+- **`[[slug\|label]]` in a table is a link to `slug` (v2 step 0.9).** The escaped pipe left a trailing
+  backslash on the target, so the link counted as broken. One parser, `bin/lib/wikilink.py`, now serves
+  the index, `wiki`, `render` and `share`.
 - **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
   pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found
   nothing. Tokens are now Unicode word characters, the FTS5 `unicode61` tokenizer folds diacritics so

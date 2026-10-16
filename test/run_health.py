@@ -105,6 +105,30 @@ def case_automation_rows(tmp: Path) -> None:
     check("doctor never FAILs on an automation row", "FAIL" not in r.stdout, r.stdout)
 
 
+def case_link_lint(tmp: Path) -> None:
+    """v2 0.10: doctor WARNs (never FAILs) on `[[x]](url)` and on a committed absolute symlink that
+    points outside the vault and the engine; a clean vault gets ok rows for both."""
+    h = tmp / "linklint"
+    h.mkdir()
+    wellformed(h)
+    subprocess.run(["git", "-C", str(h), "init", "-q"], check=True)
+    r = run(h, "doctor")
+    check("link lint: clean vault has no link warnings",
+          "[[x]](url)" in r.stdout and "wikilink wrapped" not in r.stdout and "absolute target" not in r.stdout, r.stdout)
+    note(h, "notes/bad.md", "note", "Bad", "2026-01-01", "see [[other]](https://example.com/x)\n\n`[[code]](ignored)`")
+    note(h, "notes/fine.md", "note", "Fine", "2026-01-01", "see [[other]] and [label](https://example.com)")
+    os.symlink("/usr/bin/env", h / "stray-link")
+    os.symlink("../skills", h / "rel-link")
+    subprocess.run(["git", "-C", str(h), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(h), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], check=True)
+    r = run(h, "doctor")
+    check("link lint: [[x]](url) warns, naming only the offending note",
+          "1 note(s) use `[[x]](url)`" in r.stdout and "notes/bad.md" in r.stdout and "notes/fine.md" not in r.stdout, r.stdout)
+    check("link lint: absolute symlink outside vault+engine warns, relative one does not",
+          "stray-link -> /usr/bin/env" in r.stdout and "rel-link" not in r.stdout, r.stdout)
+    check("link lint rows are advisory (doctor still exits 0)", r.returncode == 0, f"rc={r.returncode}")
+
+
 def case_doctor_never_certifies_a_registry_the_VERB_refuses(tmp: Path) -> None:
     """THE CHECKER MUST NOT BE GREENER THAN THE PRODUCT (r1/I2).
 
@@ -280,6 +304,7 @@ def main() -> int:
         FAKE = launchdfx.install(Path(td) / "machine")
         case_automation_rows(Path(td))
         case_doctor_never_certifies_a_registry_the_VERB_refuses(Path(td))
+        case_link_lint(Path(td))
 
     # ---- the no-real-launchd guarantee (r1/I2) + one probe per job (r1/M5) ----
     with tempfile.TemporaryDirectory() as td:

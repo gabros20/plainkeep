@@ -16,7 +16,14 @@ import html
 import re
 import struct
 
-_LINK = re.compile(r"\[\[([^\]]+)\]\]")
+try:
+    from . import wikilink  # type: ignore
+except ImportError:      # loaded by file path (tests) — sibling is not a package then
+    import sys as _s, os as _o
+    _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
+    import wikilink  # type: ignore
+
+_LINK = wikilink.LINK_RE
 _IMG = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
 _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _ICODE = re.compile(r"`([^`]+)`")
@@ -116,8 +123,7 @@ def _md_inline(text: str, resolvable: set[str]) -> str:
     """Inline markdown → HTML on already-escaped text. Wikilinks resolve WITHIN the shared set to an
     intra-doc anchor; targets outside the set degrade to plain text (proposal Part 5.2)."""
     def link(m):
-        tgt = m.group(1).split("#", 1)[0].split("|", 1)[0].strip()
-        label = m.group(1).split("|", 1)[1].strip() if "|" in m.group(1) else tgt
+        tgt, label = wikilink.split_link(m.group(1))
         if tgt in resolvable:
             return f'<a href="#note-{html.escape(tgt)}">{html.escape(label)}</a>'
         return html.escape(label)

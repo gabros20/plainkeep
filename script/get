@@ -44,7 +44,7 @@ while [ $# -gt 0 ]; do
     --dry-run) DRY=1 ;;
     --dir) shift; TARGET="$1" ;;
     --repo) shift; REPO_URL="$1" ;;
-    --approved|-y) YES=1 ;;
+    --approved|--yes|-y) YES=1 ;;
     -h|--help) sed -n '2,33p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown flag: $1" >&2; exit 2 ;;
   esac; shift

@@ -658,7 +658,7 @@ def case_set_never_touches_launchd_but_says_the_schedule_is_stale(td: Path) -> N
     check("job set states plainly that the LOADED schedule is now stale",
           r.returncode == 0 and "stale" in out.lower(), out)
     check("job set names the remedy, and it is the confirm-class verb",
-          "plainkeep job enable close_nudge --yes" in out, out)
+          "plainkeep job enable close_nudge --approved" in out, out)
 
     r = run(h, "status", "--json")
     rows = [json.loads(ln) for ln in r.stdout.splitlines() if ln.strip()]
@@ -917,7 +917,7 @@ def case_the_stale_statement_matches_what_the_probe_ANSWERED(td: Path) -> None:
     out = r.stdout + r.stderr
     check("LOADED: set says launchd is running the old schedule",
           r.returncode == 0 and "launchd is still running" in out
-          and "plainkeep job enable close_nudge --yes" in out, out)
+          and "plainkeep job enable close_nudge --approved" in out, out)
 
     # Boot it out behind the verb's back — the state a `launchctl bootout` from anywhere leaves.
     (FAKE["fx"].state / "com.plainkeep.close_nudge").unlink()
@@ -926,7 +926,7 @@ def case_the_stale_statement_matches_what_the_probe_ANSWERED(td: Path) -> None:
     check("INSTALLED, NOT LOADED: set does not claim launchd is running anything",
           r.returncode == 0 and "launchd is still running" not in out, out)
     check("…it says the INSTALLED copy is out of date, and still names the remedy",
-          "installed" in out.lower() and "plainkeep job enable close_nudge --yes" in out, out)
+          "installed" in out.lower() and "plainkeep job enable close_nudge --approved" in out, out)
     status = run(h, "status")
     check("…and `job status` and `job set` now agree about the same job",
           "installed, not loaded" in status.stdout, status.stdout)

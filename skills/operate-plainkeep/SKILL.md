@@ -60,7 +60,7 @@ to know a subcommand's exact shape instead of guessing from prose. `plainkeep co
 <partial words…>` returns candidate `{value, description, kind}` rows for any argument (the
 same brain shell tab-completion uses). Per-action `risk` is descriptive (the verb self-gates
 `confirm` subactions on `--approved`, exit 3) — never pre-append the flag speculatively; let the
-verb refuse and read the exact re-run from its error (consent rule: §6a). `plainkeep ui` is the HUMAN terminal UI — not for you; you
+verb refuse and read the exact re-run from its error (consent rule: §6b). `plainkeep ui` is the HUMAN terminal UI — not for you; you
 drive verbs by flags + `--json`, which is the better surface for an agent.
 
 ## 3. Orientation — run this at the start of every session
@@ -141,11 +141,11 @@ hubs, not a pile of files. Rules of traversal:
   - `search` covers every content collection (wiki, tasks, journal, inbox); narrow with
     `--collection wiki|tasks|journal|inbox`. It returns the top 10 by default and says so in a
     footer (`showing 10 of ≥N — use --limit/--all`): a cut list is never the whole answer. For
-    "everything in a collection or with a tag" do not page `search` — use
-    `plainkeep wiki list --tag <tag>`, which is exhaustive. `search` is for discovery.
+    "every wiki note carrying a tag" do not page `search` — use `plainkeep wiki list --tag <tag>`.
+    It is exhaustive but covers `wiki/` only; for tasks use `plainkeep task list`. `search` is for discovery.
   - *Driving plainkeep from an agent terminal (Hermes, dispatch, cron)?* Keyword search always works,
     but **semantic** search (`search.vectors = true` in the host's `~/.config/plainkeep/config.toml`
-    — `plainkeep setup search` writes it — or `PLAINKEEP_VECTORS=1`) needs the agent's shell to use the same `python3`
+    — `plainkeep setup search --approved` writes it — or `PLAINKEEP_VECTORS=1`) needs the agent's shell to use the same `python3`
     (venv + PATH) as your interactive shell — a common silent gap. If `plainkeep doctor` says lancedb is
     missing though you installed it, see [`docs/agent-terminal-search.md`](../../docs/agent-terminal-search.md).
 - **Read frontmatter before body.** `type`, `status`, `related`, and (for projects)
@@ -175,10 +175,10 @@ Discover the live, authoritative set with `plainkeep help`; this is the working 
 ### 6a. Recipes — the common jobs, in the fewest calls
 | To… | Run | Notes |
 |---|---|---|
-| Find something | `plainkeep search "<query>"` | one call; add `--collection wiki` to narrow, `--limit N`/`--all` if the footer says it was cut. All notes with a tag: `plainkeep wiki list --tag <tag>` |
+| Find something | `plainkeep search "<query>"` | one call; add `--collection wiki` to narrow, `--limit N`/`--all` if the footer says it was cut. All wiki notes with a tag: `plainkeep wiki list --tag <tag>` |
 | Capture a thought | `plainkeep capture "<text>"` | lands in `inbox/`; never pick a permanent home yourself |
-| File a document (binary) | `plainkeep files ingest <path>` | PROPOSES; shadow note + `~/files/…/in/`; then `files extract <slug>` if it must be searchable |
-| File a finished note | `plainkeep wiki new <type> "<Title>"`, then edit the file it names | the verb computes path, slug and frontmatter; you write the body and link it from its hub |
+| File a document (binary) | `plainkeep files ingest <path> --client\|--project\|--area <slug> [--extract]` | files into `~/files/<kind>/<slug>/in/` plus a shadow note linked from the hub (no hub → `~/files/inbox/`); personal/legal docs are only PROPOSED for iCloud; `--extract` makes it searchable in the same call |
+| File a finished note | `plainkeep wiki new <type> "<Title>"`, edit the file it names, then `plainkeep index --changed` | the verb computes path, slug and frontmatter; you write the body and link it from its hub (A2's `--body-file` will make this one call) |
 | Share a note | `plainkeep search "<words>"` → slug, then `plainkeep share <slug> --approved` | two calls. Publishing is external: pass `--approved` only if the human asked you to share THIS note (§6b). Preview with `--dry-run` |
 | Track multi-step work | `plainkeep task add "<title>"`, later `task move <id> <status>` / `task done <id>` | log in the task's `## Log` |
 | Resume earlier work | `plainkeep orient`, then `plainkeep task show <id>` or `plainkeep search "<topic>"` | the journal tail and the task log are the memory |
@@ -195,8 +195,10 @@ with identical behaviour. The rule for you:
 - Pass `--approved` ONLY when the human asked for THAT action in this conversation. Their ask is
   consent for that one confirm-class call and nothing else.
 - Never for an action you decided on yourself, even if it seems obviously helpful — stop and ask.
-- Scheduled and unattended runs never pass it. MCP never exposes it.
+- Scheduled and unattended runs never pass it. MCP never adds it, and you never put it into an MCP call's `args`.
 - It never clears a deny.
+
+### 6c. The full surface, grouped
 
 - Capture / find:    `plainkeep capture "<text>"` · `plainkeep search "<query>"`
 - Daily / weekly:    `plainkeep start` · `plainkeep close` · `plainkeep week`

@@ -327,7 +327,7 @@ asserts is that **a human approved this exact action**. `--approved` says that.
 - `docs/README.md`: link this plan and the v2 design.
 
 ### Stage 0 follow-ups (found while landing it, 2026-10-16)
-Not blockers for the exit line. Each names the step that should absorb it.
+Not blockers for the exit line. Each names where it belongs.
 - **0.10 Done-when:** "`~/plainkeep` is clean" was not checked by the lane (the real vault is off
   limits to workers). The owner or controller runs `plainkeep doctor` on it.
 - **0.3 → B10:** with `--collection`, the vector arm filters after the ANN cut (x5 over-fetch), so a
@@ -336,14 +336,22 @@ Not blockers for the exit line. Each names the step that should absorb it.
 - **0.2 → B5/B6:** prefix-only hits always rank below exact-only hits (they enter at half weight and get
   no graph expansion), so hu-inflect R@5 is 0.5 on the widened corpus. Revisit once fusion is reworked.
 - **A1:** `open._indexed_file` ignores a custom `PLAINKEEP_CONTENT` path and falls back to a stem lookup.
-- **0.14:** `test/run_setup.py` "valid older ref" depends on `HEAD~3` of the checkout and fails on some
+- **Next test-hygiene pass:** `test/run_setup.py` "valid older ref" depends on `HEAD~3` of the checkout and fails on some
   merge histories. Pin a fixture ref instead.
-- **0.15 / machine contract:** `plainkeep job status --json` prints more than one JSON document; it must
+- **E1 (envelopes):** `plainkeep job status --json` prints more than one JSON document; it must
   print one envelope.
-- **Plugin API:** `_api_ok` compares versions as floats (`"1.10" == "1.1"`). Switch to integer tuples
+- **Next plugin API bump (before 1.10):** `_api_ok` compares versions as floats (`"1.10" == "1.1"`). Switch to integer tuples
   before API 1.10.
-- **Completion:** scalar verbs such as `search` get no flag-value completion (`--collection`,
+- **B10 (search flags):** scalar verbs such as `search` get no flag-value completion (`--collection`,
   `--limit`). Extend the provider lookup beyond compound verbs.
+- **0.7 → A7:** the Done-when ("share the OMAD note" in ≤2 calls) is not measurable yet.
+  `test/lib/spec.py` builds the operator prompt from the manual copy inside `PERSONAL_OS_DESIGN.md`
+  (stale: `--yes`, old orientation), and `scenarios.json` has no share scenario or call counter. A7
+  points spec.py at `skills/operate-plainkeep/SKILL.md`, adds a `share-omad-note` scenario, and adds a
+  `max_plainkeep_calls` check to judge.py.
+- **MCP servers should refuse consent flags inside `args` (enforce, not just document)** → D4. Both
+  servers pass `args` through verbatim, so an agent can smuggle `--approved`/`--yes`/`-y`
+  (docs/followups.md).
 
 **Stage 0 exit:** all Done-when lines hold, the bench baseline is recorded against the post-Stage 0
 numbers, and 4.1.0 is tagged.

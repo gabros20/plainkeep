@@ -38,12 +38,12 @@ Six principles fall out of that bet. Every later decision traces back to one of 
 ## The shape: four roots, one repo of truth
 
 ```
-<vault>      THE SYSTEM   knowledge (wiki/), tasks/, journal/, plugins/, config — DATA only   [git: your repo]
+<vault>      THE SYSTEM   wiki/, tasks/, journal/, plugins/, templates/, config — DATA only   [git: your repo]
 ~/work       CODE         one git repo per project: products/ labs/ tools/ clients/           [git: each its own]
 ~/files      BINARIES     client docs, PDFs, datasets — referenced by wiki "shadow notes"     [restic, not git]
 ~/dotfiles   THE MACHINE  installs tools, puts plainkeep on PATH                              [git: separate]
 
-engine       THE VERBS    bin/, skills/, templates/ — a versioned, read-only tree              [outside every vault]
+engine       THE VERBS    bin/, skills/, templates/verb — a versioned, read-only tree              [outside every vault]
              at ${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/
 ```
 

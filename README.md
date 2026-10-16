@@ -155,7 +155,7 @@ plainkeep search "how do I stop a runaway agent" # ranked file#heading hits with
 ```
 
 Enable vectors (`PLAINKEEP_VECTORS=1`, local embeddings + LanceDB) and reranking
-(`PLAINKEEP_RERANK=1`) via `plainkeep setup search --approved`. The index is disposable:
+(`PLAINKEEP_RERANK=1`, or `search.vectors`/`search.rerank` in `~/.config/plainkeep/config.toml`) via `plainkeep setup search --approved`. The index is disposable:
 `rm -rf .index && plainkeep index` rebuilds it.
 
 ## Extending it

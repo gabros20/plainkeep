@@ -74,15 +74,15 @@ interpreter with no per-agent PATH ordering.
 collection is not crowded out; with vectors on, the vector arm filters after its ANN cut and can
 under-fill a very small collection). Results are capped at 10 by default and the human output ends with
 `showing 10 of ≥N — use --limit/--all` whenever something was cut; `--limit N` raises the cap and `--all`
-ranks every lexical match. Search is for discovery. To list everything carrying a tag, use the exhaustive
-`plainkeep wiki list --tag <tag>` instead of paging search. Write verbs index the note they write, so a
+ranks every lexical match. Search is for discovery. To list every wiki note carrying a tag, use the exhaustive
+`plainkeep wiki list --tag <tag>` (wiki only; tasks via `plainkeep task list`) instead of paging search. Write verbs index the note they write, so a
 fresh note is findable immediately; `status`/`orient` report `pending_embeddings` while vectors lag.
 
-## What the agent terminal still needs: `PLAINKEEP_HOME` and the `PLAINKEEP_*` flags
+## What the agent terminal still needs: `PLAINKEEP_HOME` (maybe) and the search switches
 
-The interpreter is handled for you. Two things still must reach the agent's shell:
+The interpreter is handled for you. Two things must be in place:
 
-- **`PLAINKEEP_HOME`** — so `plainkeep` and its venv resolve to *your* vault, not a default.
+- **`PLAINKEEP_HOME`** — so `plainkeep` and its venv resolve to *your* vault, not a default (only if the registry default or a marker walk-up would pick the wrong vault).
 - **`search.vectors` / `search.rerank`** — the opt-in switches that turn the vector/rerank arms *on* at
   query time. The venv makes them importable; these make search *use* them. Set them once in the host
   config file, `~/.config/plainkeep/config.toml` (or `$XDG_CONFIG_HOME/plainkeep/`):
@@ -98,7 +98,7 @@ The interpreter is handled for you. Two things still must reach the agent's shel
   CLI flag, then environment (`PLAINKEEP_VECTORS=1` / `PLAINKEEP_RERANK=1`, which still override), then the
   file, then the default. The same file holds `models.enrich`, `models.triage` and `ollama.host`.
 
-An interactive login shell sources `~/.zshrc`, so these are already present.
+An interactive login shell sources `~/.zshrc`, so any exports you chose to keep are already present.
 
 An agent terminal frequently is not. It builds its own environment per session and may source only
 bash profiles (`~/.profile`, `~/.bash_profile`), which on a zsh-only Mac often don't exist.
@@ -171,7 +171,7 @@ If a check fails:
 | Symptom | Fix |
 |---|---|
 | `plainkeep setup search` reports `blocked` | Run the exact command in its `next` field (e.g. install ollama). |
-| `plainkeep doctor` prints `PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3` | The venv wasn't created or is missing deps. Re-run `plainkeep setup search --approved` (or preview with `--dry-run`). |
+| `plainkeep doctor` prints `PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3` (or `search.vectors = true in <path> but lancedb is NOT importable`) | The venv wasn't created or is missing deps. Re-run `plainkeep setup search --approved` (or preview with `--dry-run`). |
 
 `plainkeep index` still succeeds keyword-only. It never crashes on a missing vector plane. That graceful
 fallback is by design — see the CHANGELOG / issue #3.

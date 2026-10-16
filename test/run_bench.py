@@ -2,8 +2,8 @@
 """
 run_bench.py — the retrieval bench (v2 plan step 0.0): one fixed set of queries, run against the REAL
 search engine (bin/lib/indexlib.py) in up to three modes, reported as recall@5 / recall@10 / MRR per
-tag. It measures; it does not judge. `test/bench/gates.json` ships EMPTY, so today a green run means
-"the harness works", not "retrieval is good". Later stages (0.1 Unicode tokens, 0.2 stemming, 0.3
+tag. It measures, and judges only what `test/bench/gates.json` lists (one gate today: keyword · hu ·
+recall@5 >= 0.6, since step 0.1); every other number is reported, not enforced. Later stages (0.1 Unicode tokens, 0.2 stemming, 0.3
 wider content root, ...) each move a number here and then add a gate that keeps it moved.
 
   keyword        FTS5 BM25 + one-hop link graph. The DEFAULT (and what run_all.py runs).

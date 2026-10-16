@@ -1,0 +1,412 @@
+{
+  "commit": "8f93e19",
+  "content_root": "wiki",
+  "gates": [
+    {
+      "metric": "recall@5",
+      "min": 0.6,
+      "mode": "keyword",
+      "since": "0.1",
+      "status": "pass",
+      "tag": "hu",
+      "value": 0.75
+    }
+  ],
+  "modes": {
+    "keyword": {
+      "by_tag": {
+        "deep": {
+          "mrr": 0.375,
+          "n": 5,
+          "recall@10": 1.0,
+          "recall@5": 0.8
+        },
+        "en": {
+          "mrr": 0.185,
+          "n": 19,
+          "recall@10": 0.632,
+          "recall@5": 0.421
+        },
+        "exact": {
+          "mrr": 0.26,
+          "n": 4,
+          "recall@10": 1.0,
+          "recall@5": 0.75
+        },
+        "hu": {
+          "mrr": 0.667,
+          "n": 8,
+          "recall@10": 0.75,
+          "recall@5": 0.75
+        },
+        "hu-exact": {
+          "mrr": 0.889,
+          "n": 6,
+          "recall@10": 1.0,
+          "recall@5": 1.0
+        },
+        "hu-inflect": {
+          "mrr": 0.0,
+          "n": 2,
+          "recall@10": 0.0,
+          "recall@5": 0.0
+        },
+        "journal": {
+          "mrr": 0.0,
+          "n": 3,
+          "recall@10": 0.0,
+          "recall@5": 0.0
+        },
+        "paraphrase": {
+          "mrr": 0.181,
+          "n": 3,
+          "recall@10": 1.0,
+          "recall@5": 0.667
+        },
+        "superseded": {
+          "mrr": 0.2,
+          "n": 3,
+          "recall@10": 1.0,
+          "recall@5": 0.333
+        },
+        "task": {
+          "mrr": 0.0,
+          "n": 4,
+          "recall@10": 0.0,
+          "recall@5": 0.0
+        }
+      },
+      "overall": {
+        "mrr": 0.328,
+        "n": 27,
+        "recall@10": 0.667,
+        "recall@5": 0.519
+      },
+      "per_query": [
+        {
+          "id": "hu-01",
+          "rank": 3,
+          "top5": [
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
+            "wiki/notes/ugyfel-bevezetes-ellenorzolista.md"
+          ]
+        },
+        {
+          "id": "hu-02",
+          "rank": 1,
+          "top5": [
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/notes/ugyfel-bevezetes-ellenorzolista.md",
+            "wiki/notes/szerzodes-kotberes-megjegyzesek.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md"
+          ]
+        },
+        {
+          "id": "hu-03",
+          "rank": 1,
+          "top5": [
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/notes/atalanyado-es-afa.md",
+            "wiki/notes/ado-hataridok-naptar.md"
+          ]
+        },
+        {
+          "id": "hu-04",
+          "rank": 1,
+          "top5": [
+            "wiki/notes/atalanyado-es-afa.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/areas/invoicing-and-tax.md",
+            "wiki/notes/ado-hataridok-naptar.md",
+            "wiki/notes/tax-filing-calendar.md"
+          ]
+        },
+        {
+          "id": "hu-05",
+          "rank": 1,
+          "top5": [
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/people/nagy-eszter.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md"
+          ]
+        },
+        {
+          "id": "hu-06",
+          "rank": 1,
+          "top5": [
+            "wiki/people/nagy-eszter.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/projects/webhook-relay.md"
+          ]
+        },
+        {
+          "id": "hu-07",
+          "rank": null,
+          "top5": [
+            "wiki/notes/szerzodes-kotberes-megjegyzesek.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md"
+          ]
+        },
+        {
+          "id": "hu-08",
+          "rank": null,
+          "top5": []
+        },
+        {
+          "id": "deep-01",
+          "rank": 5,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/client-onboarding-checklist.md",
+            "wiki/areas/engineering-practice.md",
+            "wiki/runbooks/postgres-failover-runbook.md"
+          ]
+        },
+        {
+          "id": "deep-02",
+          "rank": 5,
+          "top5": [
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/research/queue-backend-comparison.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
+          ]
+        },
+        {
+          "id": "deep-03",
+          "rank": 3,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/research/queue-backend-comparison.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
+          ]
+        },
+        {
+          "id": "deep-04",
+          "rank": 1,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/decision-fly-io-for-staging.md"
+          ]
+        },
+        {
+          "id": "deep-05",
+          "rank": 7,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/areas/engineering-practice.md"
+          ]
+        },
+        {
+          "id": "task-01",
+          "rank": null,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md"
+          ]
+        },
+        {
+          "id": "task-02",
+          "rank": null,
+          "top5": [
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/decision-fly-io-for-staging.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
+          ]
+        },
+        {
+          "id": "task-03",
+          "rank": null,
+          "top5": []
+        },
+        {
+          "id": "task-04",
+          "rank": null,
+          "top5": [
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-fly-io-for-staging.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/research/queue-backend-comparison.md"
+          ]
+        },
+        {
+          "id": "journal-01",
+          "rank": null,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-fly-io-for-staging.md",
+            "wiki/areas/engineering-practice.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/decision-pandoc-invoice-pipeline.md"
+          ]
+        },
+        {
+          "id": "journal-02",
+          "rank": null,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/areas/engineering-practice.md"
+          ]
+        },
+        {
+          "id": "journal-03",
+          "rank": null,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-fly-io-for-staging.md",
+            "wiki/notes/decision-invoice-ninja-for-invoicing.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/runbooks/postgres-failover-runbook.md"
+          ]
+        },
+        {
+          "id": "superseded-01",
+          "rank": 7,
+          "top5": [
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/notes/decision-fly-io-for-staging.md"
+          ]
+        },
+        {
+          "id": "superseded-02",
+          "rank": 8,
+          "top5": [
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-fly-io-for-staging.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/runbooks/postgres-failover-runbook.md"
+          ]
+        },
+        {
+          "id": "superseded-03",
+          "rank": 3,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-invoice-ninja-for-invoicing.md",
+            "wiki/notes/decision-pandoc-invoice-pipeline.md",
+            "wiki/notes/vat-reverse-charge-notes.md",
+            "wiki/notes/invoice-payment-deadlines.md"
+          ]
+        },
+        {
+          "id": "unanswerable-01",
+          "rank": null,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/research/queue-backend-comparison.md"
+          ]
+        },
+        {
+          "id": "unanswerable-02",
+          "rank": null,
+          "top5": [
+            "wiki/notes/decision-invoice-ninja-for-invoicing.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/decision-pandoc-invoice-pipeline.md",
+            "wiki/notes/invoice-payment-deadlines.md",
+            "wiki/projects/webhook-relay.md"
+          ]
+        },
+        {
+          "id": "unanswerable-03",
+          "rank": null,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/client-onboarding-checklist.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md"
+          ]
+        },
+        {
+          "id": "exact-01",
+          "rank": 8,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/webhook-retry-policy.md",
+            "wiki/research/queue-backend-comparison.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
+          ]
+        },
+        {
+          "id": "exact-02",
+          "rank": 3,
+          "top5": [
+            "wiki/notes/client-onboarding-checklist.md",
+            "wiki/notes/code-review-checklist.md",
+            "wiki/notes/offboarding-clients-steps.md",
+            "wiki/notes/client-communication-checklist.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md"
+          ]
+        },
+        {
+          "id": "exact-03",
+          "rank": 3,
+          "top5": [
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/release-freeze-windows.md",
+            "wiki/notes/code-review-checklist.md",
+            "wiki/research/queue-backend-comparison.md"
+          ]
+        },
+        {
+          "id": "exact-04",
+          "rank": 4,
+          "top5": [
+            "wiki/notes/vat-reverse-charge-notes.md",
+            "wiki/notes/invoice-payment-deadlines.md",
+            "wiki/notes/vat-deadlines-reminder.md",
+            "wiki/notes/tax-filing-calendar.md",
+            "wiki/notes/atalanyado-es-afa.md"
+          ]
+        }
+      ],
+      "status": "ran",
+      "unanswerable": {
+        "empty_top5": 0,
+        "n": 3
+      }
+    }
+  },
+  "queries": 30,
+  "schema": "plainkeep.bench/1",
+  "source": "fixture"
+}

@@ -6,7 +6,14 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ## [Unreleased]
 
-_Nothing yet._
+### Added
+- **Retrieval bench (v2 step 0.0): `test/run_bench.py`.** A fixed set of 30 queries (Hungarian exact and inflected forms, answers deep inside long notes, tasks, journal days, superseded decisions, unanswerable questions, exact titles and aliases) scored against a fixture vault through the real `indexlib` in keyword mode by default (hybrid and hybrid+rerank are opt-in via `--modes all`), reported as recall@5, recall@10 and MRR per tag. `baseline.json` records the keyword numbers so each later retrieval change can show what it moved, and `test/bench/gates.json` holds one gate so far: Hungarian keyword recall@5 ≥ 0.6, added with the Unicode-token fix below. `--vault PATH` runs your own queries against a real vault, read-only. Private queries go in `test/bench/queries.private.json`, which is gitignored.
+
+### Fixed
+- **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
+  pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found
+  nothing. Tokens are now Unicode word characters, the FTS5 `unicode61` tokenizer folds diacritics so
+  `ugyfel` also matches, and a query with no usable token returns no hits.
 
 ## [4.0.8] — 2026-08-18
 

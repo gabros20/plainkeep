@@ -1,6 +1,6 @@
 {
   "verb": "models",
-  "summary": "download/offload/test surface for the model layer: list|status|stop|pull|test per stage (stt, ocr, vlm, enrich, embed, rerank)",
+  "summary": "download/offload/test surface for the model layer: list|status|stop|pull|test per stage (stt, ocr, vlm, enrich, triage, embed, rerank)",
   "usage": "plainkeep models list | status | stop [--all] [<model>] | pull [--stage <s>|--all] --yes | test <stage> [--model <m>] [--input <file>] --yes",
   "risk": "safe_write",
   "args": [
@@ -53,7 +53,7 @@
       "summary": "download a stage's model (can be gigabytes); needs --yes",
       "risk": "confirm",
       "args": [
-        { "name": "--stage", "type": "enum", "required": false, "enum": ["stt", "ocr", "vlm", "enrich", "embed", "rerank"], "help": "which stage's model to pull (omit with --all)" },
+        { "name": "--stage", "type": "enum", "required": false, "enum": ["stt", "ocr", "vlm", "enrich", "triage", "embed", "rerank"], "help": "which stage's model to pull (omit with --all)" },
         { "name": "--all", "type": "flag", "required": false, "help": "pull every ollama-managed stage's model" }
       ]
     },
@@ -62,7 +62,7 @@
       "summary": "run a stage's model on a sample/--input and print output + timing; needs --yes",
       "risk": "confirm",
       "args": [
-        { "name": "stage", "type": "enum", "required": true, "enum": ["stt", "ocr", "vlm", "enrich", "embed", "rerank"], "help": "which stage to test" },
+        { "name": "stage", "type": "enum", "required": true, "enum": ["stt", "ocr", "vlm", "enrich", "triage", "embed", "rerank"], "help": "which stage to test" },
         { "name": "--model", "type": "string", "required": false, "help": "override the stage's configured model (A/B a candidate)" },
         { "name": "--input", "type": "path", "required": false, "help": "input file (required for stt/ocr/vlm)" }
       ]

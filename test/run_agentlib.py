@@ -41,6 +41,14 @@ def main() -> int:
     check("unknown agent → available but run_agent None", ag.available() and ag.run_agent("x") is None)
     os.environ.pop("PLAINKEEP_AGENT")
 
+    check("triage default model is gemma4:e2b", ag.triage_model() == "gemma4:e2b", ag.triage_model())
+    os.environ["PLAINKEEP_AGENT"] = "ollama"
+    check("ollama agent runs the triage default", ag._command("p", "read") == ["ollama", "run", "gemma4:e2b", "p"])
+    os.environ["PLAINKEEP_AGENT_MODEL"] = "custom:1b"
+    check("PLAINKEEP_AGENT_MODEL overrides the triage model", ag._command("p", "read")[2] == "custom:1b")
+    for k in ("PLAINKEEP_AGENT", "PLAINKEEP_AGENT_MODEL"):
+        os.environ.pop(k)
+
     with tempfile.TemporaryDirectory() as td:
         scr = Path(td) / "fake.sh"; scr.write_text('#!/usr/bin/env bash\necho task\n'); scr.chmod(0o755)
         os.environ["PLAINKEEP_AGENT_CMD"] = str(scr)

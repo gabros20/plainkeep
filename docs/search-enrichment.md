@@ -35,7 +35,7 @@ ollama pull gemma4:e4b              # default — EN + Hungarian (140+ languages
 > enrichment works in your shell but not from an agent terminal, see
 > [`docs/agent-terminal-search.md`](agent-terminal-search.md).
 
-Pick a different model with `PLAINKEEP_ENRICH_MODEL`:
+Pick a different model with `PLAINKEEP_ENRICH_MODEL` (or `models.enrich` in `~/.config/plainkeep/config.toml`; the environment variable wins):
 
 | Model | When |
 |---|---|

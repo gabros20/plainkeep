@@ -79,3 +79,6 @@ cli/node_modules/
 
 # real-vault bench queries (see test/run_bench.py --vault)
 test/bench/*.private.json
+
+# one-run-per-checkout lock (test/run_all.py)
+test/.run_all.lock

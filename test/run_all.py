@@ -6,17 +6,38 @@ Covers: guardrail (§5), jobs registry (§15), sweep decay machine (§9.4), wiki
 and searchability/vector analysis (§10.2). The LLM-operator simulation (run_simulation.py) is
 separate because it needs a model and network.
 
-Usage:  python3 test/run_all.py
+Usage:  python3 test/run_all.py [--suite PATH ...] [--lock PATH]
+
+Harness guarantees (v2 0.14) — a run can no longer pile up, hang forever or outlive its parent:
+  * each suite runs in its own process group with a timeout (default 600 s; a third SUITES tuple
+    element overrides per suite; PLAINKEEP_TEST_TIMEOUT=<seconds> overrides everything). A timeout
+    is a FAIL whose summary line names the suite and the elapsed seconds.
+  * the whole group is killed (TERM, then KILL after 5 s) on timeout, on SIGINT/SIGTERM to this
+    process, and — with a SUITE-NOTE — when a suite returns while a grandchild is still alive.
+  * one run per checkout: a non-blocking flock on test/.run_all.lock; a second concurrent run
+    exits 2 naming the holder's PID. Different worktrees have different locks.
+  * `--suite PATH` (repeatable) runs ONLY those scripts instead of SUITES, skipping the seal gate;
+    `--lock PATH` moves the lock file. Both exist for test/run_harness.py, which drives this runner
+    over fixture suites (the outer run holds the default lock, so the inner run needs its own).
 """
 from __future__ import annotations
+import argparse
+import fcntl
+import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 GREEN, RED, BOLD, DIM, RESET = "\033[32m", "\033[31m", "\033[1m", "\033[2m", "\033[1m\033[0m"
+DEFAULT_TIMEOUT = 600.0
+KILL_GRACE = 5.0
+LOCK_FILE = HERE / ".run_all.lock"
 
+# (label, script) or (label, script, timeout_seconds) — the optional third element overrides DEFAULT_TIMEOUT.
 SUITES = [
     ("guardrail model (§5)", "run_deterministic.py"),
     ("guardrail enforcement (§5)", "run_guardrail.py"),
@@ -78,6 +99,7 @@ SUITES = [
     ("setup layers verb", "run_setup_layers.py"),
     ("enrichment pipeline wiring", "run_enrich_pipeline.py"),
     ("ui release gates: version three-way + bun floor (Phase 2 Task 7)", "run_uirelease.py"),
+    ("test harness: timeout, process groups, lock, env isolation (v2 0.14)", "run_harness.py"),
 ]
 
 
@@ -126,7 +148,7 @@ def _unsealed() -> list[str]:
     a `run_*.py` helper that is not a suite would have failed the whole batch for not being one.
     Neither case exists today; the point of a gate is the case that does not exist yet."""
     out = []
-    for _, script in SUITES:
+    for _, script, *_rest in SUITES:
         f = HERE / script
         if not f.is_file():
             out.append(f"{script} (listed in SUITES but not on disk)")
@@ -137,37 +159,148 @@ def _unsealed() -> list[str]:
     return out
 
 
+def _timeout_for(spec_timeout: float | None) -> float:
+    env = os.environ.get("PLAINKEEP_TEST_TIMEOUT")
+    if env:
+        return float(env)
+    return spec_timeout if spec_timeout is not None else DEFAULT_TIMEOUT
+
+
+def _group_alive(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False        # macOS answers EPERM for a group that is only unreaped zombies
+
+
+def _kill_group(pgid: int) -> None:
+    """TERM the whole group, wait up to KILL_GRACE for it to empty, then KILL."""
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        return
+    deadline = time.monotonic() + KILL_GRACE
+    while time.monotonic() < deadline and _group_alive(pgid):
+        time.sleep(0.1)
+    if _group_alive(pgid):
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+_current_pgid: int | None = None
+
+
+def _on_signal(signum, _frame):
+    if _current_pgid is not None:
+        _kill_group(_current_pgid)
+    print(f"\n{RED}run_all interrupted (signal {signum}); suite process group killed\033[0m", flush=True)
+    raise SystemExit(128 + signum)
+
+
+def _run_suite(script: Path, timeout: float) -> tuple[bool, str, str, list[str]]:
+    """Run one suite in its own session. Returns (ok, stdout, stderr, extra summary notes)."""
+    global _current_pgid
+    t0 = time.monotonic()
+    proc = subprocess.Popen([sys.executable, str(script)], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, start_new_session=True)
+    pgid = proc.pid                       # start_new_session: the child leads its own group
+    _current_pgid = pgid
+    notes: list[str] = []
+    try:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            elapsed = time.monotonic() - t0
+            _kill_group(pgid)
+            try:
+                out, err = proc.communicate(timeout=KILL_GRACE)
+            except subprocess.TimeoutExpired:
+                out, err = "", ""
+            notes.append(f"TIMEOUT: {script.name} killed after {elapsed:.1f}s (limit {timeout:g}s)")
+            return False, out or "", err or "", notes
+        if _group_alive(pgid):
+            _kill_group(pgid)
+            notes.append(f"SUITE-NOTE: {script.name} leaked a process; its group was killed")
+        return proc.returncode == 0, out, err, notes
+    finally:
+        _current_pgid = None
+
+
+def _acquire_lock(path: Path):
+    """Non-blocking exclusive flock; returns the open file (hold it) or None if another run has it."""
+    fd = open(path, "a+")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fd.seek(0)
+        holder = fd.read().strip() or "unknown"
+        print(f"run_all: another run holds {path} (PID {holder}); refusing to start a second one "
+              "in this checkout.", file=sys.stderr)
+        fd.close()
+        return None
+    fd.seek(0)
+    fd.truncate()
+    fd.write(f"{os.getpid()}\n")
+    fd.flush()
+    return fd
+
+
 def main() -> int:
-    unsealed = _unsealed()
-    if unsealed:
-        print(f"{BOLD}{RED}NOT HERMETIC\033[0m — these suites never call lib.hermetic.seal(), so a "
-              "plainkeep invocation in them with no PLAINKEEP_HOME resolves to the developer's REAL "
-              "vault:")
-        for name in unsealed:
-            print(f"  - {name}")
-        print("\nAdd, after the imports:\n"
-              f"    {SEAL_IMPORT}\n"
-              f"    {SEAL_CALL}   # hermetic: an empty throwaway registry, never the developer's "
-              "real vault\n")
-        return 1
+    ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--suite", action="append", default=[], metavar="PATH",
+                    help="run only these suite scripts (repeatable); skips the seal gate")
+    ap.add_argument("--lock", default=str(LOCK_FILE), metavar="PATH")
+    args = ap.parse_args()
+
+    lock = _acquire_lock(Path(args.lock))
+    if lock is None:
+        return 2
+    signal.signal(signal.SIGINT, _on_signal)
+    signal.signal(signal.SIGTERM, _on_signal)
+
+    if args.suite:
+        suites = [(Path(p).name, Path(p).resolve(), None) for p in args.suite]
+    else:
+        suites = [(label, HERE / script, (rest[0] if rest else None))
+                  for label, script, *rest in SUITES]
+        unsealed = _unsealed()
+        if unsealed:
+            print(f"{BOLD}{RED}NOT HERMETIC\033[0m — these suites never call lib.hermetic.seal(), so a "
+                  "plainkeep invocation in them with no PLAINKEEP_HOME resolves to the developer's REAL "
+                  "vault:")
+            for name in unsealed:
+                print(f"  - {name}")
+            print("\nAdd, after the imports:\n"
+                  f"    {SEAL_IMPORT}\n"
+                  f"    {SEAL_CALL}   # hermetic: an empty throwaway registry, never the developer's "
+                  "real vault\n")
+            return 1
 
     print(f"\033[1m{'='*60}\nOffline design-validation suites\n{'='*60}\033[0m\n")
     statuses = []
-    for label, script in SUITES:
-        proc = subprocess.run([sys.executable, str(HERE / script)], capture_output=True, text=True)
-        sys.stdout.write(proc.stdout)
-        if proc.stderr:
-            sys.stdout.write(proc.stderr)
-        ok = proc.returncode == 0
-        statuses.append((label, ok, _suite_notes(proc.stdout)))
+    for label, script, spec_timeout in suites:
+        ok, out, err, extra = _run_suite(script, _timeout_for(spec_timeout))
+        sys.stdout.write(out)
+        if err:
+            sys.stdout.write(err)
+        # Timeouts are FAIL lines; a leak note rides along like any SUITE-NOTE.
+        tmo = [n for n in extra if n.startswith("TIMEOUT:")]
+        notes = _suite_notes(out) + [n.split(SUITE_NOTE_PREFIX, 1)[1].strip()
+                                     for n in extra if n.startswith(SUITE_NOTE_PREFIX)]
+        statuses.append((label, ok, notes, tmo))
         print(f"\033[2m{'-'*60}\033[0m\n")
 
     print("\033[1mSUMMARY\033[0m")
     allok = True
-    for label, ok, notes in statuses:
+    for label, ok, notes, tmo in statuses:
         allok = allok and ok
         mark = f"{GREEN}PASS\033[0m" if ok else f"{RED}FAIL\033[0m"
         print(f"  {mark}  {label}")
+        for t in tmo:
+            print(f"        {RED}{t}\033[0m")
         for note in notes:
             print(f"        \033[33m! {note}\033[0m")
     print()

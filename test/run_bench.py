@@ -6,9 +6,12 @@ tag. It measures; it does not judge. `test/bench/gates.json` ships EMPTY, so tod
 "the harness works", not "retrieval is good". Later stages (0.1 Unicode tokens, 0.2 stemming, 0.3
 wider content root, ...) each move a number here and then add a gate that keeps it moved.
 
-  keyword        FTS5 BM25 + one-hop link graph. Always runs.
-  hybrid         + LanceDB vectors. Skipped (loudly) without lancedb or a working embedder.
-  hybrid+rerank  + the cross-encoder. Skipped without the reranker.
+  keyword        FTS5 BM25 + one-hop link graph. The DEFAULT (and what run_all.py runs).
+  hybrid         + LanceDB vectors. Opt-in; skipped (loudly) without lancedb or a working embedder.
+  hybrid+rerank  + the cross-encoder. Opt-in; skipped without the reranker.
+
+Hybrid modes embed the whole vault and cost several CPU cores, so they run only when asked for:
+`--modes keyword,hybrid,hybrid+rerank` or `--modes all`.
 
 How it indexes: a temp copy of the vault is the whole world. PLAINKEEP_HOME points at the copy and
 `indexlib.index()` runs with NO root argument, so `CONTENT`'s default is what gets indexed: today
@@ -17,7 +20,8 @@ vault is only ever READ (`--vault`), never used as PLAINKEEP_HOME, because `conn
 `.index/` and `log_query` writes `.logs/` under it.
 
 Usage:
-  python3 test/run_bench.py                          # fixture vault, all modes, tables
+  python3 test/run_bench.py                          # fixture vault, keyword mode, tables
+  python3 test/run_bench.py --modes all              # + hybrid and hybrid+rerank (heavy; opt-in)
   python3 test/run_bench.py --json                   # one JSON object on stdout, nothing else
   python3 test/run_bench.py --modes keyword --write-baseline
   python3 test/run_bench.py --vault PATH             # the HUMAN's command; agents never run it on a real vault
@@ -436,8 +440,8 @@ def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(description="Retrieval bench (v2 plan step 0.0).")
     ap.add_argument("--vault", help="bench a REAL vault, read-only (the human's command)")
     ap.add_argument("--queries", help="queries file for --vault (default test/bench/queries.private.json)")
-    ap.add_argument("--modes", help="comma list of keyword,hybrid,hybrid+rerank "
-                                    "(default: all for the fixture, keyword for --vault)")
+    ap.add_argument("--modes", help="comma list of keyword,hybrid,hybrid+rerank, or `all` "
+                                    "(default: keyword; the hybrid modes embed and are opt-in)")
     ap.add_argument("--json", action="store_true", help="one JSON object on stdout, nothing else")
     ap.add_argument("--write-baseline", action="store_true", help="record test/bench/baseline.json (fixture only)")
     ap.add_argument("--report-only", action="store_true", help="a failed gate does not fail the run")
@@ -448,11 +452,13 @@ def main(argv: list[str]) -> int:
         return _usage("--write-baseline is refused with --vault (the baseline is fixture-only)")
     if a.modes:
         modes_wanted = [m.strip() for m in a.modes.split(",") if m.strip()]
+        if modes_wanted == ["all"]:
+            modes_wanted = list(MODES)
         unknown = [m for m in modes_wanted if m not in MODES]
         if unknown or not modes_wanted:
             return _usage(f"unknown mode(s) {unknown or a.modes!r}; choose from {', '.join(MODES)}")
     else:
-        modes_wanted = ["keyword"] if vault_mode else list(MODES)
+        modes_wanted = ["keyword"]
     modes_wanted = [m for m in MODES if m in modes_wanted]
 
     if vault_mode:

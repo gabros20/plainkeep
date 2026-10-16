@@ -60,6 +60,9 @@ correctness and linting (0.9, 0.10, 0.6, 0.12, 0.13, 0.15), the consent flag (0.
 configuration (0.5), then MCP (0.8), then
 docs last (0.7, 0.11), so the docs describe the finished state.
 
+**Status (2026-10-16):** 0.0–0.16 have landed on `feat/v2-stage0-rest`; the follow-ups found while
+landing them are listed before the Stage 0 exit line.
+
 ### 0.0 Retrieval bench harness
 - **What:** Add `test/bench/queries.json` (JSON, stdlib only — decision D1) with entries of the form `{query, expected: [paths],
   tags}`. Add `test/run_bench.py`, which reports recall@5, recall@10 and MRR per mode (`keyword`,
@@ -323,6 +326,25 @@ asserts is that **a human approved this exact action**. `--approved` says that.
 - Fix the contradiction in the mobile guide.
 - `docs/README.md`: link this plan and the v2 design.
 
+### Stage 0 follow-ups (found while landing it, 2026-10-16)
+Not blockers for the exit line. Each names the step that should absorb it.
+- **0.10 Done-when:** "`~/plainkeep` is clean" was not checked by the lane (the real vault is off
+  limits to workers). The owner or controller runs `plainkeep doctor` on it.
+- **0.3 → B10:** with `--collection`, the vector arm filters after the ANN cut (x5 over-fetch), so a
+  small collection can under-fill. B10's `where` on a stored column fixes it; until then it is
+  documented in `docs/agent-terminal-search.md`.
+- **0.2 → B5/B6:** prefix-only hits always rank below exact-only hits (they enter at half weight and get
+  no graph expansion), so hu-inflect R@5 is 0.5 on the widened corpus. Revisit once fusion is reworked.
+- **A1:** `open._indexed_file` ignores a custom `PLAINKEEP_CONTENT` path and falls back to a stem lookup.
+- **0.14:** `test/run_setup.py` "valid older ref" depends on `HEAD~3` of the checkout and fails on some
+  merge histories. Pin a fixture ref instead.
+- **0.15 / machine contract:** `plainkeep job status --json` prints more than one JSON document; it must
+  print one envelope.
+- **Plugin API:** `_api_ok` compares versions as floats (`"1.10" == "1.1"`). Switch to integer tuples
+  before API 1.10.
+- **Completion:** scalar verbs such as `search` get no flag-value completion (`--collection`,
+  `--limit`). Extend the provider lookup beyond compound verbs.
+
 **Stage 0 exit:** all Done-when lines hold, the bench baseline is recorded against the post-Stage 0
 numbers, and 4.1.0 is tagged.
 
@@ -442,6 +464,8 @@ numbers in the PR.
 ### B5 Exact tier
 - **What:** A slug, title or alias match ranks first regardless of fusion. Needs 0.13 so
   Hungarian titles have matchable slugs.
+- **Also (from 0.2):** prefix-only hits always rank below exact-only hits, which caps hu-inflect R@5 at
+  0.5 on the widened corpus. Decide whether an inflected-title match belongs in this tier.
 - **Done when:** the exact-title subset has MRR = 1.0 in every mode.
 
 ### B6 Fused graph seeding
@@ -452,6 +476,10 @@ numbers in the PR.
   and `redis-streams` rank #1–2 even for unrelated queries. Two causes add up:
   - `_fts_query` ORs every token, stopwords included, so nearly every note is a keyword hit.
   - The graph arm then boosts the best-linked hubs.
+- **Bench evidence, after Stage 0:** the graph arm adds `0.5/(60+i)` per seed, so a hub linked from
+  many task and journal notes tops unrelated queries (`wiki/projects/webhook-relay.md` is #1 for
+  task-01, journal-01 and task-04). Take the max over seeds per target, or cap the per-target sum,
+  instead of summing.
 - **Add to this step:**
   - Drop a small bilingual stopword set (EN + HU: `a`, `az`, `és`, `the`, `of`…) from the
     query's OR list, unless the query is nothing but stopwords.

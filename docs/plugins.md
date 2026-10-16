@@ -42,7 +42,7 @@ Fill in `summary`, `usage`, `risk`, `reads`/`writes`, `output`, and `hints`. See
 
 ### Import only the SDK
 
-A plugin imports **one** module: `lib.api`. It's frozen at `PLAINKEEP_API_VERSION = "1.0"`.
+A plugin imports **one** module: `lib.api`. It's frozen at the 1.x contract (`PLAINKEEP_API_VERSION = "1.1"`; 1.1 added `slugify_folded` — a plugin that needs it declares `"api": ">=1.1,<2"`, and one that must also run on a 1.0 engine uses `getattr(api, "slugify_folded", api.slugify)`).
 
 Everything else in `bin/lib/` is private and may change without notice. The scaffold imports `lib.api`
 and nothing else — everything you'd have reached into `lib.paths` for is re-exported (`api.WIKI`,

@@ -37,7 +37,7 @@ def _split_table_row(line: str) -> list[str]:
         s = s[1:]
     if s.endswith("|"):
         s = s[:-1]
-    return [c.strip() for c in s.split("|")]
+    return [c.strip() for c in re.split(r"(?<!\\)\|", s)]   # an escaped `\|` stays inside its cell
 
 
 def _is_table_separator(line: str) -> bool:

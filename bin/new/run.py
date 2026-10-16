@@ -198,6 +198,11 @@ def main(argv):
     if not name:
         output.fail(output.EXIT_USAGE, "a name is required", verb="new")
     slug = paths.slugify(name)
+    legacy = paths.slugify_legacy(name)
+    if legacy != slug and legacy in _all_slugs():
+        output.fail(output.EXIT_UNEXPECTED,
+                    f"'{name}' already exists as '{legacy}' (its pre-accent-folding name) — "
+                    "slugs are unique (§10.1)", verb="new")
     if slug in _all_slugs():
         output.fail(output.EXIT_UNEXPECTED, f"slug '{slug}' already exists — slugs are unique (§10.1)", verb="new")
 

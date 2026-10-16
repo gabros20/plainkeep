@@ -60,8 +60,8 @@ def _plugin_overlay() -> dict | None:
     return o if isinstance(o, dict) else None
 
 
-_FENCE = re.compile(r"(?ms)^(```|~~~).*?^\1[^\n]*$")
-_ICODE = re.compile(r"`[^`\n]*`")
+_FENCE = re.compile(r"(?ms)^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[^\n]*$")
+_ICODE = re.compile(r"(`+)[^\n]*?\1")
 _WIKI_MD_LINK = re.compile(r"\[\[[^\]\n]+\]\]\([^)\s]*\)")
 
 
@@ -500,24 +500,28 @@ def main(argv):
     #   a committed symlink with an ABSOLUTE target outside the vault and the engine; it dangles on
     #   any other machine (or after the engine moves), and git carries it as if it were content.
     wiki_dir = paths.PLAINKEEP_HOME / "wiki"
-    if wiki_dir.is_dir():
+    scan = [d for d in (wiki_dir, paths.PLAINKEEP_HOME / "journal", paths.PLAINKEEP_HOME / "tasks") if d.is_dir()]
+    if scan:
         hits = []
-        for md in wiki_dir.rglob("*.md"):
-            try:
-                body = md.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            body = _FENCE.sub("", body)
-            body = _ICODE.sub("", body)
-            if _WIKI_MD_LINK.search(body):
-                hits.append(str(md.relative_to(paths.PLAINKEEP_HOME)))
+        for d in scan:
+            for md in d.rglob("*.md"):
+                try:
+                    body = md.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                body = _ICODE.sub("", _FENCE.sub("", body))
+                if _WIKI_MD_LINK.search(body):
+                    hits.append(str(md.relative_to(paths.PLAINKEEP_HOME)))
         if hits:
             shown = ", ".join(hits[:5]) + (f" (+{len(hits) - 5} more)" if len(hits) > 5 else "")
             warn(f"{len(hits)} note(s) use `[[x]](url)`, a wikilink wrapped as a markdown link: {shown} "
-                 "(write `[[x]]` or `[label](url)`)")
+                 "(write `[[x]]` or `[label](url)`; a citation like `[[1]](url)` also counts)")
         else:
-            ok("no `[[x]](url)` links in wiki notes")
-    roots = [Path(_real(paths.PLAINKEEP_HOME)), Path(_real(paths.ENGINE))]
+            ok("no `[[x]](url)` links in wiki, journal or tasks")
+    # inside = the vault or the engine, spelled raw OR resolved: the engine writes links through
+    # `…/engine/current/…` (a symlink), and a vault under /tmp resolves to /private/tmp.
+    roots = {Path(paths.PLAINKEEP_HOME), Path(_real(paths.PLAINKEEP_HOME)), Path(paths.ENGINE),
+             Path(_real(paths.ENGINE)), enginetree.install_root(), Path(_real(enginetree.install_root()))}
     stray = []
     for ln in paths.git("ls-files", "-s").splitlines():
         meta, _, rel = ln.partition("\t")
@@ -528,8 +532,9 @@ def main(argv):
         except OSError:
             continue
         if os.path.isabs(tgt):
-            real = Path(os.path.normpath(tgt))
-            if not any(real == r or r in real.parents for r in roots):
+            spelled = Path(os.path.normpath(tgt))
+            resolved = Path(os.path.realpath(tgt))
+            if not any(c == r or r in c.parents for c in (spelled, resolved) for r in roots):
                 stray.append(f"{rel} -> {tgt}")
     if stray:
         warn(f"{len(stray)} committed symlink(s) with an absolute target outside the vault and engine: "
@@ -547,7 +552,7 @@ def main(argv):
             title = paths.fm_field(md, "title").strip("\"' ")
             if title and not title.isascii() and paths.slugify(title) != md.stem \
                     and paths.slugify_legacy(title) == md.stem:
-                differ.append(f"{md.relative_to(wiki_dir)} -> {paths.slugify(title)}.md")
+                differ.append(f"{md.relative_to(paths.PLAINKEEP_HOME)} -> {paths.slugify(title)}.md")
         if differ:
             shown = "; ".join(differ[:5]) + (f" (+{len(differ) - 5} more)" if len(differ) > 5 else "")
             ok(f"info: {len(differ)} note name(s) predate accent-folding slugs and would differ now: {shown} "

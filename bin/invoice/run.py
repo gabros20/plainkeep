@@ -42,6 +42,10 @@ def main(argv):
             desc = argv[i + 1]; i += 2; continue
         i += 1
     hub = paths.WIKI / "clients" / f"{slug}.md"
+    if not hub.exists():     # a client created before accent-folding (v2 0.13) keeps its dropped-letter name
+        legacy = paths.slugify_legacy(argv[0])
+        if (paths.WIKI / "clients" / f"{legacy}.md").exists():
+            slug, hub = legacy, paths.WIKI / "clients" / f"{legacy}.md"
     if not hub.exists():
         output.fail(output.EXIT_UNEXPECTED,
                     f"no client '{slug}' (wiki/clients/{slug}.md). Create it: plainkeep new client \"{argv[0]}\"",

@@ -325,7 +325,7 @@ def case_pythonpath_scope() -> None:
         check("plugin spawn: PLAINKEEP_PLUGIN_PACK names the pack", d.get("pack") == "prober", str(d)[:300])
         check("plugin spawn: PYTHONPATH is exactly [deps, engine/bin]",
               d.get("before") == ["DEPS", "ENGINE_BIN"], str(d.get("before")))
-        check("plugin spawn: the SDK is importable and frozen at 1.0", d.get("api") == "1.0", str(d)[:200])
+        check("plugin spawn: the SDK is importable and on the 1.x contract (1.1)", d.get("api") == "1.1", str(d)[:200])
 
         # the MERGE with a caller's own value — prepended, never replaced
         d2 = _probe_output(vault, td, "v_probe", PYTHONPATH="/caller/one:/caller/two")

@@ -116,16 +116,33 @@ def case_link_lint(tmp: Path) -> None:
     check("link lint: clean vault has no link warnings",
           "[[x]](url)" in r.stdout and "wikilink wrapped" not in r.stdout and "absolute target" not in r.stdout, r.stdout)
     note(h, "notes/bad.md", "note", "Bad", "2026-01-01", "see [[other]](https://example.com/x)\n\n`[[code]](ignored)`")
+    (h / "journal").mkdir(exist_ok=True)
+    (h / "journal" / "2026-01-01.md").write_text("- cited [[1]](https://example.com)\n", encoding="utf-8")
+    note(h, "notes/fenced.md", "note", "Fenced", "2026-01-01",
+         "- item\n\n  ```\n  [[a]](u)\n  ```\n\n````\n```\n[[b]](u)\n```\n````\n\n`` [[c]](u) ``")
     note(h, "notes/fine.md", "note", "Fine", "2026-01-01", "see [[other]] and [label](https://example.com)")
     os.symlink("/usr/bin/env", h / "stray-link")
     os.symlink("../skills", h / "rel-link")
+    # inside, spelled through a symlink: the engine's own `current` link, and the vault via a second name
+    inst = tmp / "inst"
+    (inst / "engine" / "1.0.0" / "skills").mkdir(parents=True)
+    os.symlink("1.0.0", inst / "engine" / "current")
+    os.symlink(str(inst / "engine" / "current" / "skills"), h / "engine-skills-link")
+    os.symlink(str(tmp / "linklint" / "wiki"), h / "self-link")
     subprocess.run(["git", "-C", str(h), "add", "-A"], check=True)
     subprocess.run(["git", "-C", str(h), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], check=True)
-    r = run(h, "doctor")
+    os.environ["PLAINKEEP_ENGINE_HOME"] = str(inst)
+    try:
+        r = run(h, "doctor")
+    finally:
+        del os.environ["PLAINKEEP_ENGINE_HOME"]
     check("link lint: [[x]](url) warns, naming only the offending note",
-          "1 note(s) use `[[x]](url)`" in r.stdout and "notes/bad.md" in r.stdout and "notes/fine.md" not in r.stdout, r.stdout)
+          "2 note(s) use `[[x]](url)`" in r.stdout and "notes/bad.md" in r.stdout and "notes/fine.md" not in r.stdout, r.stdout)
+    check("link lint: also scans journal/, and ignores indented/4-backtick fences and double-backtick code",
+          "2 note(s) use" in r.stdout and "journal/2026-01-01.md" in r.stdout and "fenced.md" not in r.stdout, r.stdout)
     check("link lint: absolute symlink outside vault+engine warns, relative one does not",
-          "stray-link -> /usr/bin/env" in r.stdout and "rel-link" not in r.stdout, r.stdout)
+          "stray-link -> /usr/bin/env" in r.stdout and "rel-link" not in r.stdout
+          and "engine-skills-link" not in r.stdout and "self-link" not in r.stdout, r.stdout)
     check("link lint rows are advisory (doctor still exits 0)", r.returncode == 0, f"rc={r.returncode}")
 
 

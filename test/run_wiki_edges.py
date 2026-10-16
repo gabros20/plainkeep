@@ -56,12 +56,16 @@ def main() -> int:
     row = "| [[acme\\|Acme Corp]] | [[beta]] |"
     got = [wl.norm_link(t) for t in wl.LINK_RE.findall(row)]
     results.append(("table row targets", got == ["acme", "beta"], f"got {got}"))
-    results.append(("split_link label", wl.split_link("acme\\|Acme Corp") == ("acme", "Acme Corp"),
-                    f"got {wl.split_link('acme\\|Acme Corp')}"))
+    got_sl = wl.split_link("acme\\|Acme Corp")
+    results.append(("split_link label", got_sl == ("acme", "Acme Corp"), f"got {got_sl}"))
     sspec = importlib.util.spec_from_file_location("sharelib_t", ENG / "sharelib.py")
     sl = importlib.util.module_from_spec(sspec); sspec.loader.exec_module(sl)
     html_out = sl._md_inline("[[acme\\|Acme Corp]]", {"acme"})
     results.append(("share renders escaped-pipe link", html_out == '<a href="#note-acme">Acme Corp</a>', f"got {html_out}"))
+
+    tbl = sl.render_note_html("| Client | Note |\n|---|---|\n| [[acme\\|Acme Corp]] | ok |\n", {"acme"})
+    results.append(("share table: escaped pipe stays in its cell",
+                    tbl.count("<td>") == 2 and '<a href="#note-acme">Acme Corp</a>' in tbl, f"got {tbl}"))
 
     print(f"{BOLD}Wiki link-reliability edges{RESET} — {len(corpus['notes'])} notes, {len(results)} checks\n")
     passed = 0

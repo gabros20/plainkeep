@@ -11,8 +11,23 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 - **`plainkeep doctor` lints two link patterns (v2 step 0.10).** It warns, never fails, on `[[x]](url)` (a
   wikilink wrapped as a markdown link, which no renderer resolves) and on a committed symlink whose
   absolute target lies outside the vault and the engine (it dangles on any other machine).
+- **`api.slugify_folded`; plugin API 1.1 (v2 step 0.13).** `api.slugify` keeps its 1.0 behaviour (ADR-018),
+  so a plugin that finds its notes by `slugify(title)` keeps finding them. `PLAINKEEP_API_VERSION` is now
+  `"1.1"`; a plugin that needs the new export declares `"api": ">=1.1,<2"`.
+
+### Changed
+- **New slugs fold accents (v2 step 0.13).** `Ügyfél szerződés` becomes `ugyfel-szerzodes`, not
+  `gyf-l-szerz-d-s`, in every verb that names a file from a title. ASCII titles are byte-identical and
+  existing notes are never renamed; `doctor` lists, as information, the ones a fold would name differently.
+  `invoice` still finds a client created under its old name, and `new` refuses a name whose old form
+  already exists. `wiki canvas '#tag'` writes a non-ASCII tag's canvas under the folded name, so an
+  old dropped-letter `.canvas` file is left behind, not overwritten.
+- **`doctor`'s link lint also scans `journal/` and `tasks/` (v2 step 0.10),** and counts a symlink into the
+  engine (including through `current`) or into a vault under a symlinked path as inside.
 
 ### Fixed
+- **Escaped pipes survive a shared table (v2 step 0.9).** `share` split table rows on every `|`, so
+  `[[acme\|Acme Corp]]` in a cell became two cells and a dead link; it now splits on unescaped pipes.
 - **`[[slug\|label]]` in a table is a link to `slug` (v2 step 0.9).** The escaped pipe left a trailing
   backslash on the target, so the link counted as broken. One parser, `bin/lib/wikilink.py`, now serves
   the index, `wiki`, `render` and `share`.

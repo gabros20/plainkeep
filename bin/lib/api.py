@@ -24,7 +24,7 @@ from . import agent            # type: ignore
 from . import output           # type: ignore
 from . import pluginenv        # type: ignore
 
-PLAINKEEP_API_VERSION = "1.0"
+PLAINKEEP_API_VERSION = "1.1"
 
 # --- filesystem roots + helpers (paths essentials) ---------------------------------------------
 PLAINKEEP_HOME = paths.PLAINKEEP_HOME

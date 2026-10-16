@@ -17,8 +17,8 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   old wiki-relative form. `PLAINKEEP_CONTENT` still points the indexer at one custom tree. **The index
   schema changed.** The first command that opens the index migrates it in place: existing rows (and
   their vectors and embedding records) are renamed to `wiki/<path>`, so nothing is re-embedded, and
-  `status`/`orient` read "not built" until the next `plainkeep index`, which then reads tasks, journal
-  and inbox. If the in-place step fails the index is dropped instead and `plainkeep index` rebuilds
+  `status`/`orient` read "partial" until the next `plainkeep index`, which then reads tasks, journal
+  and inbox. The vector half is a durable step: if the process that migrates cannot load LanceDB, or dies halfway, a later one finishes it (idempotently). If the in-place step fails the index is dropped instead and `plainkeep index` rebuilds
   everything (a vault with vectors re-embeds, which takes hours; search returns no hits until then). Bench: task
   recall@5 0.0 to 0.75, journal 0.0 to 0.67.
 

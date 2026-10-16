@@ -87,6 +87,8 @@ def _vec_modules():
 
 def _embed_stale(con, rel: str, model: str) -> bool:
     """True if this file has no current-model embedding yet (newly enabled, or model switched)."""
+    if _meta_get(con, "vectors_prefix_pending"):
+        return True   # the stored vectors still carry pre-migration paths: `embedded` is not trustworthy
     r = con.execute("SELECT model FROM embedded WHERE path=?", (rel,)).fetchone()
     return (r is None) or (r[0] != model)
 
@@ -124,11 +126,41 @@ def _migrate_in_place(con: sqlite3.Connection) -> None:
         con.execute("UPDATE embedded SET path = 'wiki/' || path")
         con.execute("UPDATE notemeta SET path = 'wiki/' || path")
         con.execute("DELETE FROM meta WHERE key = 'last_index_ts'")   # --changed must not skip the new collections
+        # the vector half is a separate, durable step: if this process cannot load LanceDB, or dies before
+        # finishing it, a later process completes it (`_finish_vector_migration`)
+        con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('vectors_prefix_pending', 'wiki/')")
         con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema', ?)", (SCHEMA_VERSION,))
         con.commit()
     except Exception:
         con.rollback()
         raise
+
+
+def _finish_vector_migration(con: sqlite3.Connection) -> None:
+    """Complete the vector half of the in-place migration when the durable `vectors_prefix_pending`
+    flag is set: rewrite the LanceDB paths (idempotent), then clear the flag. If LanceDB cannot be
+    loaded by this process the flag stays for a later one; if the rewrite itself fails the vector table
+    is dropped and the embedding records cleared (a re-embed), then the flag is cleared. While the flag
+    is set `embedded` is not trusted (see `_embed_stale`, `pending_embeddings`)."""
+    prefix = _meta_get(con, "vectors_prefix_pending")
+    if not prefix:
+        return
+    try:
+        _, vs = _vec_modules()
+    except Exception:
+        vs = None
+    if not vs:
+        return
+    try:
+        vs.prefix_paths(prefix)
+    except Exception:
+        try:
+            vs.drop()
+        except Exception:
+            return   # cannot touch the store at all: keep the flag, try again later
+        con.execute("DELETE FROM embedded")
+    con.execute("DELETE FROM meta WHERE key = 'vectors_prefix_pending'")
+    con.commit()
 
 
 def _migrate(con: sqlite3.Connection) -> None:
@@ -137,6 +169,7 @@ def _migrate(con: sqlite3.Connection) -> None:
     the rebuild rule: drop the tables and vectors, and the next `plainkeep index` rebuilds them."""
     con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
     if _meta_get(con, "schema") == SCHEMA_VERSION:
+        _finish_vector_migration(con)   # a previous process may have migrated the rows but not the vectors
         return
     old = {n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     if old & {"chunks", "files"}:
@@ -149,19 +182,7 @@ def _migrate(con: sqlite3.Connection) -> None:
             except Exception:
                 migrated = False
             if migrated:
-                try:
-                    _, vs = _vec_modules()
-                    if vs:
-                        vs.prefix_paths("wiki/")
-                except Exception:  # vectors can't be rewritten: lexical stays, vectors are re-embedded
-                    try:
-                        _, vs = _vec_modules()
-                        if vs:
-                            vs.drop()
-                        con.execute("DELETE FROM embedded")
-                        con.commit()
-                    except Exception:
-                        pass
+                _finish_vector_migration(con)
                 return
         for t in ("chunks", "files", "links", "embedded", "notemeta"):
             con.execute(f"DROP TABLE IF EXISTS {t}")
@@ -400,6 +421,7 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
     """
     root = Path(root)
     con = connect()
+    _finish_vector_migration(con)
     started = time.time()
     last_ts = None
     if changed_only:

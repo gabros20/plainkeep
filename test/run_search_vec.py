@@ -129,6 +129,90 @@ def main() -> int:
                         and all(r["id"] == r["path"] for r in recs) and len(recs) == len(NOTES) - 1,
                         f"{[(r['id'], r['path']) for r in recs][:2]}"))
 
+        # 8) r2: the vector half of the in-place migration is durable and idempotent (v2 0.3 r2)
+        import sqlite3
+
+        def v1_setup():
+            """A schema-1 index (wiki-relative paths) whose Lance table holds the matching old-path vectors."""
+            vectorstore.drop()
+            vectorstore.add_batch([{"id": "notes/a.md", "path": "notes/a.md", "heading": "(note)",
+                                    "vector": [0.0] * embed.dim()}], embed.dim())
+            if indexlib.DB.exists():
+                indexlib.DB.unlink()
+            c = sqlite3.connect(indexlib.DB)
+            c.executescript("""
+                CREATE TABLE files(path TEXT PRIMARY KEY, hash TEXT);
+                CREATE VIRTUAL TABLE chunks USING fts5(path, heading, body, slug UNINDEXED);
+                CREATE TABLE links(src TEXT, dst TEXT);
+                CREATE TABLE embedded(path TEXT PRIMARY KEY, model TEXT);
+                CREATE TABLE notemeta(path TEXT PRIMARY KEY, author TEXT, derived_from TEXT);
+                CREATE TABLE meta(key TEXT PRIMARY KEY, value TEXT);
+                INSERT INTO files VALUES('notes/a.md','h');
+                INSERT INTO chunks VALUES('notes/a.md','(top)','body','a');
+                INSERT INTO embedded VALUES('notes/a.md','m');
+            """)
+            c.commit()
+            c.close()
+
+        def lance_paths():
+            return sorted(r["path"] for r in vectorstore.connect().open_table(vectorstore.TABLE).head(100).to_pylist())
+
+        def meta(key):
+            c = sqlite3.connect(indexlib.DB)
+            r = c.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+            c.close()
+            return r[0] if r else None
+
+        saved_content = os.environ.pop("PLAINKEEP_CONTENT", None)
+        real_vec_modules = indexlib._vec_modules
+        try:
+            # (a) the migrating process cannot load LanceDB: lexical half done, flag set, Lance untouched
+            v1_setup()
+            indexlib._vec_modules = lambda: (None, None)
+            indexlib.connect().close()
+            results.append(("no-lancedb migration: flag set, Lance paths untouched, embedded renamed",
+                            meta("vectors_prefix_pending") == "wiki/" and lance_paths() == ["notes/a.md"], f"{meta('vectors_prefix_pending')} {lance_paths()}"))
+            c = indexlib.connect()
+            stale = indexlib._embed_stale(c, "wiki/notes/a.md", "m")
+            c.close()
+            results.append(("while the flag is set `embedded` is not trusted", stale is True, str(stale)))
+            # a later process that can load LanceDB finishes it
+            indexlib._vec_modules = real_vec_modules
+            indexlib.connect().close()
+            results.append(("a later process with LanceDB completes the vector half and clears the flag",
+                            meta("vectors_prefix_pending") is None and lance_paths() == ["wiki/notes/a.md"], f"{meta('vectors_prefix_pending')} {lance_paths()}"))
+            # (b) crash between the halves: Lance already rewritten but the flag was never cleared
+            v1_setup()
+            indexlib._vec_modules = lambda: (None, None)
+            indexlib.connect().close()
+            indexlib._vec_modules = real_vec_modules
+            vectorstore.prefix_paths("wiki/")        # the update landed, then the process died
+            results.append(("crash case: flag still set after the Lance update", meta("vectors_prefix_pending") == "wiki/", ""))
+            indexlib.connect().close()
+            results.append(("crash case: re-running is idempotent (no wiki/wiki/) and clears the flag",
+                            meta("vectors_prefix_pending") is None and lance_paths() == ["wiki/notes/a.md"], f"{lance_paths()}"))
+            # (c) a failing rewrite falls back to a clean drop, never leaving stale paths trusted
+            v1_setup()
+            indexlib._vec_modules = lambda: (None, None)
+            indexlib.connect().close()
+            indexlib._vec_modules = real_vec_modules
+            real_prefix = vectorstore.prefix_paths
+            vectorstore.prefix_paths = lambda _p: (_ for _ in ()).throw(RuntimeError("boom"))
+            try:
+                indexlib.connect().close()
+            finally:
+                vectorstore.prefix_paths = real_prefix
+            c = sqlite3.connect(indexlib.DB)
+            n_emb = c.execute("SELECT COUNT(*) FROM embedded").fetchone()[0]
+            c.close()
+            results.append(("failed rewrite: vectors dropped, embedded cleared, flag cleared (a re-embed, not stale data)",
+                            meta("vectors_prefix_pending") is None and n_emb == 0 and vectorstore.count() == 0,
+                            f"emb={n_emb} count={vectorstore.count()}"))
+        finally:
+            indexlib._vec_modules = real_vec_modules
+            if saved_content is not None:
+                os.environ["PLAINKEEP_CONTENT"] = saved_content
+
     print(f"{BOLD}Stage-2 hybrid (LanceDB + EmbeddingGemma) — {len(results)} checks{RESET}\n")
     passed = 0
     for name, ok, detail in results:

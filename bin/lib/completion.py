@@ -13,6 +13,8 @@ word as `(value, description, kind)` triples. `kind` is `verb` | `action` | `enu
 """
 from __future__ import annotations
 
+import unicodedata
+
 from . import filing, manifest, notetype, paths  # type: ignore  # (namespace siblings)
 
 
@@ -31,7 +33,7 @@ def _tags():
     if paths.WIKI.exists():
         for p in paths.WIKI.rglob("*.md"):
             for t in paths.fm_list(p, "tags"):
-                n = t.strip().lstrip("#").strip().casefold()
+                n = unicodedata.normalize("NFC", t.strip()).lstrip("#").strip().casefold()
                 if n:
                     seen[n] = seen.get(n, 0) + 1
     return [(t, f"{seen[t]} note(s)") for t in sorted(seen)]

@@ -136,7 +136,12 @@ def _dashboard(data: dict):
     print(f"  inbox:   {data['inbox']} item(s) to triage" +
           (f", {data['proposals']} organize proposal file(s)" if data["proposals"] else ""))
     ia, ca, gd = data["index_age_min"], data["last_commit_age_min"], data["git_dirty"]
-    print(f"  index:   {'built ' + str(ia) + ' min ago' if ia is not None else 'not built (run: plainkeep index)'}")
+    if ia is not None:
+        print(f"  index:   built {ia} min ago")
+    elif DB.exists():   # same wording as `status`
+        print("  index:   partial (written note by note, never fully built — run: plainkeep index)")
+    else:
+        print("  index:   not built (run: plainkeep index)")
     if data["pending_embeddings"]:
         print(f"  vectors: {data['pending_embeddings']} note(s) pending embedding (run: plainkeep index)")
     print(f"  commits: {'last commit ' + str(ca) + ' min ago' if ca is not None else 'no commits yet'}"

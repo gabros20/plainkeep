@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, guardrail, launchdlib, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
+from lib import enginetree, guardrail, hostconfig, launchdlib, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
@@ -160,7 +160,7 @@ def main(argv):
     # 1. tools
     for t in ("git", "python3", "sqlite3"):
         (ok if shutil.which(t) else (warn if t == "sqlite3" else fail))(f"tool: {t} {'present' if shutil.which(t) else 'MISSING'}")
-    vectors_requested = os.environ.get("PLAINKEEP_VECTORS", "").lower() in ("1", "true", "yes", "on")
+    vectors_requested = hostconfig.flag("search.vectors")
     for mod, why in (("lancedb", "stage-2 vectors"), ("fastembed", "stage-3 rerank")):
         try:
             __import__(mod); ok(f"optional: {mod} present ({why})")
@@ -217,6 +217,16 @@ def main(argv):
             warn("enrich model/Ollama not reachable — `files extract`/`bookmark` auto-enrich will "
                  "fall back to the stdlib keyword floor (no description, no LLM keywords). Fix: run "
                  "ollama and pull the configured PLAINKEEP_ENRICH_MODEL; or set PLAINKEEP_ENRICH=off.")
+
+    # host config (v2 0.5): a legacy env.sh whose exports the config already holds is dead weight.
+    # Suggest only — doctor never deletes a user's file.
+    try:
+        redundant = hostconfig.redundant_env_sh()
+    except Exception:
+        redundant = None
+    if redundant:
+        warn(f"{redundant} duplicates {hostconfig.path()} — the config file is read by every process, "
+             f"so you can delete env.sh (and its `source` line) once you agree")
 
     # 1b. the ENGINE tree (Phase 2 Task 2). The full ownership manifest, not the four-file probe the
     # dispatcher runs on every invocation: doctor is where an operator asks "is my install intact",

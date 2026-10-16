@@ -20,7 +20,18 @@ DEFAULT_TRIAGE_MODEL = "gemma4:e2b"
 
 
 def triage_model() -> str:
-    return os.environ.get("PLAINKEEP_AGENT_MODEL") or DEFAULT_TRIAGE_MODEL
+    """env PLAINKEEP_AGENT_MODEL → config `models.triage` → default (loaded lazily: the test suite
+    imports this file standalone, with no package around it)."""
+    try:
+        try:
+            from . import hostconfig
+        except ImportError:
+            import sys
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import hostconfig
+        return hostconfig.get("models.triage", DEFAULT_TRIAGE_MODEL)
+    except Exception:
+        return os.environ.get("PLAINKEEP_AGENT_MODEL") or DEFAULT_TRIAGE_MODEL
 
 
 def _agent() -> str:

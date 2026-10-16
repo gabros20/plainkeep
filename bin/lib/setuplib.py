@@ -14,7 +14,7 @@ import shutil
 import subprocess
 import sys
 
-from lib import agentskills, embed, enginetree, enrichlib, imagelib, launchdlib, paths, provision, vaultio
+from lib import agentskills, embed, enginetree, enrichlib, hostconfig, imagelib, launchdlib, paths, provision, vaultio
 
 # The ENGINE's bin/ (paths.BIN) — this module reads engine-owned files through it, `bin/ui/version.txt`
 # above all: the pin `plainkeep setup ui` downloads against and compares the installed binary to.
@@ -309,14 +309,15 @@ def _status_search(layer: Layer) -> dict:
     deps = _deps_importable()
     model_pulled = _ollama_has(model)
     index_built = _index_built()
-    vectors_env = _truthy(os.environ.get("PLAINKEEP_VECTORS"))
-    rerank_env = _truthy(os.environ.get("PLAINKEEP_RERANK"))
+    vectors_env, vectors_src = hostconfig.resolve("search.vectors", False)
+    rerank_env, rerank_src = hostconfig.resolve("search.rerank", False)
+    shown = lambda on, src: f"{'on' if on else 'off'} ({src})"  # noqa: E731
     items = [
         {"id": "deps-importable", "title": "lancedb + fastembed importable", "ok": deps},
         {"id": "model-pulled", "title": model, "ok": model_pulled},
         {"id": "index-built", "title": ".index/plainkeep.sqlite", "ok": index_built},
-        {"id": "PLAINKEEP_VECTORS", "title": "PLAINKEEP_VECTORS=1", "ok": vectors_env, "advisory": True},
-        {"id": "PLAINKEEP_RERANK", "title": "PLAINKEEP_RERANK=1", "ok": rerank_env, "advisory": True},
+        {"id": "PLAINKEEP_VECTORS", "title": f"search.vectors = {shown(vectors_env, vectors_src)}", "ok": vectors_env, "advisory": True},
+        {"id": "PLAINKEEP_RERANK", "title": f"search.rerank = {shown(rerank_env, rerank_src)}", "ok": rerank_env, "advisory": True},
     ]
     if not _ollama_present():
         return _row(layer, "blocked", "ollama is required to pull the embedding model", items,
@@ -324,9 +325,12 @@ def _status_search(layer: Layer) -> dict:
     core = [deps, model_pulled, index_built]
     if all(core):
         # Operational; nudge the advisory env flags so retrieval actually uses the vector/rerank arms.
-        nxt = "" if (vectors_env and rerank_env) else "export PLAINKEEP_VECTORS=1 PLAINKEEP_RERANK=1"
-        detail = "semantic search ready" if (vectors_env and rerank_env) else \
-            "semantic search operational (set PLAINKEEP_VECTORS=1 / PLAINKEEP_RERANK=1 to enable the arms)"
+        cfg = hostconfig.path()
+        nxt = "" if (vectors_env and rerank_env) else \
+            f"set search.vectors / search.rerank = true in {cfg} (or run: plainkeep setup search --yes)"
+        state_txt = f"search.vectors {shown(vectors_env, vectors_src)}, search.rerank {shown(rerank_env, rerank_src)}"
+        detail = f"semantic search ready ({state_txt})" if (vectors_env and rerank_env) else \
+            f"semantic search operational ({state_txt}; enable the arms in {cfg})"
         return _row(layer, "ready", detail, items, nxt)
     state = "partial" if any(core) else "absent"
     return _row(layer, state, "semantic search prerequisites are incomplete", items, "plainkeep setup search --yes")
@@ -737,6 +741,10 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             _ensure_venv(res, fake=fake)
             res["ran"].append(_venv_pip(*_search_pip_args(), fake=fake))
             res["ran"].append(_run(["ollama", "pull", _embed_model()], fake=fake))
+            # Persist the choice where a non-interactive process (ssh, cron, launchd) reads it, instead
+            # of advising an `export` that only an interactive shell ever sees. Before the index build,
+            # so that pass already embeds.
+            res["config"] = f"{hostconfig.set_values({'search.vectors': True})}: search.vectors = true"
             res["ran"].append(_run_verb("index", fake=fake))
         elif layer.id == "models":
             # The .venv is the CANONICAL home for ALL optional deps (FIX 2): the file-processing

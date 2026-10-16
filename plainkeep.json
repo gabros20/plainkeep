@@ -1239,7 +1239,7 @@
       "writes": [
         ".cache/orient.line"
       ],
-      "hints": "Read-only session bootstrap for humans and agents in one call. --json = the full envelope; --line = a \u226460-char string cached (short TTL, PLAINKEEP_ORIENT_TTL) for a starship/tmux prompt hook. Common mistake: confusing it with `plainkeep start`, which writes the journal.",
+      "hints": "Read-only session bootstrap for humans and agents in one call. --json = the full envelope; --line = a \u226460-char string cached (short TTL, PLAINKEEP_ORIENT_TTL) for a starship/tmux prompt hook. `backup_age_min` is a deprecated alias of `last_commit_age_min`; `backup_last_ok` is null until a verified `backup run`. Common mistake: confusing it with `plainkeep start`, which writes the journal.",
       "output": {
         "mode": "scalar",
         "fields": {

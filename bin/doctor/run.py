@@ -169,10 +169,13 @@ def main(argv):
             # import, `plainkeep index` will silently fall back to keyword-only. That mismatch is a
             # misconfiguration worth calling out loudly, with the exact remedy.
             if mod == "lancedb" and vectors_requested:
-                warn("PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3 (`which python3`) — "
+                src = hostconfig.resolve("search.vectors", False)[1]
+                how = ("PLAINKEEP_VECTORS=1" if src == "env"
+                       else f"search.vectors = true in {hostconfig.path()}")
+                warn(f"{how} but lancedb is NOT importable by this python3 (`which python3`) — "
                      "`plainkeep index` falls back to keyword-only. Fix: install requirements.txt into THIS "
                      "interpreter and put $PLAINKEEP_HOME/.venv/bin first on PATH (in an agent terminal, in "
-                     "its shell init) — see docs/agent-terminal-search.md; or unset PLAINKEEP_VECTORS.")
+                     "its shell init) — see docs/agent-terminal-search.md; or turn vectors off (unset PLAINKEEP_VECTORS / set search.vectors = false).")
             else:
                 warn(f"optional: {mod} not installed ({why} disabled)")
 

@@ -326,8 +326,12 @@ def _status_search(layer: Layer) -> dict:
     if all(core):
         # Operational; nudge the advisory env flags so retrieval actually uses the vector/rerank arms.
         cfg = hostconfig.path()
-        nxt = "" if (vectors_env and rerank_env) else \
-            f"set search.vectors / search.rerank = true in {cfg} (or run: plainkeep setup search --yes)"
+        off = []
+        if not vectors_env:
+            off.append("search.vectors = true in " + str(cfg) + " (or run: plainkeep setup search --yes)")
+        if not rerank_env:
+            off.append("search.rerank = true in " + str(cfg))
+        nxt = "set " + "; set ".join(off) if off else ""
         state_txt = f"search.vectors {shown(vectors_env, vectors_src)}, search.rerank {shown(rerank_env, rerank_src)}"
         detail = f"semantic search ready ({state_txt})" if (vectors_env and rerank_env) else \
             f"semantic search operational ({state_txt}; enable the arms in {cfg})"
@@ -696,6 +700,19 @@ def _confirm(layer: Layer, yes: bool, res: dict) -> bool:
     return True
 
 
+def _persist_vectors(res: dict, fake: bool) -> None:
+    """Make `search.vectors = true` durable in the host config (v2 0.5), unless it already is. Under
+    fake/--dry-run it only records the intent: a dry run writes nothing."""
+    if hostconfig.load().get("search.vectors") is True:
+        return
+    note = f"{hostconfig.path()}: search.vectors = true"
+    if _fake(fake):
+        res["config"] = "would write " + note
+        return
+    hostconfig.set_values({"search.vectors": True})
+    res["config"] = "wrote " + note
+
+
 def advance(layer_id, *, yes: bool, fake: bool) -> dict:
     layer = _layer(layer_id)
     res = _result()
@@ -708,7 +725,13 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
         raise subprocess.CalledProcessError(1, [f"plainkeep setup {layer_id}", "(PLAINKEEP_SETUP_FORCE_FAIL)"])
     before = status(layer.id)[0]
     if before["status"] == "ready":
-        res["skipped"].append(layer.id)
+        # A provisioned host (deps, model, index all present) is "ready" whether or not vectors are
+        # switched on durably — exactly the machine whose switch lives in an env.sh. With --yes the
+        # one thing left to do is persist it, so do that rather than report a no-op.
+        if layer.id == "search" and yes:
+            _persist_vectors(res, fake)
+        else:
+            res["skipped"].append(layer.id)
         return res
     if layer.gate == "blocked":  # static human handoff (backups) — regardless of which piece is missing
         if layer.handoff:
@@ -744,7 +767,7 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             # Persist the choice where a non-interactive process (ssh, cron, launchd) reads it, instead
             # of advising an `export` that only an interactive shell ever sees. Before the index build,
             # so that pass already embeds.
-            res["config"] = f"{hostconfig.set_values({'search.vectors': True})}: search.vectors = true"
+            _persist_vectors(res, fake)
             res["ran"].append(_run_verb("index", fake=fake))
         elif layer.id == "models":
             # The .venv is the CANONICAL home for ALL optional deps (FIX 2): the file-processing

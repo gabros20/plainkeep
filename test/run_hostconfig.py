@@ -3,13 +3,18 @@
 environment subprocess that gets vectors on through the config alone, `setup search --yes` writing the
 config, `setup status` naming the effective value and its source, and doctor's env.sh suggestion."""
 from __future__ import annotations
+import atexit
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from lib.hermetic import scratch_root, seal
+# This suite writes and unlinks config.toml, so it never accepts an inherited config directory.
+os.environ["PLAINKEEP_CONFIG_HOME"] = tempfile.mkdtemp(prefix="pk-hostconfig-")
+atexit.register(shutil.rmtree, os.environ["PLAINKEEP_CONFIG_HOME"], True)
 seal()   # hermetic: PLAINKEEP_CONFIG_HOME is a throwaway dir, so the real ~/.config/plainkeep is never touched
 
 REPO = Path(__file__).resolve().parents[1]
@@ -53,6 +58,10 @@ def main() -> int:
           hc._mini_toml((cfgdir / "config.toml").read_text()) ==
           {"search": {"vectors": True, "rerank": False}, "models": {"enrich": "gemma4:e2b"},
            "ollama": {"host": "http://gpu-box:11434"}})
+    esc = 'x = "a\\"b\\\\c"\n'
+    check("fallback reader unescapes like tomllib",
+          hc._mini_toml("[t]\n" + esc) == hc._parse("[t]\n" + esc) == {"t": {"x": 'a"b\\c'}},
+          str(hc._mini_toml("[t]\n" + esc)))
     (cfgdir / "config.toml").write_text("this is [not toml")
     check("malformed file is an empty config, never an error", hc.load() == {})
 
@@ -90,19 +99,70 @@ def main() -> int:
                "PLAINKEEP_SETUP_FAKE": "1", "PLAINKEEP_ASSUME_OLLAMA": "1"}
         r = subprocess.run([sys.executable, str(REPO / "bin" / "setup" / "run.py"), "search", "--yes"],
                            capture_output=True, text=True, env=env)
-        check("setup search --yes exits 0", r.returncode == 0, r.stdout + r.stderr)
-        check("setup search --yes wrote search.vectors = true", hc.load().get("search.vectors") is True,
-              str(hc.load()) + r.stderr)
+        check("setup search --yes (fake) exits 0", r.returncode == 0, r.stdout + r.stderr)
+        check("PLAINKEEP_SETUP_FAKE writes no config", not (cfgdir / "config.toml").exists(), r.stdout)
+        r = subprocess.run([sys.executable, str(REPO / "bin" / "setup" / "run.py"), "search", "--dry-run"],
+                           capture_output=True, text=True,
+                           env={k: v for k, v in env.items() if k != "PLAINKEEP_SETUP_FAKE"})
+        check("setup search --dry-run exits 0", r.returncode == 0, r.stdout + r.stderr)
+        check("setup search --dry-run writes no config.toml", not (cfgdir / "config.toml").exists(),
+              (cfgdir / "config.toml").read_text() if (cfgdir / "config.toml").exists() else "")
+        check("--dry-run says it would write", "would write" in r.stdout, r.stdout)
+
+        # real (non-fake) advance, with only the pip/pull/index steps stubbed out
+        drv = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from lib import setuplib as sl\n"
+            "mode = sys.argv[1]\n"
+            "sl.status = lambda lid=None: [{'status': mode}]\n"
+            "sl._ensure_venv = lambda res, fake=False: None\n"
+            "sl._venv_pip = sl._run = sl._run_verb = lambda *a, **k: 'stub'\n"
+            "r = sl.advance('search', yes=len(sys.argv) < 3, fake=False)\n"
+            "print(r.get('config'), r['skipped'])\n" % str(REPO / "bin"))
+        denv = {**env}
+        denv.pop("PLAINKEEP_SETUP_FAKE")
+        r = subprocess.run([sys.executable, "-c", drv, "absent"], capture_output=True, text=True, env=denv)
+        check("advance (absent) writes search.vectors = true", hc.load().get("search.vectors") is True,
+              r.stdout + r.stderr)
+        (cfgdir / "config.toml").unlink()
+        r = subprocess.run([sys.executable, "-c", drv, "ready"], capture_output=True, text=True, env=denv)
+        check("advance on an already-ready host still writes search.vectors = true (--yes)",
+              hc.load().get("search.vectors") is True, r.stdout + r.stderr)
+        (cfgdir / "config.toml").unlink()
+        r = subprocess.run([sys.executable, "-c", drv, "ready", "noyes"], capture_output=True, text=True, env=denv)
+        check("ready host without --yes writes nothing", not (cfgdir / "config.toml").exists(), r.stdout + r.stderr)
+        hc.set_values({"search.vectors": True})
         r = subprocess.run([sys.executable, str(REPO / "bin" / "setup" / "run.py"), "--json"],
                            capture_output=True, text=True, env=env)
         check("setup status names the effective value and its source",
               "search.vectors = on (config)" in r.stdout, r.stdout[-400:] + r.stderr)
+
+    # --- the vault's .gitignore keeps the backup marker machine-local
+    gi = ("import importlib.util, sys; sys.path.insert(0, %r)\n"
+          "sp = importlib.util.spec_from_file_location('vrun', %r)\n"
+          "m = importlib.util.module_from_spec(sp); sp.loader.exec_module(m); print(m.INIT_GITIGNORE)"
+          % (str(REPO / "bin"), str(REPO / "bin" / "vault" / "run.py")))
+    ign = subprocess.run([sys.executable, "-c", gi], capture_output=True, text=True,
+                         env={**os.environ, "PLAINKEEP_HOME": scratch_root()}).stdout
+    with tempfile.TemporaryDirectory() as td:
+        subprocess.run(["git", "init", "-q", td], check=True)
+        (Path(td) / ".gitignore").write_text(ign)
+        r = subprocess.run(["git", "-C", td, "check-ignore", "-q", ".logs/backup-last-ok.json"])
+        check("backup marker .logs/backup-last-ok.json is gitignored by a new vault", r.returncode == 0, ign[-200:])
 
     # --- doctor's env.sh migration hint (suggest only)
     (cfgdir / "env.sh").write_text("export PLAINKEEP_VECTORS=1\nexport PLAINKEEP_RERANK=1\n")
     check("env.sh not redundant while config lacks a value", hc.redundant_env_sh() is None)
     hc.set_values({"search.rerank": True})
     check("env.sh redundant once config holds the same values", hc.redundant_env_sh() == cfgdir / "env.sh")
+    (cfgdir / "env.sh").write_text("export PLAINKEEP_VECTORS=1\nexport PLAINKEEP_AGENT=claude\n")
+    check("env.sh with an unmanaged export is not redundant", hc.redundant_env_sh() is None)
+    (cfgdir / "env.sh").write_text("export PLAINKEEP_VECTORS=1\nexport PATH=\"$HOME/bin:$PATH\"\n")
+    check("env.sh with a PATH edit is not redundant", hc.redundant_env_sh() is None)
+    (cfgdir / "env.sh").write_text("# keep\nexport PLAINKEEP_VECTORS=1\nsource ~/x.sh\n")
+    check("env.sh with a source line is not redundant", hc.redundant_env_sh() is None)
+    (cfgdir / "env.sh").write_text("# my knobs\n\nexport PLAINKEEP_VECTORS=1 PLAINKEEP_RERANK=1\n")
+    check("env.sh of only managed exports + comments is redundant", hc.redundant_env_sh() == cfgdir / "env.sh")
     check("env.sh is never deleted", (cfgdir / "env.sh").exists())
 
     print(f"{BOLD}Host config (v2 0.5) — {len(results)} checks{RESET}\n")

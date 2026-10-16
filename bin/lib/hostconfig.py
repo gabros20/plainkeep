@@ -62,9 +62,16 @@ def _mini_toml(text: str) -> dict:
         if "=" not in ln:
             continue
         k, v = (x.strip() for x in ln.split("=", 1))
-        if v[:1] in ('"', "'"):
-            q = v[0]
-            end = v.find(q, 1)
+        if v[:1] == '"':                         # basic string: honour \\ and \" escapes
+            buf, i = [], 1
+            while i < len(v) and v[i] != '"':
+                if v[i] == "\\" and i + 1 < len(v):
+                    i += 1
+                buf.append(v[i])
+                i += 1
+            table[k] = "".join(buf)
+        elif v[:1] == "'":                       # literal string: no escapes
+            end = v.find("'", 1)
             table[k] = v[1:end] if end > 0 else v[1:]
         else:
             v = v.split("#", 1)[0].strip()
@@ -155,8 +162,10 @@ def set_values(values: dict) -> Path:
 
 
 def redundant_env_sh() -> Path | None:
-    """`env.sh` beside the config when every `export KEY=VALUE` it holds for a managed knob is already
-    in the config with the same value (so it can be deleted). Never deletes anything."""
+    """`env.sh` beside the config when it holds NOTHING but `export KEY=VALUE` lines for managed knobs
+    that the config already holds with the same value, so deleting it loses nothing. Any other
+    content (an unmanaged export, a PATH edit, `source`, a conditional) makes it non-redundant.
+    Never deletes anything."""
     sh = path().parent / "env.sh"
     try:
         text = sh.read_text(encoding="utf-8")
@@ -167,15 +176,19 @@ def redundant_env_sh() -> Path | None:
     seen = 0
     for ln in text.splitlines():
         ln = ln.strip()
-        if not ln.startswith("export "):
+        if not ln or ln.startswith("#"):
             continue
-        for part in ln[7:].split():
+        parts = ln[7:].split() if ln.startswith("export ") else []
+        if not parts:
+            return None
+        for part in parts:
             name, eq, val = part.partition("=")
-            if name in by_env and eq:
-                k, kind = by_env[name]
-                val = val.strip("\"'")
-                want = val.lower() in TRUE if kind == "bool" else val
-                if k not in cfg or _coerce(k, cfg[k]) != want:
-                    return None
-                seen += 1
+            if name not in by_env or not eq:
+                return None
+            k, kind = by_env[name]
+            val = val.strip("\"'")
+            want = val.lower() in TRUE if kind == "bool" else val
+            if k not in cfg or _coerce(k, cfg[k]) != want:
+                return None
+            seen += 1
     return sh if seen else None

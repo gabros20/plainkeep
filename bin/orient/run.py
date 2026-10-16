@@ -59,7 +59,7 @@ def _last_commit_age():
 
 
 def _backup_state() -> tuple[bool, str | None]:
-    """(configured, last verified-ok ISO timestamp or None). Reads the `backup run` marker; no restic call."""
+    """(configured, last verified-ok ISO timestamp or None). Reads the `backup run` marker (.logs/, machine-local); no restic call."""
     bdir = paths.PLAINKEEP_HOME / ".backup"
     try:
         configured = bool(json.loads((bdir / "config.json").read_text(encoding="utf-8")).get("targets"))
@@ -68,7 +68,7 @@ def _backup_state() -> tuple[bool, str | None]:
     if not configured:
         return False, None
     try:
-        ts = json.loads((bdir / "last_ok.json").read_text(encoding="utf-8")).get("ts")
+        ts = json.loads((paths.PLAINKEEP_HOME / ".logs" / "backup-last-ok.json").read_text(encoding="utf-8")).get("ts")
         return True, ts if isinstance(ts, str) and ts else None
     except Exception:
         return True, None

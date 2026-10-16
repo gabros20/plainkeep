@@ -38,7 +38,10 @@ GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\0
 
 BACKUP_DIR = paths.PLAINKEEP_HOME / ".backup"
 CONFIG = BACKUP_DIR / "config.json"
-LAST_OK = BACKUP_DIR / "last_ok.json"        # written on a verified `backup run`; read by `orient`
+# Written on a verified `backup run`, read by `orient`. Under .logs/ (gitignored in every vault) so the
+# marker stays machine-local: tracked, it would dirty `git status` and, via a shared vault, claim a
+# backup this machine never ran.
+LAST_OK = paths.PLAINKEEP_HOME / ".logs" / "backup-last-ok.json"
 STALE_HOURS = int(os.environ.get("PLAINKEEP_BACKUP_STALE_HOURS", "48"))
 BUNDLE_KEEP = int(os.environ.get("PLAINKEEP_BUNDLE_KEEP", "3"))
 RESTIC_HINT = "install restic: brew install restic  (then `plainkeep backup init`)"
@@ -210,7 +213,7 @@ def cmd_run(argv):
     ok = c.returncode == 0
     if ok:
         try:
-            vaultio.mkdir(BACKUP_DIR)
+            vaultio.mkdir(LAST_OK.parent)
             vaultio.write_text(LAST_OK, json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                                     "target": target}) + "\n", encoding="utf-8")
         except Exception:

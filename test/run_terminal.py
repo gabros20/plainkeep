@@ -180,16 +180,18 @@ def main() -> int:
                   "backup:  not configured" in run(env, "orient").stdout, "")
             bdir = h / ".backup"
             bdir.mkdir(exist_ok=True)
+            marker = h / ".logs" / "backup-last-ok.json"
+            marker.parent.mkdir(exist_ok=True)
             (bdir / "config.json").write_text('{"targets": {"local": {"repo": "/nonexistent"}}}')
             d2 = parse_ndjson(run(env, "orient", "--json").stdout)[0]["data"]
             check("orient backup configured without a verified run: null last_ok",
                   d2.get("backup_configured") is True and d2.get("backup_last_ok") is None, d2)
-            (bdir / "last_ok.json").write_text('{"ts": "2026-10-16T08:00:00+00:00", "target": "local"}')
+            marker.write_text('{"ts": "2026-10-16T08:00:00+00:00", "target": "local"}')
             d3 = parse_ndjson(run(env, "orient", "--json").stdout)[0]["data"]
             check("orient backup_last_ok is the recorded ISO timestamp",
                   d3.get("backup_last_ok") == "2026-10-16T08:00:00+00:00", d3)
             (bdir / "config.json").unlink()
-            (bdir / "last_ok.json").unlink()
+            marker.unlink()
             check("orient counts the active task", data.get("active") == 1, data.get("active"))
             check("orient recent_notes lists notes", any(n["slug"] == "alpha-widget"
                   for n in data.get("recent_notes", [])), data.get("recent_notes"))

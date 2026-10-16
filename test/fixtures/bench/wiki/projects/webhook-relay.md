@@ -12,7 +12,7 @@ aliases: [relay]
 A small service that receives webhooks from third-party senders on behalf of a customer, acknowledges them immediately, and delivers them to the customer's own endpoints with retries. Built first for [[kovacs-es-tarsa-kft]], now shaped so it can serve a second customer without code changes.
 
 ## Architecture
-Two stateless receiver hosts sit behind a load balancer. They verify the sender's signature, write the raw event to an object-store journal, and push a reference onto the delivery queue ([[decision-redis-streams-for-webhook-queue]]). A pool of delivery workers pops entries, posts them to the customer endpoint, and reschedules failures with exponential backoff and a [[retry-budget]]. The database holds only metadata: endpoints, secrets, delivery attempts.
+Two stateless receiver hosts sit behind a load balancer. They verify the sender's signature, write the raw event to an object-store journal, and push a reference onto the delivery queue ([[decision-redis-streams-for-webhook-queue]]). A pool of delivery workers pops entries, posts them to the customer endpoint, and reschedules failures with exponential backoff and a retry budget. The database holds only metadata: endpoints, secrets, delivery attempts.
 
 ## Operations
 Deploys are rolling, one receiver at a time. The database failover procedure is in [[postgres-failover-runbook]] and the last incident is written up in [[webhook-outage-postmortem-2026-08]]. Staging lives where [[decision-fly-io-for-staging]] says it does. Alerts go to a single channel; anything that wakes me up needs a runbook entry or it gets deleted.

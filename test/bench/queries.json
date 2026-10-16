@@ -107,31 +107,33 @@
   },
   {
    "id": "deep-01",
-   "query": "pgbouncer keeps stale connections to the old primary after a promotion, how long until they expire",
+   "query": "when the standby took over, for how long did clients keep hitting the abandoned machine",
    "expected": [
     "wiki/runbooks/postgres-failover-runbook.md"
    ],
    "tags": [
     "deep",
+    "paraphrase",
     "en"
    ],
    "answerable": true,
    "needle": "the shipped default of 600 seconds meant that workers kept failing for ten minutes",
-   "note": "answer is in the last section, past the embed window"
+   "note": "paraphrase: shares <=1 content word with the whole note; answer is in the last section, past the embed window"
   },
   {
    "id": "deep-02",
-   "query": "signature rejections because the receiver clock was running ahead",
+   "query": "requests bounced since one of our servers showed the wrong date",
    "expected": [
     "wiki/notes/webhook-outage-postmortem-2026-08.md"
    ],
    "tags": [
     "deep",
+    "paraphrase",
     "en"
    ],
    "answerable": true,
    "needle": "The affected receiver's clock had drifted nine minutes ahead",
-   "note": "answer is in the last section, past the embed window"
+   "note": "paraphrase: shares <=1 content word with the whole note; answer is in the last section, past the embed window"
   },
   {
    "id": "deep-03",
@@ -145,7 +147,7 @@
    ],
    "answerable": true,
    "needle": "unacknowledged entries stayed in the pending-entries list of the old consumer names",
-   "note": "answer is in the last section, past the embed window"
+   "note": "lexical control; answer is in the last section, past the embed window"
   },
   {
    "id": "deep-04",
@@ -159,21 +161,22 @@
    ],
    "answerable": true,
    "needle": "Request bodies larger than 256 KB are not queued directly",
-   "note": "answer is in a late section of the project hub"
+   "note": "lexical control; answer is in a late section of the project hub"
   },
   {
    "id": "deep-05",
-   "query": "how long do we retain the nightly database dumps",
+   "query": "how long until the oldest copy of our data gets thrown away",
    "expected": [
     "wiki/notes/infra-meeting-log-2026-q3.md"
    ],
    "tags": [
     "deep",
+    "paraphrase",
     "en"
    ],
    "answerable": true,
    "needle": "keep nightly database dumps for 35 days",
-   "note": "answer is in the last meeting entry"
+   "note": "paraphrase: shares <=1 content word with the whole note; answer is in the last meeting entry"
   },
   {
    "id": "task-01",

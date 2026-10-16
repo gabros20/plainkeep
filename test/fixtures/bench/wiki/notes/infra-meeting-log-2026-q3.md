@@ -15,7 +15,7 @@ A running log of the monthly infra review I hold with myself and, when they are 
 Agenda: alert noise, staging cost, the state of the database replica. We agreed to cut the alert list to the five that have ever woken anyone. Staging runs around the clock for no reason; schedule it down overnight. The replica lag graph looks healthy, no action.
 
 ## 2026-08-03
-Agenda: queue migration status, certificate expiry, laptop replacement. The queue migration is two weeks from done. Certificates are all on automatic renewal except the wildcard one for staging, which is tracked as a task. The laptop gets replaced after the next invoice cycle, not before.
+Agenda: queue migration status, certificate expiry, laptop replacement. The queue migration is two weeks from done. Certificates are all on automatic renewal except the staging one, which is tracked as a task. The laptop gets replaced after the next invoice cycle, not before.
 
 ## 2026-08-31
 Agenda: postmortem follow-ups, dependency updates, on-call handover. The follow-ups from the August outage are all done except the status page automation. Dependency updates go in weekly batches, Fridays, never on a customer's month-end. On-call stays with me; the contractors only get the runbooks.

@@ -53,14 +53,19 @@ QUERIES_SCHEMA = "plainkeep.bench.queries/1"
 OUT_SCHEMA = "plainkeep.bench/1"
 
 KNOWN_TAGS = {"hu", "hu-exact", "hu-inflect", "deep", "task", "journal", "superseded",
-              "unanswerable", "exact", "en"}
-TAG_ORDER = ["hu", "hu-exact", "hu-inflect", "deep", "task", "journal", "superseded", "exact", "en"]
+              "unanswerable", "exact", "en", "paraphrase"}
+TAG_ORDER = ["hu", "hu-exact", "hu-inflect", "deep", "paraphrase", "task", "journal", "superseded", "exact", "en"]
 MODES = ["keyword", "hybrid", "hybrid+rerank"]
 METRICS = ("recall@5", "recall@10", "mrr")
 ID_RE = re.compile(r"^[a-z0-9-]+$")
 COPY_IGNORE = {".git", ".index", ".logs", ".venv", ".plainkeep", "node_modules"}
 EMBED_WINDOW = 2000          # indexlib._embed_text's limit; `deep` needles sit beyond it
 DEEP_MIN_CHARS, DEEP_NEEDLE_MIN_OFFSET = 3000, 2500
+PARAPHRASE_MAX_SHARED = 1    # content words a `paraphrase` query may share with its whole target
+STOPWORDS = frozenset("""about after again also because been before being between both could does doing down
+during each from have having here into just keep more most much only other over same some such than that their
+them then there these they this those through under until very want what when where which while will with without
+would your""".split())
 
 
 def _nfc(s: str) -> str:
@@ -69,6 +74,10 @@ def _nfc(s: str) -> str:
 
 def _tokens(s: str) -> set[str]:
     return {t for t in re.findall(r"\w+", _nfc(s).lower()) if len(t) > 1}
+
+
+def _content_words(s: str) -> set[str]:
+    return {t for t in re.findall(r"\w+", _nfc(s).lower()) if len(t) >= 4 and t not in STOPWORDS}
 
 
 def _frontmatter(text: str) -> dict:
@@ -172,6 +181,11 @@ def validate(doc: dict, root: Path, content_checks: bool) -> list[str]:
                 clash = sorted(_tokens(text) & _tokens(body))
                 if clash:
                     bad.append(f"{where}: `hu-inflect` query word(s) {clash} occur verbatim in {e}")
+        if "paraphrase" in tags and target is not None:
+            shared = sorted(_content_words(text) & _content_words(target))
+            if len(shared) > PARAPHRASE_MAX_SHARED:
+                bad.append(f"{where}: `paraphrase` query shares {len(shared)} content words {shared} with "
+                           f"{expected[0]} (max {PARAPHRASE_MAX_SHARED})")
         if needle and target is not None and needle not in target:
             bad.append(f"{where}: needle is not a verbatim substring of {expected[0]}")
         if "deep" in tags and target is not None:
@@ -239,6 +253,16 @@ def selftest_validator(doc: dict, root: Path) -> str | None:
     found = validate(bad, root, True)
     if not any(victim["id"] in v and "hu-inflect" in v for v in found):
         return f"validator accepted a corrupted hu-inflect query ({victim['id']} + {word!r})"
+    # a `paraphrase` query that is really lexical (the target's own sentence) must be rejected
+    para = next((q for q in doc["queries"] if "paraphrase" in q.get("tags", []) and q.get("expected")), None)
+    if para is not None:
+        bad = copy.deepcopy(doc)
+        for q in bad["queries"]:
+            if q["id"] == para["id"]:
+                q["query"] = q.get("needle") or q["query"]
+        found = validate(bad, root, True)
+        if not any(para["id"] in v and "paraphrase" in v for v in found):
+            return f"validator accepted a lexical paraphrase query ({para['id']})"
     return None
 
 

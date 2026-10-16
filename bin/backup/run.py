@@ -38,6 +38,7 @@ GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\0
 
 BACKUP_DIR = paths.PLAINKEEP_HOME / ".backup"
 CONFIG = BACKUP_DIR / "config.json"
+LAST_OK = BACKUP_DIR / "last_ok.json"        # written on a verified `backup run`; read by `orient`
 STALE_HOURS = int(os.environ.get("PLAINKEEP_BACKUP_STALE_HOURS", "48"))
 BUNDLE_KEEP = int(os.environ.get("PLAINKEEP_BUNDLE_KEEP", "3"))
 RESTIC_HINT = "install restic: brew install restic  (then `plainkeep backup init`)"
@@ -207,6 +208,13 @@ def cmd_run(argv):
         output.fail(output.EXIT_UNEXPECTED, "restic backup failed", hint=b.stderr.strip(), verb="backup")
     c = _restic(repo, "check", timeout=1800)
     ok = c.returncode == 0
+    if ok:
+        try:
+            vaultio.mkdir(BACKUP_DIR)
+            vaultio.write_text(LAST_OK, json.dumps({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                                    "target": target}) + "\n", encoding="utf-8")
+        except Exception:
+            pass
     return output.emit({"target": target, "backed_up": True, "check_ok": ok}, "backup",
                        human=lambda _: f"{GREEN}backup {target}: done, check {'ok' if ok else 'FAILED'}{RESET}")
 

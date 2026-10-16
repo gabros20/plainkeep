@@ -59,6 +59,7 @@ SUITES = [
     ("daily-driver verbs (§4/§7)", "run_verbs.py"),
     ("triage flow (§4/§10)", "run_triage.py"),
     ("agent indirection (§6)", "run_agentlib.py"),
+    ("host config file (v2 0.5)", "run_hostconfig.py"),
     ("daily/weekly rhythm (§16)", "run_loops.py"),
     ("health verbs: doctor, wiki (§14/§10)", "run_health.py"),
     ("terminal ergonomics: completion + renderer", "run_completion.py"),

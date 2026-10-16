@@ -722,7 +722,7 @@ def cmd_distill(argv, dry=False):
     for c in concepts:
         keep = []
         for w in c.get("wikilinks", []):
-            tgt = w.split("#", 1)[0].split("|", 1)[0].strip().strip("[").strip("]").strip()
+            tgt = paths.norm_link(w.strip("[").strip("]"))
             if tgt and tgt in valid and tgt != c["slug"]:
                 keep.append(tgt)
             elif tgt:

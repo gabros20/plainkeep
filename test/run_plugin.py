@@ -264,7 +264,7 @@ def _api_snapshot():
           set(live) == set(committed), f"live-only={set(live)-set(committed)} snap-only={set(committed)-set(live)}")
     drift = {n: (committed.get(n), live.get(n)) for n in committed if live.get(n) != committed.get(n)}
     check("no exported signature drifted", not drift, str(drift))
-    check("PLAINKEEP_API_VERSION is 1.0", live.get("PLAINKEEP_API_VERSION") == "value:str" and _api_version() == "1.0")
+    check("PLAINKEEP_API_VERSION is 1.1", live.get("PLAINKEEP_API_VERSION") == "value:str" and _api_version() == "1.1")
 
 
 def _api_version() -> str:

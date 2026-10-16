@@ -28,9 +28,9 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import embed, enrichlib, imagelib, output, rerank  # noqa: E402
+from lib import agent, embed, enrichlib, imagelib, output, rerank  # noqa: E402
 
-STAGES = ("stt", "ocr", "vlm", "enrich", "embed", "rerank")
+STAGES = ("stt", "ocr", "vlm", "enrich", "triage", "embed", "rerank")
 
 
 def _have_mod(name: str) -> bool:
@@ -92,6 +92,8 @@ def _ollama_model_for(stage: str) -> str | None:
         return None if m.lower() == "none" else m
     if stage == "enrich":
         return enrichlib.DEFAULT_MODEL
+    if stage == "triage":
+        return agent.triage_model()
     if stage == "embed":
         return os.environ.get("PLAINKEEP_EMBED_MODEL", "embeddinggemma")
     if stage == "ocr":
@@ -138,6 +140,9 @@ def _stage_info(stage: str) -> dict:
         return {"stage": stage, "model": model, "runtime": runtime, "available": available}
     if stage == "enrich":
         model = enrichlib.DEFAULT_MODEL
+        return {"stage": stage, "model": model, "runtime": "ollama", "available": _ollama_has(model)}
+    if stage == "triage":
+        model = agent.triage_model()
         return {"stage": stage, "model": model, "runtime": "ollama", "available": _ollama_has(model)}
     if stage == "embed":
         model = os.environ.get("PLAINKEEP_EMBED_MODEL", embed.model_name())
@@ -277,6 +282,11 @@ def _run_stage_test(stage: str, model: str | None, input_path: str | None) -> st
         docs = ["plainkeep is a local-first personal operating system", "bananas are yellow"]
         scores = rerank.rerank("personal productivity system", docs)
         return f"[{rerank.backend()}] " + ", ".join(f"{d!r}={s:.3f}" for d, s in zip(docs, scores))
+    if stage == "triage":
+        ans = subprocess.run(["ollama", "run", model or agent.triage_model(),
+                              "Classify as exactly one word, task or note: buy milk"],
+                             capture_output=True, text=True, timeout=300).stdout.strip()
+        return f"[{model or agent.triage_model()}] {ans}"
     # enrich
     if input_path:
         text = Path(input_path).read_text(encoding="utf-8", errors="replace")

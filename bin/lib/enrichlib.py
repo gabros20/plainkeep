@@ -22,8 +22,15 @@ import os
 import re
 import urllib.request
 
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-DEFAULT_MODEL = os.environ.get("PLAINKEEP_ENRICH_MODEL", "gemma4:e4b")
+try:
+    from . import hostconfig  # type: ignore  # (namespace sibling)
+except ImportError:                      # loaded by file path with no package (test suites do)
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import hostconfig  # type: ignore
+
+OLLAMA_HOST = hostconfig.ollama_host()
+DEFAULT_MODEL = hostconfig.get("models.enrich", "gemma4:e4b")
 MIN_CHARS = 40                          # below this, there's nothing worth summarizing
 SENTINEL = "_(no text extracted)_"      # files/run.py's empty-extraction marker
 SEED = 7                                # fixed — pinned determinism, not a tuning knob (QA R5)

@@ -15,6 +15,7 @@
   "render_note": "callable (typ: 'str', *, title: 'str', status: 'str' = 'active', body: 'str' = '', created: 'str | None' = None, url: 'str' = '', slug: 'str' = '') -> 'str'",
   "run_agent": "callable (prompt: str, scope: str = 'read', timeout: int = 60)",
   "slugify": "callable (s: 'str', n: 'int' = 60) -> 'str'",
+  "slugify_folded": "callable (s: 'str', n: 'int' = 60) -> 'str'",
   "today": "callable () -> 'str'",
   "type_dir": "callable (typ: 'str') -> 'str'"
 }

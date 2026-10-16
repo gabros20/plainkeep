@@ -27,6 +27,12 @@ try:
     from . import vaultroot  # type: ignore  # (namespace sibling)
 except ImportError:
     import vaultroot  # type: ignore
+try:
+    from . import wikilink  # type: ignore
+except ImportError:      # loaded by file path (tests) — sibling is not a package then
+    import sys as _s, os as _o
+    _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
+    import wikilink  # type: ignore
 
 # The SELECTED data root — no engine-relative fallback (ADR-014 D2, Phase 2 Task 1b). An index built
 # against a guessed root is the quiet half of the same failure a wrong-root write is: it indexes the
@@ -36,7 +42,7 @@ CONTENT = Path(os.environ.get("PLAINKEEP_CONTENT", PLAINKEEP_HOME / "wiki"))
 INDEX_DIR = PLAINKEEP_HOME / ".index"
 DB = INDEX_DIR / "plainkeep.sqlite"
 
-LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+LINK_RE = wikilink.LINK_RE
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 # Paths an external editor scatters that are NEVER content (proposal Part 3.1): Obsidian config +
@@ -51,13 +57,15 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))  # let sibling `embed`
 # top-level as `indexlib` (test/run_search_impl.py:27 puts bin/lib on sys.path), so the import has
 # to work either way — same reason the line above exists.
 try:
+    from . import hostconfig  # type: ignore  # (namespace sibling)
     from . import vaultio  # type: ignore  # (namespace sibling)
 except ImportError:
+    import hostconfig  # type: ignore
     import vaultio  # type: ignore
 
 
 def _vectors_on() -> bool:
-    return os.environ.get("PLAINKEEP_VECTORS", "").lower() in ("1", "true", "yes", "on")
+    return hostconfig.flag("search.vectors")
 
 
 def _vec_modules():
@@ -82,7 +90,7 @@ def _embed_stale(con, rel: str, model: str) -> bool:
 
 
 def _rerank_on() -> bool:
-    return os.environ.get("PLAINKEEP_RERANK", "").lower() in ("1", "true", "yes", "on")
+    return hostconfig.flag("search.rerank")
 
 
 def _candidate_texts(paths: list[str], limit: int = 1200) -> dict:
@@ -143,7 +151,7 @@ def _chunks(text: str) -> list[tuple[str, str]]:
 
 
 def _norm_link(target: str) -> str:
-    return target.split("#", 1)[0].split("|", 1)[0].strip()
+    return wikilink.norm_link(target)
 
 
 def _note_provenance(text: str) -> tuple[str, str]:

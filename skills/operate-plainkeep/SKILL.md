@@ -133,7 +133,7 @@ hubs, not a pile of files. Rules of traversal:
   returns ranked `file#heading` hits. Open the file and read the relevant heading. Do not
   `cat` your way through folders; the index exists precisely so you don't.
   - *Driving plainkeep from an agent terminal (Hermes, dispatch, cron)?* Keyword search always works,
-    but **semantic** search (`PLAINKEEP_VECTORS=1`) needs the agent's shell to use the same `python3`
+    but **semantic** search (`search.vectors = true` in `~/.config/plainkeep/config.toml`, or `PLAINKEEP_VECTORS=1`) needs the agent's shell to use the same `python3`
     (venv + PATH) as your interactive shell — a common silent gap. If `plainkeep doctor` says lancedb is
     missing though you installed it, see [`docs/agent-terminal-search.md`](../../docs/agent-terminal-search.md).
 - **Read frontmatter before body.** `type`, `status`, `related`, and (for projects)

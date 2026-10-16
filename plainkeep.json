@@ -1,7 +1,7 @@
 {
   "schema": "plainkeep.json/3",
   "ops_version": "4.0.0-dev",
-  "api_version": "1.0",
+  "api_version": "1.1",
   "json_envelope": 1,
   "capabilities": {
     "vectors": true,
@@ -614,7 +614,7 @@
         "mode": "scalar",
         "fields": {
           "schema": "string",
-          "ops_version": "string",
+          "ops_version": "4.0.0-dev",
           "api_version": "string",
           "capabilities": "object",
           "verbs": "list"
@@ -839,9 +839,8 @@
     },
     {
       "verb": "models",
-      "summary": "download/offload/test surface for the model layer: list|status|stop|pull|test per stage (stt, ocr, vlm, enrich, embed, rerank)",
+      "summary": "download/offload/test surface for the model layer: list|status|stop|pull|test per stage (stt, ocr, vlm, enrich, triage, embed, rerank)",
       "usage": "plainkeep models list | status | stop [--all] [<model>] | pull [--stage <s>|--all] --approved | test <stage> [--model <m>] [--input <file>] --approved",
-      "risk": "safe_write",
       "args": [
         {
           "name": "action",
@@ -911,6 +910,7 @@
                 "ocr",
                 "vlm",
                 "enrich",
+                "triage",
                 "embed",
                 "rerank"
               ],
@@ -938,6 +938,7 @@
                 "ocr",
                 "vlm",
                 "enrich",
+                "triage",
                 "embed",
                 "rerank"
               ],
@@ -1224,7 +1225,7 @@
     },
     {
       "verb": "orient",
-      "summary": "one-call session bootstrap: journal tail, tasks, inbox, proposals, index/backup age, git, recent notes",
+      "summary": "one-call session bootstrap: journal tail, tasks, inbox, proposals, index age, last commit, backup status, git, recent notes",
       "usage": "plainkeep orient [--json|--line]",
       "risk": "read",
       "reads": [
@@ -1237,7 +1238,7 @@
       "writes": [
         ".cache/orient.line"
       ],
-      "hints": "Read-only session bootstrap for humans and agents in one call. --json = the full envelope; --line = a \u226460-char string cached (short TTL, PLAINKEEP_ORIENT_TTL) for a starship/tmux prompt hook. Common mistake: confusing it with `plainkeep start`, which writes the journal.",
+      "hints": "Read-only session bootstrap for humans and agents in one call. --json = the full envelope; --line = a \u226460-char string cached (short TTL, PLAINKEEP_ORIENT_TTL) for a starship/tmux prompt hook. `backup_age_min` is a deprecated alias of `last_commit_age_min`; `backup_last_ok` is null until a verified `backup run`. Common mistake: confusing it with `plainkeep start`, which writes the journal.",
       "output": {
         "mode": "scalar",
         "fields": {
@@ -1246,6 +1247,9 @@
           "inbox": "int",
           "proposals": "int",
           "index_age_min": "int",
+          "last_commit_age_min": "int",
+          "backup_configured": "bool",
+          "backup_last_ok": "string",
           "backup_age_min": "int",
           "git_dirty": "int",
           "journal_tail": "array",

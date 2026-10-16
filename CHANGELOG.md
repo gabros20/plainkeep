@@ -25,17 +25,43 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 - **`api.slugify_folded`; plugin API 1.1 (v2 step 0.13).** `api.slugify` keeps its 1.0 behaviour (ADR-018),
   so a plugin that finds its notes by `slugify(title)` keeps finding them. `PLAINKEEP_API_VERSION` is now
   `"1.1"`; a plugin that needs the new export declares `"api": ">=1.1,<2"`.
-
-### Changed
-- **New slugs fold accents (v2 step 0.13).** `Ügyfél szerződés` becomes `ugyfel-szerzodes`, not
-  `gyf-l-szerz-d-s`, in every verb that names a file from a title. ASCII titles are byte-identical and
-  existing notes are never renamed; `doctor` lists, as information, the ones a fold would name differently.
-  `invoice` still finds a client created under its old name, and `new` refuses a name whose old form
-  already exists. `wiki canvas '#tag'` writes a non-ASCII tag's canvas under the folded name, so an
-  old dropped-letter `.canvas` file is left behind, not overwritten.
-- **`doctor`'s link lint also scans `journal/` and `tasks/` (v2 step 0.10),** and counts a symlink into the
-  engine (including through `current`) or into a vault under a symlinked path as inside.
-
+- **`search` covers tasks, journal and inbox, and filters by collection (v2 step 0.3).** The index used
+  to read only `wiki/`, so a task or a journal day could never be found. It now reads the vault root,
+  restricted to an allowlist (`wiki/`, `tasks/`, `journal/`, `inbox/`), and every hit carries
+  `collection`. `plainkeep search "<q>" --collection wiki|tasks|journal|inbox` restricts every arm
+  before the top-k cut; `--collection wiki` returns what `search` used to. Hit paths are now
+  vault-relative (`wiki/notes/x.md`, not `notes/x.md`); lines already in `.logs/queries.jsonl` keep the
+  old wiki-relative form. `PLAINKEEP_CONTENT` still points the indexer at one custom tree. **The index
+  schema changed.** The first command that opens the index migrates it in place: existing rows (and
+  their vectors and embedding records) are renamed to `wiki/<path>`, so nothing is re-embedded, and
+  `status`/`orient` read "partial" until the next `plainkeep index`, which then reads tasks, journal
+  and inbox. The vector half is a durable step: if the process that migrates cannot load LanceDB, or dies halfway, a later one finishes it (idempotently). If the in-place step fails the index is dropped instead and `plainkeep index` rebuilds
+  everything (a vault with vectors re-embeds, which takes hours; search returns no hits until then). Bench: task
+  recall@5 0.0 to 0.75, journal 0.0 to 0.67.
+- **A note is searchable the moment a verb writes it (v2 step 0.4).** `capture`, `new`, `wiki new`, `task`
+  (add and move), `bookmark`, `files ingest` shadow notes and hub links, `start`, `close` and every
+  journal line now refresh that file's search rows before returning, so `capture` then `search` finds
+  it with no `plainkeep index` in between. Only the keyword rows are written; a changed note's
+  embedding is left pending for the next `plainkeep index`, and `status` and `orient` report
+  `pending_embeddings` (0 when vectors are off). If the index cannot be updated the verb prints a
+  one-line warning and the write stands. `triage`, `organize apply` and `archive` refresh the notes
+  they move or rewrite, and a pruned note drops its vector too. Index freshness is now honest:
+  `status`, `orient` and `doctor` read when `plainkeep index` last finished (not the sqlite file's
+  mtime, which every write touches), so an index made only of per-write rows reads "partial" or "not
+  built". `search --open` and the fzf picker hand `open` the hit's vault-relative path, so a journal or
+  inbox hit opens that file. Cost: 1.4 ms median per write in-process, about 10 to 30 ms on a whole
+  `capture`.
+- **`search` says when it cut the list, and `wiki list --tag` lists everything (v2 step 0.15).** `search`
+  returned its top 10 silently, so a collection of 35 notes sharing one tag looked like 10. Now
+  `search --limit N` sets the cap and `--all` ranks every FTS match (plus the fused vector and graph
+  additions). A cut is always disclosed: the human output ends with `showing 10 of ≥N — use
+  --limit/--all`, and `--json` adds `returned`, `limit`, `truncated` and `lexical_total` (the exact
+  count of FTS-matching notes, never a vector candidate count) to the header line.
+  `plainkeep wiki list --tag <tag>` is the exhaustive, deterministic listing: it matches whole
+  frontmatter `tags` values (case-insensitive, optional leading `#`, `a-b` is one value), never body
+  text, links or a prefix/suffix of another tag, sorted by slug, one row per note (`title`, `slug`,
+  `type`, `path`); `wiki canvas '#tag'` shares the same matching, `--tag` completes from the live tags (new `tag` completion provider), and two notes that share a stem are both listed. The bench gained an `exhaustive` query
+  (the 13th of 13 matches) that only `--all` reaches, with a `recall@all` gate.
 - **Host config file (v2 step 0.5): `config.toml`.** New `bin/lib/hostconfig.py` reads
   `config.toml` from the same directory as the vault registry (`$PLAINKEEP_CONFIG_HOME`, else
   `$XDG_CONFIG_HOME/plainkeep`, else `~/.config/plainkeep`). Keys: `search.vectors`, `search.rerank`,
@@ -47,12 +73,26 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   `OLLAMA_HOST`; the config path is already a scratch directory under `seal()`. `test/run_hostconfig.py`. `setup search --dry-run` writes nothing, `setup search --yes` persists the switch even on a host that is already ready, and the `env.sh` hint appears only when the file holds nothing but exports the config repeats.
 
 ### Changed
+- **New slugs fold accents (v2 step 0.13).** `Ügyfél szerződés` becomes `ugyfel-szerzodes`, not
+  `gyf-l-szerz-d-s`, in every verb that names a file from a title. ASCII titles are byte-identical and
+  existing notes are never renamed; `doctor` lists, as information, the ones a fold would name differently.
+  `invoice` still finds a client created under its old name, and `new` refuses a name whose old form
+  already exists. `wiki canvas '#tag'` writes a non-ASCII tag's canvas under the folded name, so an
+  old dropped-letter `.canvas` file is left behind, not overwritten.
+- **`doctor`'s link lint also scans `journal/` and `tasks/` (v2 step 0.10),** and counts a symlink into the
+  engine (including through `current`) or into a vault under a symlinked path as inside.
+- **Search finds inflected Hungarian words (v2 step 0.2).** Hungarian suffixes defeated exact-token
+  matching, so `ügyfelek` never found a note that says `ügyfél`. `search` now runs a second FTS query
+  for every word of five or more characters, matching it as a prefix of `word[:max(4, len-3)]`, and
+  adds the notes the exact query missed at half the exact arm's weight: an exact-form hit still
+  outranks a prefix-only one, and notes the exact arm already found keep their rank. No stemmer
+  dependency. On the bench the Hungarian recall@5 went 0.75 to 1.0 with English MRR unchanged
+  (0.185); after 0.3 widened the corpus it holds at 0.875 and the `hu` gate is 0.85.
 - **`orient` no longer calls a commit a backup (v2 step 0.6).** `--json` gains `last_commit_age_min`,
   `backup_configured` and `backup_last_ok` (ISO timestamp of the last verified `backup run`, or null);
   `backup_age_min` stays as a deprecated alias equal to `last_commit_age_min`. The dashboard prints a
   `commits:` line for git and a separate `backup:` line that says "not configured" when no restic target
   exists. `backup run` records `.logs/backup-last-ok.json` (gitignored, so machine-local) after a passing `restic check`.
-
 - **Triage defaults to `gemma4:e2b` (v2 step 0.12).** The ollama agent used `gemma3:1b`; it is now
   `gemma4:e2b`, a separate default from enrich's `gemma4:e4b` (`PLAINKEEP_AGENT_MODEL` still overrides).
   `models` gains a `triage` stage, so `models pull --all` (and `setup models`) pulls it. Without Ollama,

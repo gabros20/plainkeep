@@ -164,6 +164,7 @@ def _hub(folder: str, typ: str, slug: str, name: str) -> Path:
     vaultio.write_text(f, f"---\ntype: {typ}\ntitle: {name}\nstatus: active\ncreated: {paths.today()}\n"
                  f"updated: {paths.today()}\ntags: []\naliases: []\nremote:\n---\n# {name}\n\n"
                  f"## Timeline\n- {paths.today()} created via `plainkeep new {typ}`\n", encoding="utf-8")
+    paths.index_written(f)
     return f
 
 

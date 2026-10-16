@@ -62,6 +62,7 @@ def main(argv):
         if "## Timeline" in t:
             t = t.replace("## Timeline", f"## Timeline\n- {paths.today()} archived → {bundle}", 1)
         vaultio.write_text(hub, t, encoding="utf-8")
+        paths.index_written(hub)
 
     shutil.rmtree(repo)
     paths.append_journal(f"archived {slug} -> {bundle}")

@@ -10,7 +10,7 @@
 //     contract DATA — small, closed, and exhaustively parity-testable against the Python verb, which
 //     is why it is worth porting: the TAB path is the hottest, most latency-visible invocation
 //     plainkeep has, and this removes its Python spawn entirely.
-//   * the PROVIDERS (`note-slug`, `asset-slug`, `task-id`, `hub`, `note-type`, `status`, `layer`),
+//   * the PROVIDERS (`note-slug`, `asset-slug`, `task-id`, `hub`, `note-type`, `status`, `tag`, `layer`),
 //     which read the live vault — every wiki/**.md's frontmatter, the tasks/ tree, the notetype
 //     registry, filing.STATUSES. Porting those means porting paths/filing/notetype and owning a
 //     SECOND frontmatter parser whose divergences would be unbounded (vault content is live and
@@ -39,7 +39,7 @@ import { iterCmds } from "./resolver.js";
 // correct TODAY and wrong the day it grows a body, so it falls through with the other six: the
 // boundary is "does the answer come from a PROVIDER", not "does the provider happen to be empty".
 const PROVIDER_NAMES = new Set([
-  "note-slug", "asset-slug", "task-id", "hub", "note-type", "status", "layer",
+  "note-slug", "asset-slug", "task-id", "hub", "note-type", "status", "tag", "layer",
 ]);
 
 // The nesting band this port models, mirroring guardrail.ts's MAX_JSON_DEPTH and chosen for the same

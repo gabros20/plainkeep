@@ -2,6 +2,7 @@
   "verb": "models",
   "summary": "download/offload/test surface for the model layer: list|status|stop|pull|test per stage (stt, ocr, vlm, enrich, triage, embed, rerank)",
   "usage": "plainkeep models list | status | stop [--all] [<model>] | pull [--stage <s>|--all] --approved | test <stage> [--model <m>] [--input <file>] --approved",
+  "risk": "safe_write",
   "args": [
     {
       "name": "action",

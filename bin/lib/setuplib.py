@@ -213,7 +213,11 @@ def _deps_importable() -> bool:
 
 
 def _index_built() -> bool:
-    return (paths.PLAINKEEP_HOME / ".index" / "plainkeep.sqlite").exists()
+    try:
+        from . import indexlib  # type: ignore
+    except ImportError:
+        import indexlib  # type: ignore
+    return indexlib.last_full_index_ts() is not None
 
 
 def _search_pip_args() -> list[str]:

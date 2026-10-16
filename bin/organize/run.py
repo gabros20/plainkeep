@@ -507,6 +507,7 @@ def cmd_apply(argv, dry: bool = False):
         if not dry:                                     # a true dry-run IS a read: no write/commit/ledger
             rel = path.relative_to(paths.PLAINKEEP_HOME).as_posix()
             vaultio.write_text(path, new, encoding="utf-8")
+            paths.index_written(path)
             _commit(rel, f"organize: {o['op']} {o['target']} — {o['rationale']}")
             _append_status(qpath, oid, "applied")
         applied += 1; changed_lines += nlines

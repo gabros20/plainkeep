@@ -9,9 +9,11 @@ anti-drift payoff of the plainkeep.json/3 refactor).
 
 `candidates(prior)` takes the words already typed after `plainkeep` and returns the candidates for the NEXT
 word as `(value, description, kind)` triples. `kind` is `verb` | `action` | `enum` | a provider name
-(`note-slug`/`asset-slug`/`task-id`/`hub`/`note-type`/`status`/`layer`).
+(`note-slug`/`asset-slug`/`task-id`/`hub`/`note-type`/`status`/`tag`/`layer`).
 """
 from __future__ import annotations
+
+import unicodedata
 
 from . import filing, manifest, notetype, paths  # type: ignore  # (namespace siblings)
 
@@ -23,6 +25,18 @@ def _note_slugs():
         return []
     return [(p.stem, paths.fm_field(p, "type") or "note")
             for p in sorted(paths.WIKI.rglob("*.md")) if p.suffix == ".md"]
+
+
+def _tags():
+    """Every distinct normalized frontmatter tag in the wiki (for `wiki list --tag`)."""
+    seen = {}
+    if paths.WIKI.exists():
+        for p in paths.WIKI.rglob("*.md"):
+            for t in paths.fm_list(p, "tags"):
+                n = unicodedata.normalize("NFC", t.strip()).lstrip("#").strip().casefold()
+                if n:
+                    seen[n] = seen.get(n, 0) + 1
+    return [(t, f"{seen[t]} note(s)") for t in sorted(seen)]
 
 
 def _asset_slugs():
@@ -73,6 +87,7 @@ PROVIDERS = {
     "hub": _hubs,
     "note-type": _note_types,
     "status": _statuses,
+    "tag": _tags,
     "layer": lambda: [],
 }
 

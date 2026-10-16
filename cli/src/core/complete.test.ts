@@ -227,7 +227,7 @@ test("EVERY name in completion.py's PROVIDERS falls through — `layer` included
   // `layer`'s Python provider is `lambda: []`, so its OUTPUT is indistinguishable from an in-core
   // empty answer and the parity catalog cannot tell which side produced it. Only this assertion
   // pins the routing, which is the part that has to survive `layer` growing a body.
-  for (const provider of ["note-slug", "asset-slug", "task-id", "hub", "note-type", "status", "layer"]) {
+  for (const provider of ["note-slug", "asset-slug", "task-id", "hub", "note-type", "status", "tag", "layer"]) {
     const home = vault({ x: { verb: "x", actions: [{ name: "go", args: [{ name: "a", complete: provider }] }] } });
     try {
       expect([provider, complete(home, ["x", "go"]).fellThrough]).toEqual([provider, true]);

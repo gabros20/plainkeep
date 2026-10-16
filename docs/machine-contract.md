@@ -236,7 +236,7 @@ a positional. The rest are optional.
 | `name` | the positional name, or `--flag` for an option (required) |
 | `type` | `string` \| `int` \| `enum` \| `slug` \| `path` \| `flag` (required). `flag` = a valueless boolean switch |
 | `enum` | the allowed values, a list — **required when `type` is `enum`** |
-| `complete` | which live completion provider feeds this arg: `note-slug` \| `asset-slug` \| `task-id` \| `hub` \| `note-type` \| `status` \| `layer` (optional). `asset-slug` is the binary-asset subset of `note-slug` (`wiki/files/*`); `layer` is reserved for a future setup-layer completion |
+| `complete` | which live completion provider feeds this arg: `note-slug` \| `asset-slug` \| `task-id` \| `hub` \| `note-type` \| `status` \| `tag` \| `layer` (optional). `asset-slug` is the binary-asset subset of `note-slug` (`wiki/files/*`); `layer` is reserved for a future setup-layer completion |
 | `required` | `true` for a mandatory arg — a positional, **or** a value-flag that must be supplied (e.g. `repo adopt --kind`), which a form generator renders as a mandatory field (optional; default `false`) |
 | `default` | the value used when the arg is omitted (optional) |
 | `help` | one-line description (optional) |
@@ -339,7 +339,7 @@ Rows (NDJSON, the standard §1 rows envelope — a header then one object per ca
 |---|---|
 | `value` | the completion candidate (the literal next word) |
 | `description` | a short human hint (an action's summary, a note's type, a task's status+title; may be empty) |
-| `kind` | `verb` \| `action` \| `enum` \| a provider name (`note-slug`/`asset-slug`/`task-id`/`hub`/`note-type`/`status`/`layer`) — what the candidate *is*, so a UI can group/icon them |
+| `kind` | `verb` \| `action` \| `enum` \| a provider name (`note-slug`/`asset-slug`/`task-id`/`hub`/`note-type`/`status`/`tag`/`layer`) — what the candidate *is*, so a UI can group/icon them |
 
 Resolution mirrors §5.1:
 

@@ -38,6 +38,7 @@ def main(argv):
             lines.append("\n## Log\n")
             with vaultio.open_append(note, encoding="utf-8") as fh:
                 fh.write("\n".join(lines) + "\n")
+            paths.index_written(note)
 
     y = paths.journal_path(date.today() - timedelta(days=1))
     data = {

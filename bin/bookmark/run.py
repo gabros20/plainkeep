@@ -149,6 +149,7 @@ def main(argv: list[str]) -> int:
             enrichverb.enrich_note(slug)  # best-effort — an enrich failure must never fail the save
         except Exception:
             pass
+    paths.index_written(f)   # after enrich, so the indexed text is the final note
 
     archived = None
     if archive:

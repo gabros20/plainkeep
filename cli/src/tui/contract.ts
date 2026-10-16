@@ -9,7 +9,7 @@ export interface Arg {
   name: string; // positional name, or "--flag"
   type?: ArgType;
   enum?: string[];
-  complete?: string; // provider id: note-slug | task-id | hub | note-type | status | layer | asset-slug
+  complete?: string; // provider id: note-slug | task-id | hub | note-type | status | tag | layer | asset-slug
   required?: boolean;
   default?: unknown;
   help?: string;

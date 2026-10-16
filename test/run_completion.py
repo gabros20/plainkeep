@@ -117,6 +117,15 @@ def main() -> int:
         check("__complete files open → asset slugs only (not arbitrary notes)",
               "q3-report" in fopen and "alpha" not in fopen, str(fopen))
 
+        # wiki list --tag completes from the live frontmatter tags (normalized, de-duplicated, sorted)
+        tp = h / "wiki" / "tagged-a.md"
+        tp.write_text("---\ntype: note\ntitle: A\ntags: [Clients, #proj-x]\n---\n# A\n", encoding="utf-8")
+        tq = h / "wiki" / "tagged-b.md"
+        tq.write_text("---\ntype: note\ntitle: B\ntags: [clients]\n---\n# B\n", encoding="utf-8")
+        tg, _ = comp(h, "wiki", "list", "--tag")
+        check("__complete wiki list --tag → normalized frontmatter tags, once each",
+              [t for t in tg if t in ("clients", "proj-x")] == ["clients", "proj-x"] and "Clients" not in tg, str(tg))
+
         # ---- plainkeep complete --json: the structured completion contract (Wave 2) ----
         def cjson(*prior):
             r = run(h, "complete", *prior, "--json")

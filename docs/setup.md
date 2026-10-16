@@ -30,8 +30,8 @@ What that changes in practice:
 | Run plainkeep | `plainkeep <verb>` (the installed launcher on PATH). Your checkout's own `./plainkeep` against that same checkout is the refusal above. |
 | See which engine is live | `plainkeep vault status` — it reports the vault, the engine, and whether they agree. |
 | Pull an engine fix | `script/update` (refreshes the SOURCE checkout, staged) then `python3 <engine>/bin/lib/enginetree.py --update <checkout>` (stages, checksums, self-tests, then switches one pointer). Two steps on purpose: an update you have not installed cannot break a running vault. |
-| Start a NEW vault | `plainkeep vault init <path> --yes` — content dirs, configuration, `plugins/`, a generated `plainkeep.json`, the marker and a registry entry. **No engine code**: a vault is data. |
-| Adopt an EXISTING directory as a vault | `plainkeep vault register <path> --yes`. `init` creates; `register` adopts — including this checkout, which is legitimately both an engine source and a vault. |
+| Start a NEW vault | `plainkeep vault init <path> --approved` — content dirs, configuration, `plugins/`, a generated `plainkeep.json`, the marker and a registry entry. **No engine code**: a vault is data. |
+| Adopt an EXISTING directory as a vault | `plainkeep vault register <path> --approved`. `init` creates; `register` adopts — including this checkout, which is legitimately both an engine source and a vault. |
 | Roll back | `python3 <engine>/bin/lib/enginetree.py --rollback` — see the runbook below. |
 | See what a rollback would do | `python3 <engine>/bin/lib/enginetree.py --print pairs`, or the `engine:` rows in `plainkeep doctor`. |
 | Add a capability | `plainkeep new verb <name>` — it scaffolds into `<vault>/plugins/local/`, which is yours and survives every engine upgrade. Editing the engine is not an option; it is read-only. |
@@ -86,7 +86,7 @@ If you have an existing vault from before the opskit → plainkeep rename (ADR-0
 ```sh
 mv ~/ops ~/plainkeep                       # 1. move the vault itself
 mv ~/plainkeep/.ops-engine-ref ~/plainkeep/.plainkeep-engine-ref  # 2. rename the engine-ref file
-~/plainkeep/script/setup --yes             # 3. install the engine and re-point PATH at it
+~/plainkeep/script/setup --approved             # 3. install the engine and re-point PATH at it
 ```
 
 Step 3 replaced a manual `ln -sf ~/plainkeep/plainkeep …` onto PATH. Since ADR-017 the thing on PATH
@@ -159,7 +159,7 @@ Each accepted layer runs through the same engine as every other path below. Ther
 
 The wizard is interactive-only. With no tty (e.g. a piped `curl … | sh`), or combined with `--json` or `--dry-run`, it exits `2` and points you at the non-interactive forms:
 
-- `plainkeep setup --all --yes` to apply.
+- `plainkeep setup --all --approved` to apply.
 - `plainkeep setup --json` to inspect.
 
 Those forms and the per-layer controls are below.
@@ -181,19 +181,19 @@ The `automation` row reads `ready` only when the jobs are **loaded into launchd*
 Run one layer at a time for a controlled setup:
 
 ```sh
-plainkeep setup skeleton --yes
-plainkeep setup search --yes
-plainkeep setup models --yes
-plainkeep setup automation --yes   # renders the job plists AND loads them into launchd
-plainkeep setup ui --yes
+plainkeep setup skeleton --approved
+plainkeep setup search --approved
+plainkeep setup models --approved
+plainkeep setup automation --approved   # renders the job plists AND loads them into launchd
+plainkeep setup ui --approved
 ```
 
-Use `--yes` when the layer is allowed to install packages, pull models, or write generated local files.
+Use `--approved` when the layer is allowed to install packages, pull models, or write generated local files.
 
 To advance every non-ready layer setup can safely handle:
 
 ```sh
-plainkeep setup --all --yes
+plainkeep setup --all --approved
 ```
 
 `--all` is best-effort:
@@ -207,7 +207,7 @@ plainkeep setup --all --yes
 
 Any advance can be previewed. `--dry-run` prints exactly what *would* run and installs or writes nothing.
 
-A dry-run is a read, so it never needs `--yes` — even for the confirm-class `search`/`models` layers:
+A dry-run is a read, so it never needs `--approved` — even for the confirm-class `search`/`models` layers:
 
 ```sh
 plainkeep setup search --dry-run     # what the search layer would create/install/pull
@@ -222,8 +222,8 @@ The optional `$PLAINKEEP_HOME/.venv` holds **all** optional deps. The `plainkeep
 
 Each layer installs its own dep subset into the same venv:
 
-- `plainkeep setup search --yes` creates `$PLAINKEEP_HOME/.venv` (if missing), installs the search deps (`lancedb` + `fastembed`), pulls the embedding model, and builds the index.
-- `plainkeep setup models --yes` does **two things**, and it says so before you confirm: it pulls the local Ollama model **weights** (gigabytes, over the network — not a pip install), and it installs the file-processing packages (Pillow, trafilatura, and — on Apple Silicon — mlx-vlm) into the **same** venv.
+- `plainkeep setup search --approved` creates `$PLAINKEEP_HOME/.venv` (if missing), installs the search deps (`lancedb` + `fastembed`), pulls the embedding model, and builds the index.
+- `plainkeep setup models --approved` does **two things**, and it says so before you confirm: it pulls the local Ollama model **weights** (gigabytes, over the network — not a pip install), and it installs the file-processing packages (Pillow, trafilatura, and — on Apple Silicon — mlx-vlm) into the **same** venv.
 
 **Where those package lists come from (ADR-020).** Both are read from the engine's own
 `pyproject.toml` — the `[search]` and `[models]` extras — which is the same file the engine's
@@ -238,7 +238,7 @@ Re-running the relevant `plainkeep setup <layer>` provisions or migrates that la
 The venv is disposable and rebuildable:
 
 ```sh
-rm -rf .venv && plainkeep setup search --yes && plainkeep setup models --yes
+rm -rf .venv && plainkeep setup search --approved && plainkeep setup models --approved
 ```
 
 A broken or half-built venv is repaired automatically on the next `plainkeep setup search`/`models`.
@@ -280,7 +280,7 @@ directories, so an edit inside it cannot rewrite them.)
 ## The terminal UI layer
 
 ```sh
-plainkeep setup ui --yes
+plainkeep setup ui --approved
 ```
 
 This installs the compiled **`plainkeep ui`** binary (ADR-011) — the guided human terminal UI — into `$PLAINKEEP_HOME/.local/bin/plainkeep-ui`, where the `bin/ui/` shim looks first.
@@ -290,7 +290,7 @@ Key facts:
 - It downloads the matching platform asset from the template repo's GitHub release with the authenticated **`gh` CLI**. If the layer reports `blocked`, install gh with `brew install gh`.
 - It verifies the asset's sha256 against the release's `checksums.txt` before installing.
 - The binary is self-contained — no Node or Bun needed.
-- **Updates ride `script/update`.** The engine ships the expected version in `bin/ui/version.txt`; the installed binary self-reports via `plainkeep-ui --version`. When they disagree, the layer turns `partial` with "update available" and re-running `plainkeep setup ui --yes` re-downloads the pinned release.
+- **Updates ride `script/update`.** The engine ships the expected version in `bin/ui/version.txt`; the installed binary self-reports via `plainkeep-ui --version`. When they disagree, the layer turns `partial` with "update available" and re-running `plainkeep setup ui --approved` re-downloads the pinned release.
 
 Full install, use, and update details are in the [terminal UI guide](terminal-ui.md).
 
@@ -298,7 +298,7 @@ Full install, use, and update details are in the [terminal UI guide](terminal-ui
 
 Scheduling is not an add-on here. The premise of the whole system is that your day opens and closes
 without you asking, so the `automation` layer is **on by default** in the wizard and in
-`plainkeep setup --all --yes`. What it schedules (macOS/launchd; see the note at the end):
+`plainkeep setup --all --approved`. What it schedules (macOS/launchd; see the note at the end):
 
 | Job | When | What it does |
 | --- | --- | --- |
@@ -346,7 +346,7 @@ set 'close_nudge' -> daily 22:00  (was daily 18:30)
   wrote jobs/registry.json
 
 ⚠ launchd is still running the OLD schedule for 'close_nudge' — the loaded schedule is stale
-  make it live:  plainkeep job enable close_nudge --yes
+  make it live:  plainkeep job enable close_nudge --approved
 ```
 
 `plainkeep job status` reports the same fact as **drift**, and `plainkeep doctor` warns about it.
@@ -383,16 +383,16 @@ them had a green setup row and no automation.
 ### Turning it on, off, and back on
 
 ```sh
-plainkeep job enable --all --yes      # render fresh, install, load
-plainkeep job enable start --yes      # just one job
-plainkeep job disable --all --yes     # unload + remove the installed copies
+plainkeep job enable --all --approved      # render fresh, install, load
+plainkeep job enable start --approved      # just one job
+plainkeep job disable --all --approved     # unload + remove the installed copies
 plainkeep job enable --all --dry-run  # exactly what would happen; nothing written, launchctl not called
 ```
 
-`enable` and `disable` need `--yes` (they exit `3` without it), and so does `plainkeep setup
+`enable` and `disable` need `--approved` (they exit `3` without it), and so does `plainkeep setup
 automation` — the layer is confirm-class for the same reason the verb is. That is not ceremony: they
 write outside your vault, into `~/Library/LaunchAgents`, and they change the state of a running
-system daemon. `--dry-run` is a read and never needs `--yes`.
+system daemon. `--dry-run` is a read and never needs `--approved`.
 
 A job whose registry entry is illegal under §15 — inline shell logic, a verb that does not exist, an
 external command that is not on the allowlist, a schedule that is not one of the four cadences — is
@@ -419,7 +419,7 @@ plainkeep job run start
 `plainkeep doctor` reports two advisory warnings (never a failure — running plainkeep by hand is a
 legitimate way to run it):
 
-- *rendered but not loaded* → `plainkeep job enable --all --yes`
+- *rendered but not loaded* → `plainkeep job enable --all --approved`
 - *rendered plists no longer match the registry* → `plainkeep job apply`
 
 Job output goes to `.logs/jobs/<name>.log`.
@@ -431,7 +431,7 @@ scheduler-neutral by design, so the jobs remain runnable by hand (or from any sc
 ## Agent skills: the manual, where agents actually look
 
 ```sh
-plainkeep setup agents --yes
+plainkeep setup agents --approved
 ```
 
 The operating manual (`skills/operate-plainkeep/SKILL.md`) is engine-owned, and since ADR-017 the
@@ -489,7 +489,7 @@ plainkeep setup --json
 Use the returned rows to choose the smallest non-ready layer, then advance it explicitly:
 
 ```sh
-plainkeep setup <layer> --yes
+plainkeep setup <layer> --approved
 ```
 
 Rules:

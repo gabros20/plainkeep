@@ -2,7 +2,7 @@
 indexlib.py — stage-1 search engine for the Personal OS (§10.2).
 
 Implements exactly what the validated spec calls stage 1:
-  - SQLite FTS5 over the content tree (wiki/tasks/journal), chunked by markdown heading,
+  - SQLite FTS5 over the vault's content collections (wiki/tasks/journal/inbox), chunked by markdown heading,
     incremental by file content hash,
   - the wikilink graph (one-hop expansion) fused with keyword via reciprocal-rank fusion,
   - one rebuildable file at .index/plainkeep.sqlite (the rebuild rule: rm -rf .index && plainkeep index).
@@ -27,16 +27,30 @@ try:
     from . import vaultroot  # type: ignore  # (namespace sibling)
 except ImportError:
     import vaultroot  # type: ignore
+try:
+    from . import wikilink  # type: ignore
+except ImportError:      # loaded by file path (tests) — sibling is not a package then
+    import sys as _s, os as _o
+    _s.path.insert(0, _o.path.dirname(_o.path.abspath(__file__)))
+    import wikilink  # type: ignore
 
 # The SELECTED data root — no engine-relative fallback (ADR-014 D2, Phase 2 Task 1b). An index built
 # against a guessed root is the quiet half of the same failure a wrong-root write is: it indexes the
 # wrong notes and answers searches from them.
 PLAINKEEP_HOME = vaultroot.active_root()
-CONTENT = Path(os.environ.get("PLAINKEEP_CONTENT", PLAINKEEP_HOME / "wiki"))
+# The indexed collections (v2 0.3): the vault root is the default content root, restricted to this
+# allowlist so `.index/`, `.git/`, `files/`-style trees and engine state are never read as notes.
+# `PLAINKEEP_CONTENT` still points the indexer at one custom tree (everything under it is indexed;
+# a file outside an allowlisted top directory is collection "wiki", the knowledge base).
+COLLECTIONS = ("wiki", "tasks", "journal", "inbox")
+CONTENT = Path(os.environ.get("PLAINKEEP_CONTENT", PLAINKEEP_HOME))
+# Bump when the index tables change shape: connect() drops the old tables and the next `plainkeep
+# index` rebuilds everything (the rebuild rule, done for you). 2 = `collection` column + vault-root paths.
+SCHEMA_VERSION = "2"
 INDEX_DIR = PLAINKEEP_HOME / ".index"
 DB = INDEX_DIR / "plainkeep.sqlite"
 
-LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+LINK_RE = wikilink.LINK_RE
 HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 
 # Paths an external editor scatters that are NEVER content (proposal Part 3.1): Obsidian config +
@@ -51,13 +65,15 @@ _sys.path.insert(0, str(Path(__file__).resolve().parent))  # let sibling `embed`
 # top-level as `indexlib` (test/run_search_impl.py:27 puts bin/lib on sys.path), so the import has
 # to work either way — same reason the line above exists.
 try:
+    from . import hostconfig  # type: ignore  # (namespace sibling)
     from . import vaultio  # type: ignore  # (namespace sibling)
 except ImportError:
+    import hostconfig  # type: ignore
     import vaultio  # type: ignore
 
 
 def _vectors_on() -> bool:
-    return os.environ.get("PLAINKEEP_VECTORS", "").lower() in ("1", "true", "yes", "on")
+    return hostconfig.flag("search.vectors")
 
 
 def _vec_modules():
@@ -77,12 +93,14 @@ def _vec_modules():
 
 def _embed_stale(con, rel: str, model: str) -> bool:
     """True if this file has no current-model embedding yet (newly enabled, or model switched)."""
+    if _meta_get(con, "vectors_prefix_pending"):
+        return True   # the stored vectors still carry pre-migration paths: `embedded` is not trustworthy
     r = con.execute("SELECT model FROM embedded WHERE path=?", (rel,)).fetchone()
     return (r is None) or (r[0] != model)
 
 
 def _rerank_on() -> bool:
-    return os.environ.get("PLAINKEEP_RERANK", "").lower() in ("1", "true", "yes", "on")
+    return hostconfig.flag("search.rerank")
 
 
 def _candidate_texts(paths: list[str], limit: int = 1200) -> dict:
@@ -96,14 +114,104 @@ def _candidate_texts(paths: list[str], limit: int = 1200) -> dict:
     return out
 
 
+def _migrate_in_place(con: sqlite3.Connection) -> None:
+    """Schema 1 -> 2 without losing work. Schema-1 paths were relative to `<vault>/wiki`, so every
+    existing row becomes `wiki/<path>` in collection `wiki`; hashes and embedding records stay valid,
+    so the next `plainkeep index` only has to read tasks/, journal/ and inbox/. All-or-nothing: any
+    error rolls the lexical half back and the caller falls back to dropping the index."""
+    con.execute("BEGIN")
+    try:
+        con.execute("ALTER TABLE chunks RENAME TO chunks_v1")
+        con.execute("CREATE VIRTUAL TABLE chunks USING fts5(path, heading, body, slug UNINDEXED, collection UNINDEXED)")
+        con.execute("INSERT INTO chunks(path, heading, body, slug, collection) "
+                    "SELECT 'wiki/' || path, heading, body, slug, 'wiki' FROM chunks_v1")
+        con.execute("DROP TABLE chunks_v1")
+        con.execute("ALTER TABLE files ADD COLUMN collection TEXT")
+        con.execute("UPDATE files SET path = 'wiki/' || path, collection = 'wiki'")
+        con.execute("UPDATE links SET src = 'wiki/' || src")
+        con.execute("UPDATE embedded SET path = 'wiki/' || path")
+        con.execute("UPDATE notemeta SET path = 'wiki/' || path")
+        con.execute("DELETE FROM meta WHERE key = 'last_index_ts'")   # --changed must not skip the new collections
+        # the vector half is a separate, durable step: if this process cannot load LanceDB, or dies before
+        # finishing it, a later process completes it (`_finish_vector_migration`)
+        con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('vectors_prefix_pending', 'wiki/')")
+        con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema', ?)", (SCHEMA_VERSION,))
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+
+
+def _finish_vector_migration(con: sqlite3.Connection) -> None:
+    """Complete the vector half of the in-place migration when the durable `vectors_prefix_pending`
+    flag is set: rewrite the LanceDB paths (idempotent), then clear the flag. If LanceDB cannot be
+    loaded by this process the flag stays for a later one; if the rewrite itself fails the vector table
+    is dropped and the embedding records cleared (a re-embed), then the flag is cleared. While the flag
+    is set `embedded` is not trusted (see `_embed_stale`, `pending_embeddings`)."""
+    prefix = _meta_get(con, "vectors_prefix_pending")
+    if not prefix:
+        return
+    try:
+        _, vs = _vec_modules()
+    except Exception:
+        vs = None
+    if not vs:
+        return
+    try:
+        vs.prefix_paths(prefix)
+    except Exception:
+        try:
+            vs.drop()
+        except Exception:
+            return   # cannot touch the store at all: keep the flag, try again later
+        con.execute("DELETE FROM embedded")
+    con.execute("DELETE FROM meta WHERE key = 'vectors_prefix_pending'")
+    con.commit()
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    """Index schema upgrade. Preferred: migrate in place (lexical rows, then the vector paths
+    best-effort). If anything fails, or the content root is not the default vault root, fall back to
+    the rebuild rule: drop the tables and vectors, and the next `plainkeep index` rebuilds them."""
+    con.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
+    if _meta_get(con, "schema") == SCHEMA_VERSION:
+        _finish_vector_migration(con)   # a previous process may have migrated the rows but not the vectors
+        return
+    old = {n for (n,) in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    if old & {"chunks", "files"}:
+        have_cols = {r[1] for r in con.execute("PRAGMA table_info(files)")}
+        migrated = False
+        if "collection" not in have_cols and not os.environ.get("PLAINKEEP_CONTENT"):
+            try:
+                _migrate_in_place(con)
+                migrated = True
+            except Exception:
+                migrated = False
+            if migrated:
+                _finish_vector_migration(con)
+                return
+        for t in ("chunks", "files", "links", "embedded", "notemeta"):
+            con.execute(f"DROP TABLE IF EXISTS {t}")
+        con.execute("DELETE FROM meta WHERE key != 'schema'")   # a stale build stamp would make --changed skip everything
+        try:  # vectors carry the old (content-relative) paths; they are rebuilt with the rest
+            _, vs = _vec_modules()
+            if vs:
+                vs.drop()
+        except Exception:
+            pass
+    _meta_set(con, "schema", SCHEMA_VERSION)
+    con.commit()
+
+
 def connect() -> sqlite3.Connection:
     vaultio.mkdir(INDEX_DIR)
     con = sqlite3.connect(DB)
     con.execute("PRAGMA journal_mode=WAL")
+    _migrate(con)
     con.executescript(
         """
-        CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, hash TEXT);
-        CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(path, heading, body, slug UNINDEXED);
+        CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY, hash TEXT, collection TEXT);
+        CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(path, heading, body, slug UNINDEXED, collection UNINDEXED);
         CREATE TABLE IF NOT EXISTS links(src TEXT, dst TEXT);
         CREATE TABLE IF NOT EXISTS embedded(path TEXT PRIMARY KEY, model TEXT);
         CREATE TABLE IF NOT EXISTS notemeta(path TEXT PRIMARY KEY, author TEXT, derived_from TEXT);
@@ -126,6 +234,24 @@ def _ignored(rel: str) -> bool:
     return any(part in IGNORE_PARTS for part in Path(rel).parts)
 
 
+def collection_of(rel: str) -> str:
+    """The collection a root-relative path belongs to: its top directory when that is an allowlisted
+    one, else "wiki" (a custom PLAINKEEP_CONTENT tree is a knowledge base)."""
+    top = Path(rel).parts[0] if Path(rel).parts else ""
+    return top if top in COLLECTIONS else "wiki"
+
+
+def notes_under(root: Path | str = CONTENT) -> list[Path]:
+    """Every markdown file the indexer reads under `root`, sorted. At the vault root that is the
+    allowlisted collections only; a custom content root is read whole."""
+    root = Path(root)
+    if root.resolve() == PLAINKEEP_HOME.resolve():
+        found = [f for c in COLLECTIONS if (root / c).is_dir() for f in (root / c).rglob("*.md")]
+    else:
+        found = list(root.rglob("*.md"))
+    return sorted(found)
+
+
 def _chunks(text: str) -> list[tuple[str, str]]:
     """Split markdown into (heading, body) sections; preamble under '(top)'."""
     out, head, buf = [], "(top)", []
@@ -143,7 +269,7 @@ def _chunks(text: str) -> list[tuple[str, str]]:
 
 
 def _norm_link(target: str) -> str:
-    return target.split("#", 1)[0].split("|", 1)[0].strip()
+    return wikilink.norm_link(target)
 
 
 def _note_provenance(text: str) -> tuple[str, str]:
@@ -173,6 +299,118 @@ def _embed_text(content: str, limit: int = 2000) -> str:
     return content.replace("---", " ")[:limit].strip()
 
 
+def _write_rows(con, rel: str, content: str, h: str) -> None:
+    """Replace every lexical row (chunks, links, provenance, hash) of one file. The single place a
+    file's FTS rows are written, shared by the full `index()` and the per-write `index_paths()`."""
+    con.execute("DELETE FROM chunks WHERE path=?", (rel,))
+    con.execute("DELETE FROM links WHERE src=?", (rel,))
+    slug = Path(rel).stem
+    coll = collection_of(rel)
+    for head, body in _chunks(content):
+        con.execute("INSERT INTO chunks(path, heading, body, slug, collection) VALUES(?,?,?,?,?)",
+                    (rel, head, body, slug, coll))
+    for tgt in {_norm_link(t) for t in LINK_RE.findall(content)}:
+        con.execute("INSERT INTO links(src, dst) VALUES(?,?)", (rel, tgt))
+    au, dv = _note_provenance(content)
+    con.execute("INSERT OR REPLACE INTO notemeta(path, author, derived_from) VALUES(?,?,?)", (rel, au, dv))
+    con.execute("INSERT OR REPLACE INTO files(path, hash, collection) VALUES(?,?,?)", (rel, h, coll))
+
+
+def _drop_rows(con, rel: str) -> None:
+    for t, col in (("chunks", "path"), ("links", "src"), ("files", "path"), ("embedded", "path"),
+                   ("notemeta", "path")):
+        con.execute(f"DELETE FROM {t} WHERE {col}=?", (rel,))
+    if _vectors_on():   # a pruned note must not keep answering from the vector arm
+        try:
+            _, vs = _vec_modules()
+            if vs:
+                vs.delete_path(rel)
+        except Exception:
+            pass
+
+
+def index_paths(paths: list) -> int:
+    """Refresh the LEXICAL rows of just these files (v2 0.4) so a note written by a verb is searchable
+    before the verb returns. A missing path is pruned (a moved/deleted note). Embeddings are not
+    computed here: a changed file loses its `embedded` row, which is what `pending_embeddings()` counts,
+    and the next full `plainkeep index` embeds it. Returns the number of files (re)indexed."""
+    con = connect()
+    n = 0
+    try:
+        for raw in paths:
+            p = Path(raw)
+            if not p.is_absolute():
+                p = PLAINKEEP_HOME / p
+            try:
+                rel = str(p.relative_to(CONTENT))
+            except ValueError:
+                continue
+            at_root = CONTENT.resolve() == PLAINKEEP_HOME.resolve()
+            if _ignored(rel) or p.suffix != ".md" or (at_root and Path(rel).parts[0] not in COLLECTIONS):
+                continue
+            if not p.exists():
+                _drop_rows(con, rel)
+                continue
+            content = p.read_text(encoding="utf-8")
+            h = hashlib.sha1(content.encode()).hexdigest()
+            row = con.execute("SELECT hash FROM files WHERE path=?", (rel,)).fetchone()
+            if row and row[0] == h:
+                continue
+            _write_rows(con, rel, content, h)
+            con.execute("DELETE FROM embedded WHERE path=?", (rel,))
+            n += 1
+        con.commit()
+    finally:
+        con.close()
+    return n
+
+
+def index_paths_safe(paths: list) -> None:
+    """`index_paths` for write verbs: a write must never fail because of the index, so any error is a
+    one-line warning on stderr and the write stands."""
+    try:
+        index_paths(paths)
+    except (Exception, SystemExit) as e:  # noqa: BLE001  (SystemExit: the write guard's refusal)
+        print(f"warning: search index not refreshed ({type(e).__name__}: {e}) — run `plainkeep index`",
+              file=_sys.stderr)
+
+
+def last_full_index_ts() -> float | None:
+    """When a full (or --changed) `plainkeep index` last finished, or None if it never has. Unlike the
+    sqlite file's mtime this is NOT moved by per-write refreshes (index_paths), so it answers "is the
+    index complete", not "was it touched". Read-only: never creates the index."""
+    if not DB.exists():
+        return None
+    try:
+        con = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
+        try:
+            raw = con.execute("SELECT value FROM meta WHERE key='last_index_ts'").fetchone()
+        finally:
+            con.close()
+        return float(raw[0]) if raw and raw[0] else None
+    except Exception:
+        return None
+
+
+def pending_embeddings() -> int:
+    """Files whose vector is missing or from another model — 0 when the vector plane is off, since
+    nothing is waiting for an embedder then. Never raises (status/orient call it)."""
+    if not _vectors_on() or not DB.exists():
+        return 0
+    try:
+        emb, _vs = _vec_modules()
+        con = connect()
+        try:
+            if emb is None:   # vectors on but unusable: `plainkeep index` cannot embed either (doctor says why)
+                return 0
+            model = emb.model_name()
+            return sum(1 for (rel,) in con.execute("SELECT path FROM files") if _embed_stale(con, rel, model))
+        finally:
+            con.close()
+    except Exception:
+        return 0
+
+
 def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool = False) -> int:
     """Build/refresh the index. Resumable + batched so a large vault's multi-hour embedding
     backfill survives interruption (each FTS commit and each embed batch is durable; a re-run
@@ -189,6 +427,7 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
     """
     root = Path(root)
     con = connect()
+    _finish_vector_migration(con)
     started = time.time()
     last_ts = None
     if changed_only:
@@ -208,7 +447,7 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
 
     # --- pass 1: keyword/graph (fast), collect the embed worklist ---
     seen, changed, worklist = set(), 0, []
-    for p in sorted(root.rglob("*.md")):
+    for p in notes_under(root):
         rel = str(p.relative_to(root))
         if _ignored(rel):
             continue
@@ -227,18 +466,7 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
         if not changed_file and not need_embed:
             continue  # unchanged AND already embedded with this model — skip (resume fast-path)
         if changed_file:
-            con.execute("DELETE FROM chunks WHERE path=?", (rel,))
-            con.execute("DELETE FROM links WHERE src=?", (rel,))
-            slug = Path(rel).stem
-            for head, body in _chunks(content):
-                con.execute("INSERT INTO chunks(path, heading, body, slug) VALUES(?,?,?,?)",
-                            (rel, head, body, slug))
-            for tgt in {_norm_link(t) for t in LINK_RE.findall(content)}:
-                con.execute("INSERT INTO links(src, dst) VALUES(?,?)", (rel, tgt))
-            au, dv = _note_provenance(content)
-            con.execute("INSERT OR REPLACE INTO notemeta(path, author, derived_from) VALUES(?,?,?)",
-                        (rel, au, dv))
-            con.execute("INSERT OR REPLACE INTO files(path, hash) VALUES(?,?)", (rel, h))
+            _write_rows(con, rel, content, h)
             changed += 1
             if changed % COMMIT_EVERY == 0:
                 con.commit()  # durable progress for the keyword pass
@@ -291,13 +519,30 @@ def index(root: Path | str = CONTENT, verbose: bool = True, changed_only: bool =
     return n
 
 
-def _fts_query(q: str) -> str:
+def _tokens(q: str) -> list[str]:
     # NFC first: a decomposed "u" + combining diaeresis (pasted from macOS) would otherwise split the word
     q = unicodedata.normalize("NFC", q)
     # \w is Unicode-aware (ü, ő, é survive); it also matches "_", so drop tokens with no letter/digit
     # (e.g. "__") rather than hand FTS5 an empty or punctuation-only phrase.
-    toks = [t for t in re.findall(r"\w+", q.lower()) if len(t) > 1 and any(c.isalnum() for c in t)]
-    return " OR ".join(f'"{t}"' for t in toks) or '""'
+    return [t for t in re.findall(r"\w+", q.lower()) if len(t) > 1 and any(c.isalnum() for c in t)]
+
+
+def _fts_query(q: str) -> str:
+    return " OR ".join(f'"{t}"' for t in _tokens(q)) or '""'
+
+
+def _lexical_match(q: str) -> str:
+    """The FTS expression both lexical arms together match: exact words OR the prefix arm's stems."""
+    pfx = _prefix_query(q)
+    return f"({_fts_query(q)}) OR ({pfx})" if pfx else _fts_query(q)
+
+
+def _prefix_query(q: str) -> str | None:
+    """The Hungarian inflection arm (v2 0.2): agglutinative suffixes (ügyfél -> ügyfelek, ügyfélnek)
+    defeat exact-token FTS, so every token of 5+ chars also matches as a prefix of its stem
+    candidate `tok[:max(4, len-3)]`. No stemmer dependency. None when no token qualifies."""
+    stems = {t[:max(4, len(t) - 3)] for t in _tokens(q) if len(t) >= 5}
+    return " OR ".join(f'"{s}"*' for s in sorted(stems)) or None
 
 
 LOG_DIR = PLAINKEEP_HOME / ".logs"
@@ -333,7 +578,7 @@ def snippets(query: str, wanted, k: int = 40) -> dict:
         rows = con.execute(
             "SELECT path, snippet(chunks, 2, '<', '>', '…', 12) AS s, bm25(chunks) AS r "
             "FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
-            (_fts_query(query), k),
+            (_lexical_match(query), k),
         ).fetchall()
         for path, s, _r in rows:
             if path in wanted and path not in out:
@@ -351,9 +596,24 @@ def _authorship(con) -> dict:
 
 
 def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
-           author: str | None = None) -> list[tuple[str, str, float]]:
+           author: str | None = None, collection: str | None = None,
+           all_hits: bool = False) -> list[tuple[str, str, float]]:
     """Return [(path, heading, score)] — FTS5 keyword + one-hop wikilink-graph, fused by RRF.
+    See `search_full` for the cap-disclosure counts; this is its hits-only form."""
+    return search_full(query, k, graph, log, author, collection, all_hits)["hits"]
 
+
+def search_full(query: str, k: int = 10, graph: bool = True, log: bool = False,
+                author: str | None = None, collection: str | None = None,
+                all_hits: bool = False) -> dict:
+    """{hits, returned, limit, truncated, lexical_total} (v2 0.15). `hits` is search()'s list.
+
+    `lexical_total` is the EXACT number of notes the FTS arms match (exact + prefix, after the
+    collection/author filters) — never a vector candidate count. `all_hits` removes the cut on the
+    lexical arms: every FTS match is ranked and returned, plus the fused vector and graph additions.
+    `truncated` is true when a lexical match, or a fused candidate, was left out by the limit.
+
+    `collection` (wiki|tasks|journal|inbox) restricts every arm to that collection BEFORE the top-k cut.
     `author` filters by provenance plane (Part 4.3): 'human' excludes agent-authored AND derived
     material (any note with `derived_from`); 'agent' keeps only `author: agent` notes."""
     if not any(c.isalnum() for c in query):
@@ -361,14 +621,18 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
         # for it, so answer no hits; the query is still logged
         if log:
             log_query(query, [])
-        return []
+        return {"hits": [], "returned": 0, "limit": None if all_hits else k, "truncated": False,
+                "lexical_total": 0}
     con = connect()
+    cap = 10 ** 9 if all_hits else k * 4   # SQL LIMIT of each lexical arm
     amap = _authorship(con) if author else {}
     fts = _fts_query(query)
+    cfilter, cargs = (" AND collection = ?", (collection,)) if collection else ("", ())
     try:
         rows = con.execute(
-            "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ? ORDER BY r LIMIT ?",
-            (fts, k * 4),
+            "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ?" + cfilter
+            + " ORDER BY r LIMIT ?",
+            (fts, *cargs, cap),
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
@@ -378,13 +642,40 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
             best[path] = head
             order.append(path)
     scores = {p: 1.0 / (60 + i) for i, p in enumerate(order, 1)}  # RRF: keyword arm
+    pfx = _prefix_query(query)
+    if pfx:  # RRF: prefix arm at half weight, so an exact-form hit still outranks a prefix-only one
+        try:
+            prows = con.execute(
+                "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ?" + cfilter
+                + " ORDER BY r LIMIT ?",
+                (pfx, *cargs, cap),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            prows = []
+        porder = []
+        for path, head, _r in prows:
+            if path not in porder:
+                porder.append(path)
+            best.setdefault(path, head)
+        for i, p in enumerate(porder, 1):
+            if p not in scores:  # only notes the exact arm missed: exact-form ranking stays untouched
+                scores[p] = 0.5 / (60 + i)
+    # exact FTS-matching note set (both lexical arms, uncapped) for the cap disclosure
+    try:
+        lex_q = fts if not pfx else f"({fts}) OR ({pfx})"
+        lex_all = {r[0] for r in con.execute(
+            "SELECT DISTINCT path FROM chunks WHERE chunks MATCH ?" + cfilter, (lex_q, *cargs))}
+    except sqlite3.OperationalError:
+        lex_all = set()
     if graph and order:
-        slug_to_file = {Path(p).stem: p for (p,) in con.execute("SELECT path FROM files")}
-        for i, p in enumerate(order[:k], 1):
+        slug_to_file = {Path(p).stem: p for (p,) in
+                        con.execute("SELECT path FROM files ORDER BY collection = 'wiki'")}  # wiki wins a clash
+        for i, p in enumerate(order if all_hits else order[:k], 1):
             for (dst,) in con.execute("SELECT dst FROM links WHERE src=?", (p,)):
                 fp = slug_to_file.get(dst)
                 if fp:
                     scores[fp] = scores.get(fp, 0.0) + 0.5 / (60 + i)  # RRF: graph arm (discounted)
+    cmap = ({p: c for p, c in con.execute("SELECT path, collection FROM files")} if collection else {})
     con.close()
     # --- vector arm (stage 2): RRF-fuse LanceDB ANN with keyword+graph ---
     if _vectors_on():
@@ -399,6 +690,8 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                     # on, pull a WIDER candidate set so the reranker has the right note to reorder
                     # (recall widening — a precise note keyword+vector ranked low can still win).
                     vcount = 40 if _rerank_on() else k
+                    if collection:
+                        vcount *= 5  # the filter is applied after the ANN cut; widen so it can still fill k
                     seen, vrank = set(), 0
                     for path, head, _s in vs.search(qv, vcount):
                         if path in seen:
@@ -411,6 +704,8 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                         best.setdefault(path, head)
             except Exception:
                 pass  # vectors are an accelerator; never let them break keyword search
+    if collection:
+        scores = {p: sc for p, sc in scores.items() if cmap.get(p) == collection}
     if author:
         def _keep(p: str) -> bool:
             a, d = amap.get(p, ("", ""))
@@ -420,6 +715,7 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                 return a == "agent"
             return True
         scores = {p: s for p, s in scores.items() if _keep(p)}
+        lex_all = {p for p in lex_all if _keep(p)}
     pool = sorted(scores.items(), key=lambda x: -x[1])
     # --- stage 3: local cross-encoder rerank of the top candidates (precision layer) ---
     if _rerank_on() and len(pool) > 1:
@@ -434,8 +730,11 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                 pool = [(cand[i], rs[i]) for i in order] + pool[n:]
         except Exception:
             pass  # reranker is a precision layer; never let it break search
-    ranked = pool[:k]
+    ranked = pool if all_hits else pool[:k]
     hits = [(p, best.get(p, "(top)"), float(sc)) for p, sc in ranked]
     if log:
         log_query(query, hits)
-    return hits
+    shown = {p for p, _h, _s in hits}
+    return {"hits": hits, "returned": len(hits), "limit": None if all_hits else k,
+            "truncated": (not all_hits) and (len(pool) > len(hits) or bool(lex_all - shown)),
+            "lexical_total": len(lex_all)}

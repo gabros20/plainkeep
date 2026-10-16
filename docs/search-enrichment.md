@@ -35,7 +35,7 @@ ollama pull gemma4:e4b              # default — EN + Hungarian (140+ languages
 > enrichment works in your shell but not from an agent terminal, see
 > [`docs/agent-terminal-search.md`](agent-terminal-search.md).
 
-Pick a different model with `PLAINKEEP_ENRICH_MODEL`:
+Pick a different model with `PLAINKEEP_ENRICH_MODEL` (or `models.enrich` in `~/.config/plainkeep/config.toml`; the environment variable wins):
 
 | Model | When |
 |---|---|
@@ -75,15 +75,15 @@ note. There is nothing to opt into beyond having a model reachable, or accepting
 plainkeep models list                        # per stage: configured model, runtime, pulled/available?
 plainkeep models status                      # ollama ps — resident (loaded) models
 plainkeep models stop [--all] [<model>]      # unload a resident model (reloads on next use, no data loss)
-plainkeep models pull --stage enrich --yes   # ollama pull the configured model for one stage (or --all)
-plainkeep models test enrich --yes           # run the stage's configured model on a sample, print output + timing
+plainkeep models pull --stage enrich --approved   # ollama pull the configured model for one stage (or --all)
+plainkeep models test enrich --approved           # run the stage's configured model on a sample, print output + timing
 ```
 
-`pull` and `test` both self-gate behind `--yes`, because both can pull gigabytes.
+`pull` and `test` both self-gate behind `--approved`, because both can pull gigabytes.
 
 Use `test` to A/B a candidate before adopting it:
 
-1. Run `plainkeep models test enrich --model <candidate> --yes`.
+1. Run `plainkeep models test enrich --model <candidate> --approved`.
 2. Compare the output.
 3. Set the stage's env var (e.g. `PLAINKEEP_ENRICH_MODEL`) to make it permanent.
 

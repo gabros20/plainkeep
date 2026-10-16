@@ -59,6 +59,7 @@ SUITES = [
     ("daily-driver verbs (§4/§7)", "run_verbs.py"),
     ("triage flow (§4/§10)", "run_triage.py"),
     ("agent indirection (§6)", "run_agentlib.py"),
+    ("host config file (v2 0.5)", "run_hostconfig.py"),
     ("daily/weekly rhythm (§16)", "run_loops.py"),
     ("health verbs: doctor, wiki (§14/§10)", "run_health.py"),
     ("terminal ergonomics: completion + renderer", "run_completion.py"),
@@ -71,7 +72,9 @@ SUITES = [
      "run_provision.py"),
     ("engine update + vault init: failure injection (Phase 2 Task 5)", "run_engineupdate.py"),
     ("vault migration off the vault-local engine copy: 13-item bar + AST ratchets + kill matrix "
-     "(ADR-014 Phase 2 Task 6)", "run_migrate.py"),
+     "(ADR-014 Phase 2 Task 6)", "run_migrate.py", 1500),
+    # run_migrate: 636 s of case time measured on the merged tree (v2 Stage 0), ~20% over the
+    # pre-wave base on the same cases (kill matrix 150 s vs 127 s); real migrations run repeatedly.
     ("trust wave: exit codes + update merge + doctor (0.1/0.3/0.4)", "run_trust.py"),
     ("machine contract: --json + plainkeep.json/3 + dry-run (1.1/1.2/0.5)", "run_json.py"),
     ("multi-root verb resolution: plugins + PLAINKEEP_PATH (2.1/0.2)", "run_resolver.py"),

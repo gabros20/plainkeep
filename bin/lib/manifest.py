@@ -20,7 +20,7 @@ BIN = Path(__file__).resolve().parents[1]   # the verbs live with the CODE (bin/
 MANIFEST = paths.PLAINKEEP_HOME / "plainkeep.json"  # ...but plainkeep.json is written to the data root (PLAINKEEP_HOME)
 VERSION_FILE = BIN.parent / "VERSION"        # engine version lives with the CODE (repo root)
 SCHEMA = "plainkeep.json/3"
-API_VERSION = "1.0"
+API_VERSION = "1.1"
 
 # display grouping (design §4.1); verbs not listed fall under "OTHER"
 GROUPS = [

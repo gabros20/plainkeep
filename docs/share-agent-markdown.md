@@ -7,13 +7,13 @@ There is one link. Append `.md` and the agent reads the exact wiki source.
 
 ## The link
 
-`plainkeep share <slug> --yes` prints:
+`plainkeep share <slug> --approved` prints:
 
 ```text
 shared note <slug>
   https://ops-share.example.workers.dev/abc123def456ghi789jkl012
   agents / LLMs: https://ops-share.example.workers.dev/abc123def456ghi789jkl012.md   (raw markdown — paste into any chat/coding agent)
-  revoke: plainkeep share revoke abc123def456ghi789jkl012 --yes
+  revoke: plainkeep share revoke abc123def456ghi789jkl012 --approved
 ```
 
 - **A browser** opening the bare URL gets the rendered HTML page.
@@ -57,7 +57,7 @@ Anything published under the previous encrypted model (`#fragment`, `?k=`, `X-Op
 dead.
 
 Every route for a legacy blob returns **HTTP 410** with a `re-publish with current plainkeep share` hint.
-There is no key to recover it with. Re-run `plainkeep share <slug> --yes` to get a current link.
+There is no key to recover it with. Re-run `plainkeep share <slug> --approved` to get a current link.
 
 ## Tests
 

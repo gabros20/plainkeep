@@ -99,7 +99,7 @@ CRASH_NOISE_OPT_INS = ("PLAINKEEP_REQUIRE_CORE", "PLAINKEEP_PARITY_FAULT_SIGNALS
 # pinned so that deleting a case (or an invocation) reddens instead of quietly shrinking coverage; see
 # the accounting invariant at the bottom of main() for why a self-consistency check cannot do that job.
 # ADDING cases is expected and welcome: raise this number in the same commit that adds them.
-EXPECTED_CATALOG_INVOCATIONS = 210
+EXPECTED_CATALOG_INVOCATIONS = 213
 
 results: list[tuple[str, bool, str]] = []
 skipped: list[tuple[str, str]] = []
@@ -1421,8 +1421,12 @@ def _no_repo_read_unreadable_source(binary: str, tmps: list[Path], vault: Path) 
 # already RED on main before the agents layer existed. Recorded rather than quietly absorbed: the
 # whole point of a pinned count is that adding a module is a decision somebody states out loud, and
 # a pin that silently drifts proves the opposite of what it was put here to prove.
+#
+# 31 (v2 Stage 0): `hostconfig.py` (0.5, the host config.toml every search/model knob reads) and
+# `wikilink.py` (0.9, the one wikilink parser the indexer, renderer and share now share). Both are
+# imported at dispatch time, so the installed tree must carry them.
 EXPECTED_ENGINE_VERBS = 35
-EXPECTED_ENGINE_LIB_MODULES = 29
+EXPECTED_ENGINE_LIB_MODULES = 31
 
 
 def _installed_manifest_checks(tmps: list[Path]) -> None:

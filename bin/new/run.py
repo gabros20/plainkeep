@@ -81,7 +81,7 @@ def _new_verb(rest, dry=False):
         print(f"  code:   {rel}/run.py  (+ cmd.json, risk: {risk})")
         print(f"  source: plugin:local — user-owned, survives `script/update` (never in engine.txt)")
         print(f"  next:   implement main() in {rel}/run.py, then `plainkeep {name}`"
-              + ("" if risk != "confirm" else "  (confirm-class → runs with --yes until you lower risk)"))
+              + ("" if risk != "confirm" else "  (confirm-class → runs with --approved until you lower risk)"))
 
     return output.emit(data, "new", human=render)
 
@@ -164,6 +164,7 @@ def _hub(folder: str, typ: str, slug: str, name: str) -> Path:
     vaultio.write_text(f, f"---\ntype: {typ}\ntitle: {name}\nstatus: active\ncreated: {paths.today()}\n"
                  f"updated: {paths.today()}\ntags: []\naliases: []\nremote:\n---\n# {name}\n\n"
                  f"## Timeline\n- {paths.today()} created via `plainkeep new {typ}`\n", encoding="utf-8")
+    paths.index_written(f)
     return f
 
 
@@ -198,6 +199,11 @@ def main(argv):
     if not name:
         output.fail(output.EXIT_USAGE, "a name is required", verb="new")
     slug = paths.slugify(name)
+    legacy = paths.slugify_legacy(name)
+    if legacy != slug and legacy in _all_slugs():
+        output.fail(output.EXIT_UNEXPECTED,
+                    f"'{name}' already exists as '{legacy}' (its pre-accent-folding name) — "
+                    "slugs are unique (§10.1)", verb="new")
     if slug in _all_slugs():
         output.fail(output.EXIT_UNEXPECTED, f"slug '{slug}' already exists — slugs are unique (§10.1)", verb="new")
 

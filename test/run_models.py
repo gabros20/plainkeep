@@ -46,12 +46,12 @@ def main() -> int:
         rows = [json.loads(ln) for ln in lines[1:]] if len(lines) > 1 else []
         check("models list is an ok NDJSON envelope", head.get("ok") is True, r.stdout)
         stages = {row.get("stage") for row in rows}
-        check("models list covers all 6 stages",
-              stages == {"stt", "ocr", "vlm", "enrich", "embed", "rerank"}, str(stages))
+        check("models list covers all 7 stages",
+              stages == {"stt", "ocr", "vlm", "enrich", "triage", "embed", "rerank"}, str(stages))
         check("models list rows carry model/runtime/available",
               all({"model", "runtime", "available"}.issubset(row) for row in rows), str(rows))
         check("models list: ollama-absent stages report unavailable",
-              all(not row["available"] for row in rows if row["stage"] in ("enrich", "embed")), str(rows))
+              all(not row["available"] for row in rows if row["stage"] in ("enrich", "triage", "embed")), str(rows))
 
         r2 = run("list", home=home)  # human rendering path also must not crash
         check("models list (human) exits 0", r2.returncode == 0, r2.stdout + r2.stderr)
@@ -71,7 +71,7 @@ def main() -> int:
         r = run("pull", "--all", home=home)
         check("pull --all without --yes -> exit 3 (EXIT_CONFIRM)", r.returncode == 3, r.stdout + r.stderr)
         check("pull --all without --yes writes nothing to ollama's store (no --yes reached)",
-              "--yes" in (r.stderr or r.stdout), r.stdout + r.stderr)
+              "--approved" in (r.stderr or r.stdout), r.stdout + r.stderr)
 
         r = run("pull", "--stage", "embed", home=home)
         check("pull --stage embed without --yes -> exit 3", r.returncode == 3, r.stdout + r.stderr)

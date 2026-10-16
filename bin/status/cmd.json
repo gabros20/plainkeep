@@ -20,6 +20,7 @@
       "inbox": "int",
       "wiki": "int",
       "index_age_min": "int",
+      "pending_embeddings": "int",
       "git_dirty": "int"
     }
   }

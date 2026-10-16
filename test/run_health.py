@@ -105,6 +105,47 @@ def case_automation_rows(tmp: Path) -> None:
     check("doctor never FAILs on an automation row", "FAIL" not in r.stdout, r.stdout)
 
 
+def case_link_lint(tmp: Path) -> None:
+    """v2 0.10: doctor WARNs (never FAILs) on `[[x]](url)` and on a committed absolute symlink that
+    points outside the vault and the engine; a clean vault gets ok rows for both."""
+    h = tmp / "linklint"
+    h.mkdir()
+    wellformed(h)
+    subprocess.run(["git", "-C", str(h), "init", "-q"], check=True)
+    r = run(h, "doctor")
+    check("link lint: clean vault has no link warnings",
+          "[[x]](url)" in r.stdout and "wikilink wrapped" not in r.stdout and "absolute target" not in r.stdout, r.stdout)
+    note(h, "notes/bad.md", "note", "Bad", "2026-01-01", "see [[other]](https://example.com/x)\n\n`[[code]](ignored)`")
+    (h / "journal").mkdir(exist_ok=True)
+    (h / "journal" / "2026-01-01.md").write_text("- cited [[1]](https://example.com)\n", encoding="utf-8")
+    note(h, "notes/fenced.md", "note", "Fenced", "2026-01-01",
+         "- item\n\n  ```\n  [[a]](u)\n  ```\n\n````\n```\n[[b]](u)\n```\n````\n\n`` [[c]](u) ``")
+    note(h, "notes/fine.md", "note", "Fine", "2026-01-01", "see [[other]] and [label](https://example.com)")
+    os.symlink("/usr/bin/env", h / "stray-link")
+    os.symlink("../skills", h / "rel-link")
+    # inside, spelled through a symlink: the engine's own `current` link, and the vault via a second name
+    inst = tmp / "inst"
+    (inst / "engine" / "1.0.0" / "skills").mkdir(parents=True)
+    os.symlink("1.0.0", inst / "engine" / "current")
+    os.symlink(str(inst / "engine" / "current" / "skills"), h / "engine-skills-link")
+    os.symlink(str(tmp / "linklint" / "wiki"), h / "self-link")
+    subprocess.run(["git", "-C", str(h), "add", "-A"], check=True)
+    subprocess.run(["git", "-C", str(h), "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x"], check=True)
+    os.environ["PLAINKEEP_ENGINE_HOME"] = str(inst)
+    try:
+        r = run(h, "doctor")
+    finally:
+        del os.environ["PLAINKEEP_ENGINE_HOME"]
+    check("link lint: [[x]](url) warns, naming only the offending note",
+          "2 note(s) use `[[x]](url)`" in r.stdout and "notes/bad.md" in r.stdout and "notes/fine.md" not in r.stdout, r.stdout)
+    check("link lint: also scans journal/, and ignores indented/4-backtick fences and double-backtick code",
+          "2 note(s) use" in r.stdout and "journal/2026-01-01.md" in r.stdout and "fenced.md" not in r.stdout, r.stdout)
+    check("link lint: absolute symlink outside vault+engine warns, relative one does not",
+          "stray-link -> /usr/bin/env" in r.stdout and "rel-link" not in r.stdout
+          and "engine-skills-link" not in r.stdout and "self-link" not in r.stdout, r.stdout)
+    check("link lint rows are advisory (doctor still exits 0)", r.returncode == 0, f"rc={r.returncode}")
+
+
 def case_doctor_never_certifies_a_registry_the_VERB_refuses(tmp: Path) -> None:
     """THE CHECKER MUST NOT BE GREENER THAN THE PRODUCT (r1/I2).
 
@@ -280,6 +321,7 @@ def main() -> int:
         FAKE = launchdfx.install(Path(td) / "machine")
         case_automation_rows(Path(td))
         case_doctor_never_certifies_a_registry_the_VERB_refuses(Path(td))
+        case_link_lint(Path(td))
 
     # ---- the no-real-launchd guarantee (r1/I2) + one probe per job (r1/M5) ----
     with tempfile.TemporaryDirectory() as td:
@@ -298,6 +340,34 @@ def main() -> int:
         check("wiki new creates a slugged note", (h / "wiki" / "notes" / "gamma-idea.md").exists(), r.stdout + r.stderr)
         r = run(h, "wiki", "new", "note", "Gamma Idea")
         check("wiki new refuses a duplicate slug", r.returncode == 1, r.stdout + r.stderr)
+        # v2 0.13: accents fold; ASCII slugs are byte-identical to the pre-0.13 rule
+        r = run(h, "wiki", "new", "note", "Ügyfél szerződés")
+        check("wiki new folds accents (Ügyfél szerződés -> ugyfel-szerzodes.md)",
+              (h / "wiki" / "notes" / "ugyfel-szerzodes.md").exists(), r.stdout + r.stderr)
+        code = ("import sys, re, json; sys.path.insert(0, 'bin'); from lib import paths\n"
+                "old = lambda s, n=60: (re.sub(r'[^a-z0-9]+', '-', s.lower()).strip('-')[:n].rstrip('-')) or 'note'\n"
+                "cases = ['Gamma Idea', 'Q3 2026 -- Plan!', '  spaced  out  ', 'a_b/c.d', 'UPPER', '', '---', 'x' * 90,\n"
+                "         'Acme (the company)', 'v1.2.3-rc1', 'a-' * 40]\n"
+                "bad = [c for c in cases if paths.slugify(c) != old(c)]\n"
+                "fold = {'Ügyfél szerződés': 'ugyfel-szerzodes', 'Őrült Űr': 'orult-ur', 'Straße': 'strasse',\n"
+                "        'Łódź': 'lodz', 'Øl æble': 'ol-aeble', 'Đurđevak': 'durdevak'}\n"
+                "bad += [k for k, v in fold.items() if paths.slugify(k) != v]\n"
+                "legacy = paths.slugify_legacy('Ügyfél') == 'gyf-l'\n"
+                "print(json.dumps({'bad': bad, 'legacy': legacy}))\n")
+        rs = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, cwd=str(REPO),
+                            env={**os.environ, "PLAINKEEP_HOME": str(h)})
+        try:
+            got = json.loads(rs.stdout)
+        except Exception:
+            got = {"bad": ["<no output>"], "legacy": False}
+        check("slugify: ASCII table is byte-identical to the old rule; fold table matches", not got["bad"],
+              f"{got['bad']} {rs.stderr}")
+        check("slugify_legacy keeps the old dropped-letter behaviour", got["legacy"], rs.stdout)
+        note(h, "notes/gyf-l.md", "note", "Ügyfél", "2026-01-01")
+        rd = run(h, "doctor")
+        row = next((l for l in rd.stdout.splitlines() if "notes/gyf-l.md -> ugyfel.md" in l), "")
+        check("doctor lists a pre-fold slug that would differ now, as an info row (not warn/FAIL)",
+              "info:" in row and "warn" not in row and "FAIL" not in row, rd.stdout)
         r = run(h, "wiki", "backlinks", "beta")
         check("wiki backlinks finds the linker", "alpha" in r.stdout, r.stdout)
         r = run(h, "wiki", "orphans")

@@ -1,31 +1,40 @@
 {
-  "commit": "8f93e19",
-  "content_root": "wiki",
+  "commit": "239c56f",
+  "content_root": ".",
   "gates": [
     {
       "metric": "recall@5",
-      "min": 0.6,
+      "min": 0.85,
       "mode": "keyword",
-      "since": "0.1",
+      "since": "0.2",
       "status": "pass",
       "tag": "hu",
-      "value": 0.75
+      "value": 0.875
+    },
+    {
+      "metric": "recall@all",
+      "min": 1.0,
+      "mode": "keyword",
+      "since": "0.15",
+      "status": "pass",
+      "tag": "exhaustive",
+      "value": 1.0
     }
   ],
   "modes": {
     "keyword": {
       "by_tag": {
         "deep": {
-          "mrr": 0.375,
+          "mrr": 0.35,
           "n": 5,
-          "recall@10": 1.0,
-          "recall@5": 0.8
+          "recall@10": 0.8,
+          "recall@5": 0.6
         },
         "en": {
-          "mrr": 0.185,
+          "mrr": 0.293,
           "n": 19,
-          "recall@10": 0.632,
-          "recall@5": 0.421
+          "recall@10": 0.947,
+          "recall@5": 0.632
         },
         "exact": {
           "mrr": 0.26,
@@ -33,11 +42,15 @@
           "recall@10": 1.0,
           "recall@5": 0.75
         },
+        "exhaustive": {
+          "n": 1,
+          "recall@all": 1.0
+        },
         "hu": {
-          "mrr": 0.667,
+          "mrr": 0.719,
           "n": 8,
-          "recall@10": 0.75,
-          "recall@5": 0.75
+          "recall@10": 1.0,
+          "recall@5": 0.875
         },
         "hu-exact": {
           "mrr": 0.889,
@@ -46,22 +59,22 @@
           "recall@5": 1.0
         },
         "hu-inflect": {
-          "mrr": 0.0,
+          "mrr": 0.208,
           "n": 2,
-          "recall@10": 0.0,
-          "recall@5": 0.0
+          "recall@10": 1.0,
+          "recall@5": 0.5
         },
         "journal": {
-          "mrr": 0.0,
-          "n": 3,
-          "recall@10": 0.0,
-          "recall@5": 0.0
-        },
-        "paraphrase": {
-          "mrr": 0.181,
+          "mrr": 0.206,
           "n": 3,
           "recall@10": 1.0,
           "recall@5": 0.667
+        },
+        "paraphrase": {
+          "mrr": 0.139,
+          "n": 3,
+          "recall@10": 0.667,
+          "recall@5": 0.333
         },
         "superseded": {
           "mrr": 0.2,
@@ -70,17 +83,17 @@
           "recall@5": 0.333
         },
         "task": {
-          "mrr": 0.0,
+          "mrr": 0.39,
           "n": 4,
-          "recall@10": 0.0,
-          "recall@5": 0.0
+          "recall@10": 1.0,
+          "recall@5": 0.75
         }
       },
       "overall": {
-        "mrr": 0.328,
+        "mrr": 0.419,
         "n": 27,
-        "recall@10": 0.667,
-        "recall@5": 0.519
+        "recall@10": 0.963,
+        "recall@5": 0.704
       },
       "per_query": [
         {
@@ -113,7 +126,7 @@
             "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
             "wiki/clients/kovacs-es-tarsa-kft.md",
             "wiki/notes/atalanyado-es-afa.md",
-            "wiki/notes/ado-hataridok-naptar.md"
+            "wiki/people/nagy-eszter.md"
           ]
         },
         {
@@ -146,42 +159,51 @@
             "wiki/clients/kovacs-es-tarsa-kft.md",
             "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
             "wiki/runbooks/havi-szamlazasi-folyamat.md",
-            "wiki/projects/webhook-relay.md"
+            "wiki/notes/atalanyado-es-afa.md"
           ]
         },
         {
           "id": "hu-07",
-          "rank": null,
+          "rank": 4,
           "top5": [
             "wiki/notes/szerzodes-kotberes-megjegyzesek.md",
-            "wiki/notes/szolgaltatasi-szerzodes-sablon.md"
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/notes/ugyfelkapu-es-hivatali-ugyek.md",
+            "wiki/notes/ugyfel-bevezetes-ellenorzolista.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md"
           ]
         },
         {
           "id": "hu-08",
-          "rank": null,
-          "top5": []
+          "rank": 6,
+          "top5": [
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/notes/szerzodes-kotberes-megjegyzesek.md",
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
+            "inbox/cap-20260930-1405.md",
+            "wiki/notes/ugyfel-bevezetes-ellenorzolista.md"
+          ]
         },
         {
           "id": "deep-01",
-          "rank": 5,
+          "rank": 4,
           "top5": [
             "wiki/projects/webhook-relay.md",
-            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/notes/client-onboarding-checklist.md",
             "wiki/areas/engineering-practice.md",
-            "wiki/runbooks/postgres-failover-runbook.md"
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md"
           ]
         },
         {
           "id": "deep-02",
-          "rank": 5,
+          "rank": null,
           "top5": [
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
-            "wiki/projects/webhook-relay.md",
             "wiki/research/queue-backend-comparison.md",
-            "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/notes/webhook-outage-postmortem-2026-08.md"
+            "wiki/notes/tax-filing-calendar.md",
+            "wiki/notes/vat-reverse-charge-notes.md",
+            "journal/2026/09/2026-09-03.md"
           ]
         },
         {
@@ -201,14 +223,14 @@
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/decision-fly-io-for-staging.md",
             "wiki/notes/webhook-outage-postmortem-2026-08.md",
-            "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/notes/decision-fly-io-for-staging.md"
+            "wiki/runbooks/postgres-failover-runbook.md"
           ]
         },
         {
           "id": "deep-05",
-          "rank": 7,
+          "rank": 6,
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
@@ -219,18 +241,18 @@
         },
         {
           "id": "task-01",
-          "rank": null,
+          "rank": 4,
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/runbooks/postgres-failover-runbook.md",
             "wiki/notes/webhook-outage-postmortem-2026-08.md",
-            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
-            "wiki/clients/kovacs-es-tarsa-kft.md"
+            "tasks/active/T-20260902-01.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md"
           ]
         },
         {
           "id": "task-02",
-          "rank": null,
+          "rank": 9,
           "top5": [
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/notes/decision-fly-io-for-staging.md",
@@ -241,34 +263,37 @@
         },
         {
           "id": "task-03",
-          "rank": null,
-          "top5": []
+          "rank": 1,
+          "top5": [
+            "tasks/waiting/T-20260905-03.md",
+            "wiki/projects/webhook-relay.md"
+          ]
         },
         {
           "id": "task-04",
-          "rank": null,
+          "rank": 5,
           "top5": [
-            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/research/queue-backend-comparison.md",
             "wiki/notes/decision-fly-io-for-staging.md",
-            "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/research/queue-backend-comparison.md"
+            "tasks/done/T-20260810-04.md"
           ]
         },
         {
           "id": "journal-01",
-          "rank": null,
+          "rank": 4,
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-fly-io-for-staging.md",
             "wiki/areas/engineering-practice.md",
-            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
-            "wiki/notes/decision-pandoc-invoice-pipeline.md"
+            "journal/2026/09/2026-09-03.md",
+            "journal/2026/09/2026-09-04.md"
           ]
         },
         {
           "id": "journal-02",
-          "rank": null,
+          "rank": 6,
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
@@ -279,13 +304,13 @@
         },
         {
           "id": "journal-03",
-          "rank": null,
+          "rank": 5,
           "top5": [
-            "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-fly-io-for-staging.md",
-            "wiki/notes/decision-invoice-ninja-for-invoicing.md",
+            "wiki/projects/webhook-relay.md",
             "wiki/notes/webhook-outage-postmortem-2026-08.md",
-            "wiki/runbooks/postgres-failover-runbook.md"
+            "wiki/runbooks/postgres-failover-runbook.md",
+            "journal/2026/09/2026-09-16.md"
           ]
         },
         {
@@ -303,8 +328,8 @@
           "id": "superseded-02",
           "rank": 8,
           "top5": [
-            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
             "wiki/notes/decision-fly-io-for-staging.md",
             "wiki/notes/webhook-outage-postmortem-2026-08.md",
             "wiki/runbooks/postgres-failover-runbook.md"
@@ -327,9 +352,9 @@
           "top5": [
             "wiki/projects/webhook-relay.md",
             "wiki/notes/decision-redis-streams-for-webhook-queue.md",
-            "wiki/runbooks/postgres-failover-runbook.md",
-            "wiki/notes/webhook-outage-postmortem-2026-08.md",
-            "wiki/research/queue-backend-comparison.md"
+            "wiki/research/queue-backend-comparison.md",
+            "wiki/notes/webhook-retry-policy.md",
+            "wiki/runbooks/postgres-failover-runbook.md"
           ]
         },
         {
@@ -397,6 +422,17 @@
             "wiki/notes/tax-filing-calendar.md",
             "wiki/notes/atalanyado-es-afa.md"
           ]
+        },
+        {
+          "id": "exhaustive-01",
+          "rank": null,
+          "top5": [
+            "wiki/projects/webhook-relay.md",
+            "wiki/notes/decision-redis-streams-for-webhook-queue.md",
+            "wiki/notes/webhook-outage-postmortem-2026-08.md",
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
+            "wiki/runbooks/postgres-failover-runbook.md"
+          ]
         }
       ],
       "status": "ran",
@@ -406,7 +442,7 @@
       }
     }
   },
-  "queries": 30,
+  "queries": 31,
   "schema": "plainkeep.bench/1",
   "source": "fixture"
 }

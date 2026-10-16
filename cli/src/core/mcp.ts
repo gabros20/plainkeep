@@ -79,7 +79,7 @@ import path from "node:path";
 import type { CoreResult } from "./cli.js";
 import { jsonDepthExceeds, pyStrip } from "./complete.js";
 import { resolveHome, signalNumberOf } from "./dispatch.js";
-import { EXIT_CONFIRM, EXIT_OK, pythonStr, pythonTruthy } from "./guardrail.js";
+import { EXIT_CONFIRM, EXIT_OK, pluginCeiling, pythonStr, pythonTruthy } from "./guardrail.js";
 import { EXIT_ANOMALOUS, runOwningStdio } from "./interception.js";
 import { iterCmds } from "./resolver.js";
 
@@ -281,6 +281,21 @@ function dictKey(name: unknown): string {
   return fatal("an arg `name` is a list or object — Python raises TypeError: unhashable type");
 }
 
+// 0.8: MCP tool annotations from the verb's risk class (run.py's `_annotations`). Verbs that fetch
+// URLs reach beyond the vault and the engine, so they also carry openWorldHint.
+const OPEN_WORLD_VERBS = ["bookmark"];
+
+function annotationsOf(cmd: Record<string, unknown>): Record<string, boolean> {
+  // an untrusted pack is capped at confirm by the gate: advertise what the call will do
+  const risk = typeof cmd.verb === "string" && pluginCeiling(cmd.verb) === "confirm" ? "confirm" : cmd.risk;
+  let a: Record<string, boolean>;
+  if (risk === "read") a = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
+  else if (risk === "safe_write" || risk === "draft_only") a = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
+  else a = { readOnlyHint: false, destructiveHint: true }; // confirm, and anything undeclared (the gate defaults to confirm)
+  if (typeof cmd.verb === "string" && OPEN_WORLD_VERBS.includes(cmd.verb)) a.openWorldHint = true;
+  return a;
+}
+
 // run.py's `_tool(cmd)`: one MCP tool from one cmd.json.
 function toolOf(cmd: Record<string, unknown>): Record<string, unknown> {
   // `cmd.get("summary", "")` then `if cmd.get("hints")`. `desc` may end up holding a NON-string (the
@@ -318,7 +333,7 @@ function toolOf(cmd: Record<string, unknown>): Record<string, unknown> {
   props.set("args", {
     type: "array",
     items: { type: "string" },
-    description: "additional positional args / flags (e.g. sub-action tokens, --yes)",
+    description: "additional positional args / flags (e.g. sub-action tokens, --dry-run)",
   });
   const schema: Record<string, unknown> = { type: "object", properties: props };
   if (required.length) schema.required = required;
@@ -329,7 +344,7 @@ function toolOf(cmd: Record<string, unknown>): Record<string, unknown> {
     fatal("a cmd.json declares no `verb` — Python raises KeyError generating the tool list");
   }
   const verb = cmd.verb;
-  return { name: verb, description: pythonTruthy(desc) ? desc : verb, inputSchema: schema };
+  return { name: verb, description: pythonTruthy(desc) ? desc : verb, inputSchema: schema, annotations: annotationsOf(cmd) };
 }
 
 // --------------------------------------------------------------------------------------------------
@@ -553,7 +568,7 @@ async function callTool(
   // shells out to $PLAINKEEP_HOME/plainkeep (the shim), which under PLAINKEEP_CORE=auto lands in this
   // same binary one exec later; the observable result is identical and the extra hop is not.
   //
-  // `--json` is appended and `--yes` NEVER is. Auto-appending --yes would let an agent execute a
+  // `--json` is appended and `--approved` NEVER is. Auto-appending --approved would let an agent execute a
   // confirm-class verb it was never authorized for; the exit-3 branch below hands the confirmation
   // decision back to the caller instead.
   const r = await runChild([name, ...argv, "--json"], ctx);
@@ -576,12 +591,12 @@ async function callTool(
   if (rc === EXIT_CONFIRM) {
     // The rerun string is spelled `plainkeep …`, LITERALLY — it is a line for a human or an agent to
     // run, not a path this process resolved, and run_mcp.py pins the exact text.
-    const rerun = ["plainkeep", name, ...argv, "--yes"].join(" ");
+    const rerun = ["plainkeep", name, ...argv, "--approved"].join(" ");
     const payload = {
       ops_confirm_needed: true,
       verb: name,
       rerun,
-      detail: out || err || "this call is confirm-class — re-run with --yes",
+      detail: out || err || "this call is confirm-class — re-run with --approved",
     };
     return resultFrame(mid, textResult(pyJsonDumps(payload), true));
   }

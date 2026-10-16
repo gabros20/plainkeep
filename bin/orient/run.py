@@ -7,6 +7,7 @@ dirtiness, and recent notes. Three renders: human dashboard (default), `--json` 
 an agent), `--line` (≤60-char string cached to .cache/orient.line with a short TTL so a prompt/tmux
 hook is cheap). Replaces the multi-step orientation ritual with a single safe call.
 """
+import json
 import os
 import subprocess
 import sys
@@ -57,6 +58,22 @@ def _last_commit_age():
         return None
 
 
+def _backup_state() -> tuple[bool, str | None]:
+    """(configured, last verified-ok ISO timestamp or None). Reads the `backup run` marker (.logs/, machine-local); no restic call."""
+    bdir = paths.PLAINKEEP_HOME / ".backup"
+    try:
+        configured = bool(json.loads((bdir / "config.json").read_text(encoding="utf-8")).get("targets"))
+    except Exception:
+        return False, None
+    if not configured:
+        return False, None
+    try:
+        ts = json.loads((paths.PLAINKEEP_HOME / ".logs" / "backup-last-ok.json").read_text(encoding="utf-8")).get("ts")
+        return True, ts if isinstance(ts, str) and ts else None
+    except Exception:
+        return True, None
+
+
 def _recent_notes(n: int = 5) -> list[dict]:
     if not paths.WIKI.exists():
         return []
@@ -70,14 +87,26 @@ def _proposals() -> int:
     return len(list(d.glob("*.jsonl"))) if d.exists() else 0
 
 
+def _pending_embeddings() -> int:
+    from lib import indexlib
+    return indexlib.pending_embeddings()
+
+
 def _gather() -> dict:
     active, waiting = _tasks("active"), _tasks("waiting")
     inbox = len(list(paths.INBOX.glob("*.md"))) if paths.INBOX.exists() else 0
-    index_age = _age_min(DB.stat().st_mtime) if DB.exists() else None
+    from lib import indexlib
+    stamp = indexlib.last_full_index_ts()   # last finished `plainkeep index`; the sqlite mtime moves on every write
+    index_age = _age_min(stamp) if stamp is not None else None
+    commit_age = _last_commit_age()
+    backup_configured, backup_ok = _backup_state()
     return {
         "active": len(active), "waiting": len(waiting),
         "inbox": inbox, "proposals": _proposals(),
-        "index_age_min": index_age, "backup_age_min": _last_commit_age(),
+        "index_age_min": index_age, "pending_embeddings": _pending_embeddings(),
+        "last_commit_age_min": commit_age,
+        "backup_configured": backup_configured, "backup_last_ok": backup_ok,
+        "backup_age_min": commit_age,   # deprecated alias of last_commit_age_min (v2 0.6)
         "git_dirty": _git_dirty(),
         "journal_tail": _journal_tail(),
         "top_tasks": [{"id": f.stem, "title": paths.title_of(f), "status": "active"} for f in active[:5]]
@@ -106,10 +135,24 @@ def _dashboard(data: dict):
         print(f"    {mark} {t['id']}  {t['title']}")
     print(f"  inbox:   {data['inbox']} item(s) to triage" +
           (f", {data['proposals']} organize proposal file(s)" if data["proposals"] else ""))
-    ia, ba, gd = data["index_age_min"], data["backup_age_min"], data["git_dirty"]
-    print(f"  index:   {'built ' + str(ia) + ' min ago' if ia is not None else 'not built (run: plainkeep index)'}")
-    print(f"  backup:  {'last commit ' + str(ba) + ' min ago' if ba is not None else 'no commits yet'}"
+    ia, ca, gd = data["index_age_min"], data["last_commit_age_min"], data["git_dirty"]
+    if ia is not None:
+        print(f"  index:   built {ia} min ago")
+    elif DB.exists():   # same wording as `status`
+        print("  index:   partial (written note by note, never fully built — run: plainkeep index)")
+    else:
+        print("  index:   not built (run: plainkeep index)")
+    if data["pending_embeddings"]:
+        print(f"  vectors: {data['pending_embeddings']} note(s) pending embedding (run: plainkeep index)")
+    print(f"  commits: {'last commit ' + str(ca) + ' min ago' if ca is not None else 'no commits yet'}"
           + ("" if gd in (0, None) else f", {gd} uncommitted change(s)"))
+    if not data["backup_configured"]:
+        bk = "not configured (run: plainkeep backup init)"
+    elif data["backup_last_ok"]:
+        bk = "last ok " + data["backup_last_ok"]
+    else:
+        bk = "configured, no verified run recorded"
+    print(f"  backup:  {bk}")
     if data["recent_notes"]:
         print("  recent:  " + ", ".join(n["slug"] for n in data["recent_notes"]))
     if data["journal_tail"]:

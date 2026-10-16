@@ -1,7 +1,7 @@
 {
   "verb": "setup",
   "summary": "layered installer dashboard and idempotent setup runner",
-  "usage": "plainkeep setup [<layer> [--yes] | --all [--yes] | --wizard]",
+  "usage": "plainkeep setup [<layer> [--approved] | --all [--approved] | --wizard]",
   "risk": "safe_write",
   "args": [
     {
@@ -10,10 +10,6 @@
     },
     {
       "name": "--all",
-      "required": false
-    },
-    {
-      "name": "--yes",
       "required": false
     },
     {
@@ -45,7 +41,7 @@
     "~/.ollama/models (model pulls, confirm-gated)",
     ".local/bin/ (plainkeep-ui binary, sha256-verified, confirm-gated)"
   ],
-  "hints": "Bare `plainkeep setup` is a read-only layered dashboard. `plainkeep setup <layer>` advances one layer idempotently. `plainkeep setup --wizard` is a guided, interactive first-run: one skippable prompt per layer with safe defaults (skeleton and the terminal UI on; search/models/automation off), interactive-only (needs a tty; not with --json/--dry-run — those exit 2 pointing at `plainkeep setup --all --yes` / `plainkeep setup --json`). Search and model layers can install Python packages and pull Ollama models into external stores, and the ui layer downloads the compiled plainkeep-ui binary (sha256-verified, via the authenticated gh CLI) into .local/bin, so they require `--yes`; backups is a human handoff and is never included in `--all`. `--dry-run` previews any advance (single layer or `--all`) without installing/writing and needs no `--yes`.",
+  "hints": "Bare `plainkeep setup` is a read-only layered dashboard. `plainkeep setup <layer>` advances one layer idempotently. `plainkeep setup --wizard` is a guided, interactive first-run: one skippable prompt per layer with safe defaults (skeleton and the terminal UI on; search/models/automation off), interactive-only (needs a tty; not with --json/--dry-run — those exit 2 pointing at `plainkeep setup --all --approved` / `plainkeep setup --json`). Search and model layers can install Python packages and pull Ollama models into external stores, and the ui layer downloads the compiled plainkeep-ui binary (sha256-verified, via the authenticated gh CLI) into .local/bin, so they require `--approved`; backups is a human handoff and is never included in `--all`. `--dry-run` previews any advance (single layer or `--all`) without installing/writing and needs no `--approved`.",
   "dry_run": true,
   "output": {
     "mode": "rows",

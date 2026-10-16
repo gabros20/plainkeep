@@ -20,6 +20,8 @@ here follow [Diátaxis](https://diataxis.fr): each file serves one purpose. Pick
 | [`architecture.md`](architecture.md) | why the system is shaped this way — principles and trade-offs |
 | [`DECISIONS.md`](DECISIONS.md) | the ADR log: every load-bearing decision, with the why |
 | [`design/`](design/) | the original design spec and accepted proposals (ADRs supersede) |
+| [`design/proposals/2026-10-12-core-design-v2.md`](design/proposals/2026-10-12-core-design-v2.md) | the v2 core design: the problems found and the target shape |
+| [`design/proposals/2026-10-12-core-design-v2-plan.md`](design/proposals/2026-10-12-core-design-v2-plan.md) | the v2 implementation plan, stage by stage, with Done-when lines |
 
 **I want the exact rules** (reference)
 

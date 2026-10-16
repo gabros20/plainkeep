@@ -133,7 +133,7 @@ def bootstrap_hint(path) -> str:
     that refuses for the same reason would be a remediation that cannot be followed. This is the
     bootstrap path, and it is the one `script/setup` uses."""
     p = os.path.abspath(os.path.expanduser(str(path)))
-    return f"PLAINKEEP_HOME={p} python3 {ENGINE_BIN / 'vault' / 'run.py'} register {p} --yes"
+    return f"PLAINKEEP_HOME={p} python3 {ENGINE_BIN / 'vault' / 'run.py'} register {p} --approved"
 
 
 @dataclass
@@ -218,7 +218,7 @@ def validate(candidate, *, how: str, require_registered: bool = False,
         raise VaultError(f"{how} names {root}, and {denied}", code=output.EXIT_DENY,
                          hint="move the vault to a local path outside that tree, then point "
                               "plainkeep at where it went:\n"
-                              "    plainkeep vault rebind <name> <new-path> --yes")
+                              "    plainkeep vault rebind <name> <new-path> --approved")
 
     marker = vaultreg.read_marker(root)          # raises on a present-but-unusable marker
     if marker is None:
@@ -244,7 +244,7 @@ def validate(candidate, *, how: str, require_registered: bool = False,
         if not vaultreg.same_path(entry["path"], root):
             raise VaultError(f"{how} names {root}, but vault '{entry['name']}' (id {vid}) is "
                              f"registered at {entry['path']}",
-                             hint=f"if it moved: plainkeep vault rebind {entry['name']} {root} --yes")
+                             hint=f"if it moved: plainkeep vault rebind {entry['name']} {root} --approved")
     return root, vid
 
 
@@ -317,7 +317,7 @@ def _discover(selector: str | None, cwd: str | None, saw: dict) -> Selection:
         if vid != entry["id"]:
             raise VaultError(f"--vault {selector!r} resolves to {root}, which carries a DIFFERENT "
                              f"vault (id {vid}, registry says {entry['id']})",
-                             hint=f"if it moved: plainkeep vault rebind {entry['name']} <path> --yes")
+                             hint=f"if it moved: plainkeep vault rebind {entry['name']} <path> --approved")
         return Selection(root, vid, MECHANISMS[0], saw)
     saw[MECHANISMS[0]] = "not supplied"
 
@@ -348,7 +348,7 @@ def _discover(selector: str | None, cwd: str | None, saw: dict) -> Selection:
             if vid != entry["id"]:
                 raise VaultError(f"the registry default '{entry['name']}' points at {root}, which "
                                  f"carries a DIFFERENT vault (id {vid}, registry says {entry['id']})",
-                                 hint=f"if it moved: plainkeep vault rebind {entry['name']} <path> --yes")
+                                 hint=f"if it moved: plainkeep vault rebind {entry['name']} <path> --approved")
             return Selection(root, vid, MECHANISMS[3], saw)
     saw[MECHANISMS[3]] = f"none set ({vaultreg.registry_path()})"
 

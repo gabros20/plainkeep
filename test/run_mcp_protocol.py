@@ -434,6 +434,26 @@ def case_handshake(m: Mode) -> bytes:
     check(f"[{m.name}] every tool carries the free-form args passthrough",
           all("args" in t["inputSchema"]["properties"] for t in tools.values()))
 
+    # 0.8: annotations follow the verb's declared risk class (read / safe_write / confirm-or-undeclared).
+    def _risk(v):
+        return json.loads((REPO / "bin" / v / "cmd.json").read_text()).get("risk")
+    want = {"read": {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False},
+            "safe_write": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+            "draft_only": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}}
+    bad = []
+    for name, t in tools.items():
+        exp = dict(want.get(_risk(name), {"readOnlyHint": False, "destructiveHint": True})) \
+            if (REPO / "bin" / name / "cmd.json").exists() else None
+        if exp is None:
+            continue
+        if name == "bookmark":
+            exp["openWorldHint"] = True
+        if t.get("annotations") != exp:
+            bad.append((name, t.get("annotations"), exp))
+    check(f"[{m.name}] every tool's annotations match its risk class (bookmark is open-world)",
+          not bad and tools["search"]["annotations"]["readOnlyHint"] is True
+          and tools["bookmark"]["annotations"]["openWorldHint"] is True, bad[:2])
+
     rc = s.finish()
     check(f"[{m.name}] EOF on stdin ends the session with exit 0", rc == 0, f"rc={rc}")
     return s.raw
@@ -546,8 +566,8 @@ def case_confirm_class(m: Mode) -> bytes:
     payload = json.loads(res["content"][0]["text"])
     check(f"[{m.name}] it returns ops_confirm_needed for the right verb",
           payload["ops_confirm_needed"] is True and payload["verb"] == "plugin", payload)
-    check(f"[{m.name}] it carries the exact --yes re-run line",
-          payload["rerun"] == "plainkeep plugin add local/x --yes", payload.get("rerun"))
+    check(f"[{m.name}] it carries the exact --approved re-run line",
+          payload["rerun"] == "plainkeep plugin add local/x --approved", payload.get("rerun"))
     rc = s.finish()
     check(f"[{m.name}] the confirm session exits 0", rc == 0, f"rc={rc}")
     # WHERE THE 3 COMES FROM, measured rather than assumed: the GATE allows this invocation (bin/
@@ -556,12 +576,12 @@ def case_confirm_class(m: Mode) -> bytes:
     # mapping in the server is therefore about the verb's exit status, not about a gate verdict.
     #
     # The refusal has to be a REFUSAL rather than a slow yes, so the evidence is the argv that was
-    # actually dispatched: it must be the caller's, with `--json` appended and `--yes` nowhere in the
+    # actually dispatched: it must be the caller's, with `--json` appended and `--approved` nowhere in the
     # session at all.
     log = audit_lines(m.vault)
     check(f"[{m.name}] the confirm-class verb was dispatched exactly as asked, without --yes",
           any(ln.split("\t")[1] == "plugin add local/x --json" for ln in log)
-          and not any("--yes" in ln for ln in log), "\n".join(log)[:200])
+          and not any("--yes" in ln or "--approved" in ln for ln in log), "\n".join(log)[:200])
     return s.raw
 
 
@@ -595,6 +615,30 @@ def case_plugin_mid_session(m: Mode) -> bytes:
         return s.raw
     finally:
         remove_pack(m.vault, "latepack")
+
+
+def case_annotations_follow_ceiling(m: Mode) -> bytes:
+    """0.8 r1: an untrusted pack (lock entry without `trusted`) is capped at confirm by the gate, so its
+    tool is advertised as a confirm-class one even though its cmd.json declares `read`."""
+    remove_pack(m.vault, "ceilpack")
+    lock = m.vault / "plugins" / "plugins.lock.json"
+    write_pack(m.vault, "ceilpack", ["echoargs"])
+    lock.write_text(json.dumps({"plugins": {"ceilpack": {}}}), encoding="utf-8")
+    try:
+        s = m.session("annotations-ceiling")
+        s.send(INIT)
+        s.frame()
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        tools = {t["name"]: t for t in s.frame()["result"]["tools"]}
+        check(f"[{m.name}] an untrusted pack's `read` verb is advertised as confirm-class",
+              tools["echoargs"]["annotations"] == {"readOnlyHint": False, "destructiveHint": True},
+              tools["echoargs"].get("annotations"))
+        rc = s.finish()
+        check(f"[{m.name}] the ceiling-annotation session exits 0", rc == 0, f"rc={rc}")
+        return s.raw
+    finally:
+        lock.unlink(missing_ok=True)
+        remove_pack(m.vault, "ceilpack")
 
 
 def case_non_object_frame(m: Mode) -> bytes:
@@ -1086,6 +1130,7 @@ DIFFERENTIAL = [
     ("argument ordering follows the sidecar, not the client", case_argument_ordering),
     ("confirm-class call → ops_confirm_needed, never --yes", case_confirm_class),
     ("a pack installed mid-session becomes visible", case_plugin_mid_session),
+    ("an untrusted pack's annotations follow the gate's ceiling", case_annotations_follow_ceiling),
     ("integer-like arg names keep the sidecar's order", case_key_order),
     ("non-ASCII rides the wire as raw UTF-8, never \\uXXXX", case_unicode),
     ("a non-object frame ends the session on both sides", case_non_object_frame),
@@ -1177,7 +1222,7 @@ def main() -> int:
             return 1
         engine = engine_home / "engine" / "current"
         engine_core = engine / ".local" / "bin" / "plainkeep-core"
-        base = {**os.environ, "PLAINKEEP_HOME": str(vault)}
+        base = {**os.environ, "PLAINKEEP_HOME": str(vault), "PLAINKEEP_ENGINE_HOME": str(engine_home)}
         base.pop("PLAINKEEP_PATH", None)
         base.pop("PLAINKEEP_ENGINE", None)
         core = Mode("core", engine, vault, tmp, {**base, "PLAINKEEP_CORE": "require",

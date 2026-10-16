@@ -8,7 +8,7 @@ SCAFFOLDED by `plainkeep new verb`. This is a stub — implement main(). Keep th
   • Any path you write MUST be classifiable by the guardrail path-wall — inside ~/plainkeep, ~/files, or the
     current task's ONE ~/work repo. Nothing external is transmitted; verbs that could must draft only.
   • Declared risk is `{{risk}}` in cmd.json. New verbs default to `confirm`, so the guardrail makes a
-    human re-run with --yes until you deliberately lower it. Read skills/operate-plainkeep/SKILL.md and an
+    human re-run with --approved until you deliberately lower it. Read skills/operate-plainkeep/SKILL.md and an
     existing bin/<verb>/run.py before extending. Regenerate the surface with `plainkeep index --manifest`.
 
 This is a PLUGIN verb (plugins/local/{{name}}/) — user-owned, survives `script/update`. It reaches

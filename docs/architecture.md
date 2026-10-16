@@ -38,11 +38,18 @@ Six principles fall out of that bet. Every later decision traces back to one of 
 ## The shape: four roots, one repo of truth
 
 ```
-~/plainkeep  THE SYSTEM   knowledge (wiki/), tasks/, journal/, the verbs (bin/), plugins/   [git: your repo]
-~/work       CODE         one git repo per project: products/ labs/ tools/ clients/         [git: each its own]
-~/files      BINARIES     client docs, PDFs, datasets — referenced by wiki "shadow notes"   [restic, not git]
-~/dotfiles   THE MACHINE  installs tools, puts plainkeep on PATH                            [git: separate]
+<vault>      THE SYSTEM   wiki/, tasks/, journal/, plugins/, templates/, config — DATA only   [git: your repo]
+~/work       CODE         one git repo per project: products/ labs/ tools/ clients/           [git: each its own]
+~/files      BINARIES     client docs, PDFs, datasets — referenced by wiki "shadow notes"     [restic, not git]
+~/dotfiles   THE MACHINE  installs tools, puts plainkeep on PATH                              [git: separate]
+
+engine       THE VERBS    bin/, skills/, templates/verb — a versioned, read-only tree              [outside every vault]
+             at ${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/
 ```
+
+The vault is wherever `plainkeep vault status` says it is; `~/plainkeep` was only ever a default. The
+engine is not one of the four roots: it is installed code that no vault contains and no agent edits
+(ADR-014, ADR-017). A vault is data you can move, back up or register next to another one.
 
 Separation **by location** is what makes the rest enforceable.
 
@@ -62,7 +69,7 @@ plugin, agent.
  Raycast  ─┤
  launchd  ─┼──▶  plainkeep <verb> [--json]  ──▶  guardrail.gate()  ──▶  bin|plugins/<verb>/run.py  ──▶  git diff
  plainkeep mcp  ─┤   (dispatcher)           risk class,             writes only via verbs        (revertible)
- plugins  ─┘                                --yes, dry-run,
+ plugins  ─┘                                --approved, dry-run,
                                             path-wall, logs
 ```
 
@@ -73,7 +80,7 @@ Two rules keep the chokepoint honest. They are the two most load-bearing lines i
   everything. The MCP server is a stateless stdio child spawned per session, precisely so there is no
   second, resident door.
 - **Refusals teach.** The exit-code protocol tells a blocked caller its correct next call from the
-  error itself: `3` needs `--yes` with the exact re-run, `4` is not-found with a did-you-mean, `5` is
+  error itself: `3` needs `--approved` with the exact re-run, `4` is not-found with a did-you-mean, `5` is
   denied. For an agent, error messages *are* the feedback loop.
 
 **Who runs the chokepoint changed in Phase 1 of the hybrid core (ADR-013); what it enforces did not.**
@@ -152,7 +159,7 @@ core binary absorbed it — ADR-013), but a vault never sees that source: `cli/`
 `script/engine.txt`. What a vault gets is a **self-contained compiled binary** built with Bun. Which
 binary depends on the dispatcher: under the core, the TUI *is* the core binary — `plainkeep ui` is
 answered in-process, and bare `plainkeep` in a terminal opens it. On the bash floor the stdlib
-`bin/ui/` shim still execs the separately installed `plainkeep-ui` that `plainkeep setup ui --yes`
+`bin/ui/` shim still execs the separately installed `plainkeep-ui` that `plainkeep setup ui --approved`
 downloads and sha256-verifies into `$PLAINKEEP_HOME/.local/bin/`. Same source tree, two artifacts.
 
 `plainkeep ui` is the human *face* of the same one door. It reads `plainkeep.json` (the `actions[]` grammar) to

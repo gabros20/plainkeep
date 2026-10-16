@@ -3,15 +3,21 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unicodedata
 from datetime import date, datetime
 from pathlib import Path
 
 try:
-    from . import enginetree, vaultroot  # type: ignore  # (namespace siblings)
+    from . import enginetree, vaultroot, wikilink  # type: ignore  # (namespace siblings)
 except ImportError:      # imported top-level by a verb that put bin/ on sys.path
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import enginetree  # type: ignore
     import vaultroot  # type: ignore
+    import wikilink  # type: ignore
+
+LINK_RE = wikilink.LINK_RE
+norm_link = wikilink.norm_link
+split_link = wikilink.split_link
 
 # The SELECTED data root — from PLAINKEEP_HOME, with NO engine-relative fallback (ADR-014 D2/D3,
 # Phase 2 Task 1b). The `Path(__file__).resolve().parents[2]` that used to sit here is the "the
@@ -88,10 +94,26 @@ def ensure_journal(d: date | None = None) -> tuple[Path, bool]:
     return note, created
 
 
+def index_written(*files) -> None:
+    """Refresh the search index rows of the note(s) a verb just wrote (v2 0.4), so they are findable
+    before the verb returns. Warns, never fails: a write must not fail because of the index (that
+    includes a SystemExit from the write guard, so the whole body is covered)."""
+    try:
+        try:
+            from . import indexlib  # lazy: most verbs never search
+        except ImportError:
+            import indexlib  # type: ignore
+        indexlib.index_paths_safe(list(files))
+    except (Exception, SystemExit) as e:  # noqa: BLE001
+        print(f"warning: search index not refreshed ({type(e).__name__}) — run `plainkeep index`",
+              file=sys.stderr)
+
+
 def append_journal(line: str) -> Path:
     """Append one timestamped line to today's journal note (the shared activity record, §8)."""
     note, _ = ensure_journal()
     _io().append_text(note, f"- {datetime.now().strftime('%H:%M')} {line}\n")
+    index_written(note)
     return note
 
 
@@ -104,17 +126,28 @@ def git(*args) -> str:
         return ""
 
 
-def slugify(s: str, n: int = 60) -> str:
+# Letters NFKD does not decompose into base + combining mark, folded by hand (v2 0.13). Anything else
+# outside [a-z0-9] after folding is a separator, as before.
+_FOLD = str.maketrans({"ß": "ss", "ø": "o", "æ": "ae", "œ": "oe", "ł": "l", "đ": "d", "ð": "d",
+                       "þ": "th", "ı": "i"})
+
+
+def slugify_legacy(s: str, n: int = 60) -> str:
+    """The pre-0.13 slug: accented letters are DROPPED (`Ügyfél` -> `gyf-l`). Frozen for `api.slugify`."""
     s = re.sub(r"[^a-z0-9]+", "-", s.lower()).strip("-")
     return (s[:n].rstrip("-")) or "note"
 
 
-LINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+def slugify(s: str, n: int = 60) -> str:
+    """Accent-folding slug: `Ügyfél szerződés` -> `ugyfel-szerzodes`. ASCII input is unchanged."""
+    s = unicodedata.normalize("NFKD", s.lower().translate(_FOLD))
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return slugify_legacy(s, n)
 
 
 def link_targets(text: str) -> list[str]:
-    """Normalized [[wikilink]] targets (strip #heading / |alias)."""
-    return [t.split("#", 1)[0].split("|", 1)[0].strip() for t in LINK_RE.findall(text)]
+    """Normalized [[wikilink]] targets (strip #heading / |alias / table-escape backslash)."""
+    return [wikilink.norm_link(t) for t in LINK_RE.findall(text)]
 
 
 def fm_field(path: Path, key: str) -> str:

@@ -27,6 +27,7 @@ def main(argv):
     vaultio.mkdir(paths.INBOX)
     vaultio.write_text(f, f"---\ntype: capture\ncreated: {paths.today()}\nsource: capture\n---\n{text}\n",
                  encoding="utf-8")
+    paths.index_written(f)
     paths.append_journal(f"captured: {text[:70]}{'…' if len(text) > 70 else ''}")
     data = {"path": str(rel), "text": text}
     return output.emit(data, "capture",

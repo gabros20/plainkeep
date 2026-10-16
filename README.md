@@ -44,8 +44,8 @@ plainkeep setup --wizard
 The wizard walks the optional layers with safe defaults: vault skeleton, the terminal UI, and the
 **schedule** (daily start and close, hourly index, nightly consolidate — installed as launchd jobs,
 macOS) **on**; semantic search and local models **off** until you opt in. Every prompt is
-skippable, and `plainkeep job disable --all --yes` reverses the schedule at any time. Prefer flags?
-`plainkeep setup --all --yes` does the same non-interactively.
+skippable, and `plainkeep job disable --all --approved` reverses the schedule at any time. Prefer flags?
+`plainkeep setup --all --approved` does the same non-interactively.
 
 Then try it:
 
@@ -109,7 +109,7 @@ You never memorize paths or formats — the verb owns placement. And you never m
 - **Tab-completion (zsh)** completes verbs with summaries, plus your *actual* note slugs and task
   IDs, pulled live from your content.
 - **`--dry-run`** on any mutating verb prints what would happen and writes nothing — it counts as a
-  read, so no `--yes` needed.
+  read, so no `--approved` needed.
 - **`fzf` (optional)** turns bare `plainkeep search` / `plainkeep open` into live fuzzy pickers.
 
 ## Using it with AI agents
@@ -120,7 +120,7 @@ Point any capable agent at `~/plainkeep` and it drives the same system behind th
   manual in [`skills/operate-plainkeep/SKILL.md`](skills/operate-plainkeep/SKILL.md). `CLAUDE.md`
   bridges for Claude Code.
 - **The contract it parses:** every verb speaks `--json` with one frozen envelope, and exit codes
-  are a protocol (`0` ok · `2` usage · `3` needs `--yes` · `4` not found · `5` denied). Refusals
+  are a protocol (`0` ok · `2` usage · `3` needs `--approved` · `4` not found · `5` denied). Refusals
   carry the exact corrected command — a refusal teaches the next call. The generated
   [`plainkeep.json`](plainkeep.json) describes the full surface: args, schemas, risk classes,
   per-action grammar, completion providers. Spec: [`docs/machine-contract.md`](docs/machine-contract.md).
@@ -139,7 +139,7 @@ agent's:
 | `read` | pure read — runs freely |
 | `safe_write` | writes inside the roots — every change is a revertible git diff |
 | `draft_only` | produces a draft (e.g. `invoice`) — the system never transmits |
-| `confirm` | needs an explicit `--yes` (exit 3 with the exact re-run when missing) |
+| `confirm` | needs an explicit `--approved` (exit 3 with the exact re-run when missing) |
 | `deny` | always refused: force-push, `rm -rf`, secrets, paths outside the wall |
 
 New and untrusted verbs default to `confirm`. It's all git underneath — even a mistaken write is
@@ -155,7 +155,7 @@ plainkeep search "how do I stop a runaway agent" # ranked file#heading hits with
 ```
 
 Enable vectors (`PLAINKEEP_VECTORS=1`, local embeddings + LanceDB) and reranking
-(`PLAINKEEP_RERANK=1`) via `plainkeep setup search --yes`. The index is disposable:
+(`PLAINKEEP_RERANK=1`, or `search.vectors`/`search.rerank` in `~/.config/plainkeep/config.toml`) via `plainkeep setup search --approved`. The index is disposable:
 `rm -rf .index && plainkeep index` rebuilds it.
 
 ## Extending it
@@ -164,8 +164,8 @@ Your verbs live in `plugins/`, never in the engine — updates can't overwrite t
 
 ```sh
 plainkeep new verb standup                   # scaffold your own verb (run.py + cmd.json)
-plainkeep plugin add you/plainkeep-pomodoro --yes  # install a pack
-plainkeep plugin trust plainkeep-pomodoro --yes    # lift its trust ceiling (capped at confirm until you do)
+plainkeep plugin add you/plainkeep-pomodoro --approved  # install a pack
+plainkeep plugin trust plainkeep-pomodoro --approved    # lift its trust ceiling (capped at confirm until you do)
 ```
 
 A plugin verb appears in `plainkeep help`, `plainkeep.json`, completion, `plainkeep ui`, and MCP
@@ -180,7 +180,7 @@ automatically, and the guardrail gates it identically. How to write one:
 
 `script/update` 3-way-merges only the engine files (listed in `script/engine.txt`): unmodified
 files fast-forward, locally patched ones merge, conflicts get markers. When an update expects a
-newer terminal UI, `plainkeep setup` shows "update available" and `plainkeep setup ui --yes`
+newer terminal UI, `plainkeep setup` shows "update available" and `plainkeep setup ui --approved`
 fetches the exact pinned release.
 
 ## More

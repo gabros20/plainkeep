@@ -43,7 +43,7 @@ engine files from upstream into the checkout (STAGED, reviewable); `script/setup
      On an older `script/update` that does not, run it a **second time** before step 6 — otherwise
      step 6 refuses with `source tree is missing pyproject.toml`, which reads like a broken checkout
      but is really a stale manifest.
-6. `<vault>/script/setup --yes` — installs the engine as a versioned tree outside the vault,
+6. `<vault>/script/setup --approved` — installs the engine as a versioned tree outside the vault,
    repoints `~/.local/bin/plainkeep` at `…/engine/current/plainkeep`. Verify:
    `test -f ~/.local/share/plainkeep/engine/current/bin/lib/migrate.py && echo ok`
 7. `plainkeep doctor` — resolve anything it FAILs on before continuing (warns are fine).
@@ -75,7 +75,7 @@ will refuse while they point there. The chosen end state: point them at the inst
      OUTSIDE the vault and named it. STOP, save the patch path, report to the human.
    - If it refuses on the symlinks: Phase 2 didn't take; re-check step 8.
 10. ```
-    python3 ~/.local/share/plainkeep/engine/current/bin/lib/migrate.py --migrate <vault> --yes \
+    python3 ~/.local/share/plainkeep/engine/current/bin/lib/migrate.py --migrate <vault> --approved \
       --engine-source <vault>
     ```
     Expected `rc 0` in well under a minute. **Expected in the summary:**
@@ -106,7 +106,7 @@ will refuse while they point there. The chosen end state: point them at the inst
 
 ## Rollback (any time before you delete the receipt yourself — the receipt IS the rollback)
 
-`python3 ~/.local/share/plainkeep/engine/current/bin/lib/migrate.py --rollback <vault> --yes`
+`python3 ~/.local/share/plainkeep/engine/current/bin/lib/migrate.py --rollback <vault> --approved`
 restores all removed paths, HEAD, and the launcher, and deletes the receipt. Re-running the migration
 afterwards converges. If rollback refuses, its message states why truthfully — report it verbatim.
 
@@ -114,7 +114,7 @@ afterwards converges. If rollback refuses, its message states why truthfully —
 
 If Phase 1–3 refuse in a way the human can't resolve: push everything, clone fresh
 (`git clone git@github.com:gabros20/ops.git`), `git fetch upstream` in it, register it
-(`plainkeep vault register <path> --yes`), and run Phases 1–4 there — this is byte-for-byte the
+(`plainkeep vault register <path> --approved`), and run Phases 1–4 there — this is byte-for-byte the
 rehearsed canary shape. Machine-local `.venv`/`.index` regenerate; copy `.logs/` over if you want
 continuous audit history.
 

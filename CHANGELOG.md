@@ -7,9 +7,119 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 ## [Unreleased]
 
 ### Added
+- **`--approved`, the consent flag named for what it means (v2 step 0.16).** `--approved` is now the
+  canonical flag for every confirm-class action: it says a human approved this exact action. `--yes`
+  and `-y` stay as permanent aliases and behave identically, and none of the three clears a deny. The
+  exit-3 message, the re-run line, the MCP `ops_confirm_needed` re-run, `cmd.json`, `plainkeep.json`,
+  the docs and the script help all say `--approved`; the guardrail log keeps the args as typed, so the
+  spelling used is recorded. Both guards (`bin/lib/guardrail.py` and `cli/src/core/guardrail.ts`) and
+  every verb that self-gates share one list, with parity cases for `--approved` in both.
+- **MCP tool annotations (v2 step 0.8).** `tools/list` now carries `readOnlyHint`, `destructiveHint`
+  and `openWorldHint` derived from each verb's risk class (read: read-only; safe_write and draft_only:
+  writes, not destructive; confirm or undeclared: destructive). `bookmark`, which fetches URLs, also
+  sets `openWorldHint: true`. `PROTOCOL_VERSION` is unchanged.
 - **Retrieval bench (v2 step 0.0): `test/run_bench.py`.** A fixed set of 30 queries (Hungarian exact and inflected forms, answers deep inside long notes, tasks, journal days, superseded decisions, unanswerable questions, exact titles and aliases) scored against a fixture vault through the real `indexlib` in keyword mode by default (hybrid and hybrid+rerank are opt-in via `--modes all`), reported as recall@5, recall@10 and MRR per tag. `baseline.json` records the keyword numbers so each later retrieval change can show what it moved, and `test/bench/gates.json` holds one gate so far: Hungarian keyword recall@5 ≥ 0.6, added with the Unicode-token fix below. `--vault PATH` runs your own queries against a real vault, read-only. Private queries go in `test/bench/queries.private.json`, which is gitignored.
+- **`plainkeep doctor` lints two link patterns (v2 step 0.10).** It warns, never fails, on `[[x]](url)` (a
+  wikilink wrapped as a markdown link, which no renderer resolves) and on a committed symlink whose
+  absolute target lies outside the vault and the engine (it dangles on any other machine).
+- **`api.slugify_folded`; plugin API 1.1 (v2 step 0.13).** `api.slugify` keeps its 1.0 behaviour (ADR-018),
+  so a plugin that finds its notes by `slugify(title)` keeps finding them. `PLAINKEEP_API_VERSION` is now
+  `"1.1"`; a plugin that needs the new export declares `"api": ">=1.1,<2"`.
+- **`search` covers tasks, journal and inbox, and filters by collection (v2 step 0.3).** The index used
+  to read only `wiki/`, so a task or a journal day could never be found. It now reads the vault root,
+  restricted to an allowlist (`wiki/`, `tasks/`, `journal/`, `inbox/`), and every hit carries
+  `collection`. `plainkeep search "<q>" --collection wiki|tasks|journal|inbox` restricts every arm
+  before the top-k cut; `--collection wiki` returns what `search` used to. Hit paths are now
+  vault-relative (`wiki/notes/x.md`, not `notes/x.md`); lines already in `.logs/queries.jsonl` keep the
+  old wiki-relative form. `PLAINKEEP_CONTENT` still points the indexer at one custom tree. **The index
+  schema changed.** The first command that opens the index migrates it in place: existing rows (and
+  their vectors and embedding records) are renamed to `wiki/<path>`, so nothing is re-embedded, and
+  `status`/`orient` read "partial" until the next `plainkeep index`, which then reads tasks, journal
+  and inbox. The vector half is a durable step: if the process that migrates cannot load LanceDB, or dies halfway, a later one finishes it (idempotently). If the in-place step fails the index is dropped instead and `plainkeep index` rebuilds
+  everything (a vault with vectors re-embeds, which takes hours; search returns no hits until then). Bench: task
+  recall@5 0.0 to 0.75, journal 0.0 to 0.67.
+- **A note is searchable the moment a verb writes it (v2 step 0.4).** `capture`, `new`, `wiki new`, `task`
+  (add and move), `bookmark`, `files ingest` shadow notes and hub links, `start`, `close` and every
+  journal line now refresh that file's search rows before returning, so `capture` then `search` finds
+  it with no `plainkeep index` in between. Only the keyword rows are written; a changed note's
+  embedding is left pending for the next `plainkeep index`, and `status` and `orient` report
+  `pending_embeddings` (0 when vectors are off). If the index cannot be updated the verb prints a
+  one-line warning and the write stands. `triage`, `organize apply` and `archive` refresh the notes
+  they move or rewrite, and a pruned note drops its vector too. Index freshness is now honest:
+  `status`, `orient` and `doctor` read when `plainkeep index` last finished (not the sqlite file's
+  mtime, which every write touches), so an index made only of per-write rows reads "partial" or "not
+  built". `search --open` and the fzf picker hand `open` the hit's vault-relative path, so a journal or
+  inbox hit opens that file. Cost: 1.4 ms median per write in-process, about 10 to 30 ms on a whole
+  `capture`.
+- **`search` says when it cut the list, and `wiki list --tag` lists everything (v2 step 0.15).** `search`
+  returned its top 10 silently, so a collection of 35 notes sharing one tag looked like 10. Now
+  `search --limit N` sets the cap and `--all` ranks every FTS match (plus the fused vector and graph
+  additions). A cut is always disclosed: the human output ends with `showing 10 of ≥N — use
+  --limit/--all`, and `--json` adds `returned`, `limit`, `truncated` and `lexical_total` (the exact
+  count of FTS-matching notes, never a vector candidate count) to the header line.
+  `plainkeep wiki list --tag <tag>` is the exhaustive, deterministic listing: it matches whole
+  frontmatter `tags` values (case-insensitive, optional leading `#`, `a-b` is one value), never body
+  text, links or a prefix/suffix of another tag, sorted by slug, one row per note (`title`, `slug`,
+  `type`, `path`); `wiki canvas '#tag'` shares the same matching, `--tag` completes from the live tags (new `tag` completion provider), and two notes that share a stem are both listed. The bench gained an `exhaustive` query
+  (the 13th of 13 matches) that only `--all` reaches, with a `recall@all` gate.
+- **Host config file (v2 step 0.5): `config.toml`.** New `bin/lib/hostconfig.py` reads
+  `config.toml` from the same directory as the vault registry (`$PLAINKEEP_CONFIG_HOME`, else
+  `$XDG_CONFIG_HOME/plainkeep`, else `~/.config/plainkeep`). Keys: `search.vectors`, `search.rerank`,
+  `models.enrich`, `models.triage`, `ollama.host`. Precedence is flag, then environment variable, then
+  config, then default, so a non-interactive `ssh host plainkeep search …` gets hybrid search without
+  a shell profile. `setup search --yes` writes `search.vectors = true` instead of advising an `export`,
+  and `setup status` prints each arm's effective value and where it came from. `doctor` suggests
+  deleting `env.sh` once the config holds the same values (it never deletes it). The test seal drops
+  `OLLAMA_HOST`; the config path is already a scratch directory under `seal()`. `test/run_hostconfig.py`. `setup search --dry-run` writes nothing, `setup search --yes` persists the switch even on a host that is already ready, and the `env.sh` hint appears only when the file holds nothing but exports the config repeats.
+
+### Changed
+- **Doc drift fixed (v2 step 0.11).** `docs/architecture.md` draws the roots for the engine/vault split
+  (the vault is data, the engine a versioned read-only tree outside it). The mobile guide no longer says
+  nothing on mobile edits the wiki while recommending Obsidian mobile: capture only fills `inbox/`, and
+  editor apps make your own commits. `docs/README.md` links the v2 design and plan, and the search docs
+  cover collections, `--limit/--all`, `wiki list --tag`, and `config.toml` replacing env exports.
+- **The operating manual starts with `orient` and carries a recipe table (v2 step 0.7).**
+  `skills/operate-plainkeep/SKILL.md` §3 is now one step, `plainkeep orient`; §6a lists the common
+  jobs (find, capture, file a document, file a finished note, share, task, resume) in the fewest calls,
+  with `search --collection`, the `--limit/--all` cut footer, `wiki list --tag` for exhaustive lists,
+  and how to read the partial-index, `pending_embeddings` and backup lines. §6b states the consent
+  rule: `--approved` is passed only when the human asked for that exact action in this conversation,
+  never for an action the agent chose, never by scheduled jobs, never over MCP. The manual says
+  `--approved` throughout, with `--yes`/`-y` named once as aliases.
+- **New slugs fold accents (v2 step 0.13).** `Ügyfél szerződés` becomes `ugyfel-szerzodes`, not
+  `gyf-l-szerz-d-s`, in every verb that names a file from a title. ASCII titles are byte-identical and
+  existing notes are never renamed; `doctor` lists, as information, the ones a fold would name differently.
+  `invoice` still finds a client created under its old name, and `new` refuses a name whose old form
+  already exists. `wiki canvas '#tag'` writes a non-ASCII tag's canvas under the folded name, so an
+  old dropped-letter `.canvas` file is left behind, not overwritten.
+- **`doctor`'s link lint also scans `journal/` and `tasks/` (v2 step 0.10),** and counts a symlink into the
+  engine (including through `current`) or into a vault under a symlinked path as inside.
+- **Search finds inflected Hungarian words (v2 step 0.2).** Hungarian suffixes defeated exact-token
+  matching, so `ügyfelek` never found a note that says `ügyfél`. `search` now runs a second FTS query
+  for every word of five or more characters, matching it as a prefix of `word[:max(4, len-3)]`, and
+  adds the notes the exact query missed at half the exact arm's weight: an exact-form hit still
+  outranks a prefix-only one, and notes the exact arm already found keep their rank. No stemmer
+  dependency. On the bench the Hungarian recall@5 went 0.75 to 1.0 with English MRR unchanged
+  (0.185); after 0.3 widened the corpus it holds at 0.875 and the `hu` gate is 0.85.
+- **`orient` no longer calls a commit a backup (v2 step 0.6).** `--json` gains `last_commit_age_min`,
+  `backup_configured` and `backup_last_ok` (ISO timestamp of the last verified `backup run`, or null);
+  `backup_age_min` stays as a deprecated alias equal to `last_commit_age_min`. The dashboard prints a
+  `commits:` line for git and a separate `backup:` line that says "not configured" when no restic target
+  exists. `backup run` records `.logs/backup-last-ok.json` (gitignored, so machine-local) after a passing `restic check`.
+- **Triage defaults to `gemma4:e2b` (v2 step 0.12).** The ollama agent used `gemma3:1b`; it is now
+  `gemma4:e2b`, a separate default from enrich's `gemma4:e4b` (`PLAINKEEP_AGENT_MODEL` still overrides).
+  `models` gains a `triage` stage, so `models pull --all` (and `setup models`) pulls it. Without Ollama,
+  triage still falls back to the shell heuristics.
 
 ### Fixed
+- **A migration's printed doctor failure survives the clip (v2 Stage 0 integration).** `migrate`
+  clips a failing probe's output to head + tail, and `doctor` now prints advisory rows after its FAIL
+  lines, so the failing row could land in the elided middle. `FAIL` rows are now always kept.
+- **Escaped pipes survive a shared table (v2 step 0.9).** `share` split table rows on every `|`, so
+  `[[acme\|Acme Corp]]` in a cell became two cells and a dead link; it now splits on unescaped pipes.
+- **`[[slug\|label]]` in a table is a link to `slug` (v2 step 0.9).** The escaped pipe left a trailing
+  backslash on the target, so the link counted as broken. One parser, `bin/lib/wikilink.py`, now serves
+  the index, `wiki`, `render` and `share`.
 - **Non-ASCII search words reach the index (v2 step 0.1).** Query tokens were extracted with an ASCII-only
   pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found
   nothing. Tokens are now Unicode word characters, the FTS5 `unicode61` tokenizer folds diacritics so

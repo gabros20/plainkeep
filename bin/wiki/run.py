@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 plainkeep wiki open <slug> [--obsidian] | edit <slug> | new <type> <name> | backlinks <slug> |
-  stale [days] | orphans | canvas <hub|#tag> [--depth N] [--stdout] | list  [--dry-run] [--json]
+  stale [days] | orphans | canvas <hub|#tag> [--depth N] [--stdout] | list [--tag <tag>]  [--dry-run] [--json]
 — navigate and grow the knowledge wiki (§10). Slugs resolve by basename ([[wikilinks]] style).
 `open --obsidian` (or PLAINKEEP_OPEN=obsidian) prints an obsidian:// URI and opens it on macOS (Part 3.1);
 `canvas` emits a deterministic JSON Canvas over the wikilink graph (Part 3.2).
@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import sys
+import unicodedata
 from datetime import date
 from pathlib import Path
 from urllib.parse import quote
@@ -48,6 +49,28 @@ def _adjacency(notes):
         for t in tgts:
             inbound[t].add(s)
     return out, inbound
+
+
+def _norm_tag(t: str) -> str:
+    return unicodedata.normalize("NFC", t.strip()).lstrip("#").strip().casefold()
+
+
+def _tagged_paths(tag: str) -> list:
+    """Every wiki note whose frontmatter `tags` contain `tag` as a WHOLE normalized value (case-folded,
+    optional leading `#`; `a-b` is one value), sorted by (slug, path). Never body text or wikilinks,
+    never a prefix/suffix of another tag. Walks the files, not the slug map, so two notes that share a
+    stem are both listed."""
+    want = _norm_tag(tag)
+    if not want or not paths.WIKI.exists():
+        return []
+    found = [p for p in paths.WIKI.rglob("*.md")
+             if want in {_norm_tag(t) for t in paths.fm_list(p, "tags")}]
+    return sorted(found, key=lambda p: (p.stem, p.as_posix()))
+
+
+def _tag_members(notes, tag: str) -> set:
+    """Slugs tagged `tag` (see `_tagged_paths`), for `canvas '#tag'`."""
+    return {p.stem for p in _tagged_paths(tag)}
 
 
 def _canvas_model(notes, hub, tagset, depth):
@@ -137,7 +160,14 @@ def main(argv):
         if i + 1 < len(argv) and argv[i + 1].isdigit():
             depth = max(1, int(argv[i + 1]))
             del argv[i + 1]
+    tag_arg = None
+    if "--tag" in argv:
+        i = argv.index("--tag")
+        tag_arg = argv[i + 1] if i + 1 < len(argv) else ""
+        del argv[i:i + 2]
     argv = [a for a in argv if a not in ("--dry-run", "--obsidian", "--stdout", "--depth")]
+    if tag_arg is not None and (argv[0] if argv else "list") != "list":
+        output.fail(output.EXIT_USAGE, "--tag belongs to `plainkeep wiki list --tag <tag>`", verb="wiki")
     action = argv[0] if argv else "list"
     notes = _notes()
 
@@ -198,6 +228,7 @@ def main(argv):
         vaultio.mkdir(d)
         f = d / f"{slug}.md"
         vaultio.write_text(f, notetype.render(typ, title=name, slug=slug), encoding="utf-8")
+        paths.index_written(f)
         paths.append_journal(f"wiki new {typ}: {slug}")
         data = {"path": str(rel), "type": typ, "slug": slug}
         return output.emit(data, "wiki", human=lambda _: f"created -> {rel}")
@@ -252,7 +283,7 @@ def main(argv):
         tagset = set()
         if hub is None:
             tag = target[1:] if target.startswith("#") else target
-            tagset = {s for s, p in notes.items() if tag in paths.fm_list(p, "tags")}
+            tagset = _tag_members(notes, tag)
             if not tagset:
                 output.fail(output.EXIT_NOT_FOUND, f"no note or tag '{target}'", verb="wiki")
             base = paths.slugify(tag)
@@ -279,6 +310,18 @@ def main(argv):
         return output.emit(data, "wiki",
                            human=lambda _: f"created -> {rel}  ({len(ordered)} nodes, {len(edges)} edges)")
 
+    elif action == "list" and tag_arg is not None:
+        if not _norm_tag(tag_arg):
+            output.fail(output.EXIT_USAGE, "usage: plainkeep wiki list --tag <tag>", verb="wiki")
+        members = _tagged_paths(tag_arg)   # exhaustive + deterministic: sorted by slug, then path
+        rows = [{"title": paths.fm_field(f, "title") or paths.title_of(f), "slug": f.stem,
+                 "type": paths.fm_field(f, "type") or "?",
+                 "path": f.relative_to(paths.PLAINKEEP_HOME).as_posix()} for f in members]
+
+        def render_tagged(rs):
+            return "\n".join([f"{len(rs)} note(s) tagged '{_norm_tag(tag_arg)}':",
+                              *[f"  {r['slug']}  {r['title']}  ({r['type']})  {r['path']}" for r in rs]])
+        return output.emit_rows(rows, "wiki", human=render_tagged, header={"tag": _norm_tag(tag_arg), "total": len(rows)})
     elif action == "list":
         by_type = {}
         for p in notes.values():

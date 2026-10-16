@@ -257,11 +257,11 @@ def missing_dependency_message(module: str, pack: str, vault) -> str:
     if any(requirement_name(d) == top.lower().replace("-", "_") for d in declared):
         return (f"plainkeep: pack '{pack}' declares '{top}' as a dependency but it is not installed "
                 f"for this interpreter\n"
-                f"  fix: plainkeep plugin sync {pack} --yes")
+                f"  fix: plainkeep plugin sync {pack} --approved")
     return (f"plainkeep: pack '{pack}' imported '{top}', which is not installed and which the pack "
             f"does not declare\n"
             f'  fix: add "dependencies": ["{top}"] to the pack\'s plugin.json, then '
-            f"plainkeep plugin sync {pack} --yes")
+            f"plainkeep plugin sync {pack} --approved")
 
 
 def install_missing_dependency_hook(vault, environ=None) -> bool:

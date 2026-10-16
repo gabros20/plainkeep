@@ -366,6 +366,7 @@ def _link_into_hub(hub: Path, shadow_slug: str, title: str) -> bool:
     else:
         text = text.rstrip("\n") + f"\n\n## Files\n{line}\n"
     vaultio.write_text(hub, text, encoding="utf-8")
+    paths.index_written(hub)
     return True
 
 
@@ -395,6 +396,7 @@ def _shadow(dest: Path, title: str, sha: str, hub_slug: str | None) -> Path:
     vaultio.write_text(f, f"---\ntype: file\n{kind_fm}{meta_fm}title: {title}\nstatus: active\nsource: ingest\n"
                  f"ingested: {paths.today()}\npath: {dest}\nsha256: {sha}\n{hub_fm}tags: []\n---\n# {title}\n\n"
                  f"{asset}{hub_body}", encoding="utf-8")
+    paths.index_written(f)
     return f
 
 
@@ -722,7 +724,7 @@ def cmd_distill(argv, dry=False):
     for c in concepts:
         keep = []
         for w in c.get("wikilinks", []):
-            tgt = w.split("#", 1)[0].split("|", 1)[0].strip().strip("[").strip("]").strip()
+            tgt = paths.norm_link(w.strip("[").strip("]"))
             if tgt and tgt in valid and tgt != c["slug"]:
                 keep.append(tgt)
             elif tgt:

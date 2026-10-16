@@ -9,12 +9,12 @@ plainkeep plugin add <owner/repo|path>[@tag] | list | trust <name> | update <nam
 
 THE TRUST MODEL (non-negotiable). A pack's self-declared risk NEVER takes effect at install: `add`
 records the pack in `plugins/plugins.lock.json` as UNTRUSTED, and the guardrail caps every verb from
-an untrusted pack at `confirm` (needs --yes each run). `plainkeep plugin trust <name> --yes` records the
+an untrusted pack at `confirm` (needs --approved each run). `plainkeep plugin trust <name> --approved` records the
 accepted ceiling; only then does the pack's declared per-verb risk stand. Even a trusted pack keeps
 the transmit-block + path-wall (classify), and a declared verb that collides with an engine name is
 refused at install — the engine namespace is reserved.
 
-add/update/remove/trust/sync mutate external state, so each refuses without an explicit --yes
+add/update/remove/trust/sync mutate external state, so each refuses without an explicit --approved
 (confirm); list is read-only. `update` re-resolves the pin explicitly and refuses to cross
 min_ops_version — it never auto-updates. The git-clone path exists but is not exercised by tests
 (local paths only).
@@ -255,17 +255,17 @@ def _resolve_and_validate(source: str, tag: str | None):
 
 # --- subcommands ---------------------------------------------------------------------------------
 def _needs_yes(argv, action: str) -> None:
-    if "--yes" not in argv and "-y" not in argv:
+    if not output.consented(argv):
         output.fail(output.EXIT_CONFIRM,
                     f"plainkeep plugin {action} is confirm-class (installs/changes external code)",
-                    hint=f"re-run: plainkeep plugin {action} ... --yes", verb="plugin")
+                    hint=f"re-run: plainkeep plugin {action} ... --approved", verb="plugin")
 
 
 def cmd_add(argv):
     _needs_yes(argv, "add")
     positional = [a for a in argv if not a.startswith("-")]
     if not positional:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin add <owner/repo|path>[@tag] --yes", verb="plugin")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin add <owner/repo|path>[@tag] --approved", verb="plugin")
     spec = positional[0]
     source, tag = (spec.split("@", 1) + [None])[:2] if "@" in spec else (spec, None)
 
@@ -274,8 +274,8 @@ def cmd_add(argv):
     dest = paths.PLAINKEEP_HOME / "plugins" / name
     if dest.exists():
         output.fail(output.EXIT_USAGE,
-                    f"pack '{name}' is already installed — `plainkeep plugin update {name} --yes` or "
-                    f"`plainkeep plugin remove {name} --yes` first", verb="plugin")
+                    f"pack '{name}' is already installed — `plainkeep plugin update {name} --approved` or "
+                    f"`plainkeep plugin remove {name} --approved` first", verb="plugin")
     vaultio.mkdir(dest.parent)
     vaultio.copytree(staging, dest, ignore=shutil.ignore_patterns(".git"))
     if not is_local:  # clone tempdir is disposable once copied
@@ -314,9 +314,9 @@ def cmd_add(argv):
         print("\n".join(_declared_surface(data)))
         if deps:
             print(f"    declares {len(deps)} dependenc(ies): {', '.join(deps)}\n"
-                  f"    install them into this vault's overlay: plainkeep plugin sync {name} --yes")
+                  f"    install them into this vault's overlay: plainkeep plugin sync {name} --approved")
         print(f"\n{YEL}untrusted{RESET} — every verb is capped at confirm until you run:\n"
-              f"  plainkeep plugin trust {name} --yes")
+              f"  plainkeep plugin trust {name} --approved")
 
     return output.emit({"name": name, "version": data["version"], "commit": commit,
                         "verbs": [v["verb"] for v in data["verbs"]], "trusted": False,
@@ -335,7 +335,7 @@ def cmd_list(argv):
 
     def render(rs):
         if not rs:
-            return "no plugins installed (add one: `plainkeep plugin add <path> --yes`)."
+            return "no plugins installed (add one: `plainkeep plugin add <path> --approved`)."
         out = [f"{len(rs)} plugin pack(s):"]
         for r in rs:
             state = f"{GREEN}trusted{RESET}" if r["trusted"] else f"{YEL}untrusted{RESET}"
@@ -352,7 +352,7 @@ def cmd_trust(argv):
     _needs_yes(argv, "trust")
     names = [a for a in argv if not a.startswith("-")]
     if not names:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin trust <name> --yes", verb="plugin")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin trust <name> --approved", verb="plugin")
     name = names[0]
     lock = _load_lock()
     entry = lock.get("plugins", {}).get(name)
@@ -371,7 +371,7 @@ def cmd_update(argv):
     _needs_yes(argv, "update")
     names = [a for a in argv if not a.startswith("-")]
     if not names:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin update <name> --yes", verb="plugin")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin update <name> --approved", verb="plugin")
     name = names[0]
     lock = _load_lock()
     entry = lock.get("plugins", {}).get(name)
@@ -415,8 +415,8 @@ def cmd_update(argv):
                         "new_dependencies": new_deps}, "plugin",
                        human=lambda _: f"{GREEN}updated{RESET} '{name}' to v{data['version']} (commit {commit})"
                        + (f"\n{YEL}new dependencies declared: {', '.join(new_deps)} — "
-                          f"install them with `plainkeep plugin sync {name} --yes`{RESET}" if new_deps else "")
-                       + (f"\n{YEL}risk surface grew — re-run `plainkeep plugin trust {name} --yes`{RESET}" if retrust else ""))
+                          f"install them with `plainkeep plugin sync {name} --approved`{RESET}" if new_deps else "")
+                       + (f"\n{YEL}risk surface grew — re-run `plainkeep plugin trust {name} --approved`{RESET}" if retrust else ""))
 
 
 def _pip_argv(target: Path, reqs: list[str], extra: list[str]) -> list[str]:
@@ -452,7 +452,7 @@ def _pip_argv(target: Path, reqs: list[str], extra: list[str]) -> list[str]:
 # caller learns nothing about the boundary it just hit.
 # --------------------------------------------------------------------------------------------------
 FIND_LINKS_PREFIX = "--find-links="
-SYNC_FLAGS = ("--yes", "-y", "--no-index")
+SYNC_FLAGS = ("--approved", "--yes", "-y", "--no-index")
 
 
 def _pip_options(argv) -> tuple[list[str], list[str]]:
@@ -462,7 +462,7 @@ def _pip_options(argv) -> tuple[list[str], list[str]]:
     if unknown:
         output.fail(output.EXIT_USAGE,
                     f"unknown option(s) for `plugin sync`: {', '.join(unknown)}",
-                    hint="`sync` accepts --yes, --no-index and --find-links=<local dir>. There is no "
+                    hint="`sync` accepts --approved, --no-index and --find-links=<local dir>. There is no "
                          "pass-through to pip: an arbitrary pip argument is a way to install a "
                          "package no pack declared, which is the one thing this verb refuses.",
                     verb="plugin")
@@ -512,7 +512,7 @@ def _overlay_contents(target: Path) -> list[dict]:
 
 
 def cmd_sync(argv):
-    """plainkeep plugin sync [<name>] --yes [--no-index] [--find-links=<dir>] — build the vault's
+    """plainkeep plugin sync [<name>] --approved [--no-index] [--find-links=<dir>] — build the vault's
     dependency overlay.
 
     Confirm-class for the same reason `add` is: it installs third-party code. It is idempotent, it
@@ -610,7 +610,7 @@ def cmd_remove(argv):
     _needs_yes(argv, "remove")
     names = [a for a in argv if not a.startswith("-")]
     if not names:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin remove <name> --yes", verb="plugin")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep plugin remove <name> --approved", verb="plugin")
     name = names[0]
     lock = _load_lock()
     entry = lock.get("plugins", {}).get(name)
@@ -642,9 +642,9 @@ def main(argv):
     if action == "sync":
         return cmd_sync(rest)
     output.fail(output.EXIT_USAGE,
-                "usage: plainkeep plugin add <owner/repo|path>[@tag] --yes | list | trust <name> --yes | "
-                "update <name> --yes | remove <name> --yes | "
-                "sync [<name>] --yes [--no-index] [--find-links=<dir>]", verb="plugin")
+                "usage: plainkeep plugin add <owner/repo|path>[@tag] --approved | list | trust <name> --approved | "
+                "update <name> --approved | remove <name> --approved | "
+                "sync [<name>] --approved [--no-index] [--find-links=<dir>]", verb="plugin")
 
 
 if __name__ == "__main__":

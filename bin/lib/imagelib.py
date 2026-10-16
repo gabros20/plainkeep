@@ -26,7 +26,14 @@ from pathlib import Path
 # ollama` (a pip package NOT in requirements.txt; `_has_ollama()` only probes the CLI, so importing
 # the pip package here would let a host with the CLI but not the package pass the probe then
 # ImportError at runtime).
-OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+try:
+    from . import hostconfig  # type: ignore  # (namespace sibling)
+except ImportError:                      # loaded by file path with no package (test suites do)
+    import sys as _sys
+    _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import hostconfig  # type: ignore
+
+OLLAMA_HOST = hostconfig.ollama_host()
 
 try:
     from PIL import Image, ExifTags  # type: ignore

@@ -96,6 +96,7 @@ def main(argv):
         new = dest / f.name
         f.rename(new)
         _set_status(new, status)
+        paths.index_written(f, new)   # the old path is pruned, the new one indexed
         paths.append_journal(f"task {tid} -> {status}")
         data = {"id": tid, "from": cur, "to": status}
         return output.emit(data, "task", human=lambda _: f"{tid}: {cur} -> {status}")

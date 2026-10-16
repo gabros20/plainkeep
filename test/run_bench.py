@@ -53,8 +53,8 @@ QUERIES_SCHEMA = "plainkeep.bench.queries/1"
 OUT_SCHEMA = "plainkeep.bench/1"
 
 KNOWN_TAGS = {"hu", "hu-exact", "hu-inflect", "deep", "task", "journal", "superseded",
-              "unanswerable", "exact", "en", "paraphrase"}
-TAG_ORDER = ["hu", "hu-exact", "hu-inflect", "deep", "paraphrase", "task", "journal", "superseded", "exact", "en"]
+              "unanswerable", "exact", "en", "paraphrase", "exhaustive"}
+TAG_ORDER = ["hu", "hu-exact", "hu-inflect", "deep", "paraphrase", "task", "journal", "superseded", "exact", "exhaustive", "en"]
 MODES = ["keyword", "hybrid", "hybrid+rerank"]
 METRICS = ("recall@5", "recall@10", "mrr")
 ID_RE = re.compile(r"^[a-z0-9-]+$")
@@ -218,7 +218,7 @@ def load_gates(path: Path) -> list[dict]:
     if not isinstance(gates, list):
         raise SystemExit(_usage(f"{path}: `gates` must be a list"))
     for g in gates:
-        ok = (isinstance(g, dict) and g.get("mode") in MODES and g.get("metric") in METRICS
+        ok = (isinstance(g, dict) and g.get("mode") in MODES and g.get("metric") in (*METRICS, "recall@all")
               and isinstance(g.get("tag"), str) and isinstance(g.get("min"), (int, float)))
         if not ok:
             raise SystemExit(_usage(f"{path}: bad gate {g!r} (need mode, tag, metric, min)"))
@@ -361,7 +361,11 @@ class Engine:
             rank = next((i for i, h in enumerate(hits, 1) if exp and h == exp[0]), None)
             if exp and rank is None:
                 rank = next((i for i, h in enumerate(hits, 1) if h in exp), None)
-            rows.append({"q": q, "hits": hits, "rank": rank,
+            all_rank = None
+            if "exhaustive" in q["tags"]:   # v2 0.15: the answer sits past the default cap; `--all` must find it
+                full = [self.vault_rel(p) for p, _h, _s in self.ix.search(q["query"], k=10, all_hits=True)]
+                all_rank = next((i for i, h in enumerate(full, 1) if h in exp), None)
+            rows.append({"q": q, "hits": hits, "rank": rank, "all_rank": all_rank,
                          "r5": len(set(exp) & set(hits[:5])) / len(exp) if exp else None,
                          "r10": len(set(exp) & set(hits[:10])) / len(exp) if exp else None})
         return rows
@@ -377,11 +381,15 @@ def _agg(rows: list[dict]) -> dict:
 
 def summarize(rows: list[dict]) -> dict:
     ans = [r for r in rows if r["q"]["answerable"]]
+    exh = [r for r in ans if "exhaustive" in r["q"]["tags"]]
+    ans = [r for r in ans if "exhaustive" not in r["q"]["tags"]]   # a past-the-cap query would only drag the rest down
     una = [r for r in rows if not r["q"]["answerable"]]
     tags = sorted({t for r in ans for t in r["q"]["tags"]})
     return {"status": "ran",
             "overall": _agg(ans) if ans else None,
-            "by_tag": {t: _agg([r for r in ans if t in r["q"]["tags"]]) for t in tags},
+            "by_tag": {**{t: _agg([r for r in ans if t in r["q"]["tags"]]) for t in tags},
+                       **({"exhaustive": {"n": len(exh), "recall@all": round(
+                           sum(1 for r in exh if r["all_rank"]) / len(exh), 3)}} if exh else {})},
             "unanswerable": {"n": len(una), "empty_top5": sum(1 for r in una if not r["hits"][:5])},
             "per_query": [{"id": r["q"]["id"], "rank": r["rank"], "top5": r["hits"][:5]} for r in rows]}
 
@@ -434,6 +442,9 @@ def render(report: dict, baseline: dict | None) -> list[str]:
             n = next(modes[m]["by_tag"][t]["n"] for m in ran if t in modes[m]["by_tag"])
             lines.append(f"{t:<15}{n:<5}" + "".join(
                 f"{_f((modes[m]['by_tag'].get(t) or {}).get('recall@5')):<15}" for m in ran))
+        if "exhaustive" in tags:
+            lines.append(f"{'exhaustive (R@all)':<20}" + "".join(
+                f"{_f((modes[m]['by_tag'].get('exhaustive') or {}).get('recall@all')):<15}" for m in ran))
         if "exact" in tags:
             lines.append(f"{'exact (MRR)':<20}" + "".join(
                 f"{_f((modes[m]['by_tag'].get('exact') or {}).get('mrr')):<15}" for m in ran))

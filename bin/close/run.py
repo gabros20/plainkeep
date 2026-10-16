@@ -39,6 +39,7 @@ def main(argv):
     if not dry:
         with vaultio.open_append(note, encoding="utf-8") as fh:
             fh.write("\n".join(block) + "\n")
+        paths.index_written(note)
         paths.append_journal("closed the day" + (" (automated)" if automated else ""))
 
     data = {

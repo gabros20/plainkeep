@@ -72,7 +72,7 @@ def test_exit_codes():
 
     # remediation is the exact re-run line, not a class name
     check("confirm remediation prints the exact re-run",
-          bg._remediation("archive", ["foo"]) == "re-run: plainkeep archive foo --yes")
+          bg._remediation("archive", ["foo"]) == "re-run: plainkeep archive foo --approved")
 
     # the guardrail CLI end-to-end against an isolated bin/ (no confirm/deny verb ships today)
     with tempfile.TemporaryDirectory() as td:
@@ -108,9 +108,11 @@ def test_exit_codes():
 
         r = cli("confirmy")
         check("CLI confirm-class → exit 3 + remediation",
-              r.returncode == 3 and "re-run: plainkeep confirmy --yes" in r.stderr, r.stderr)
+              r.returncode == 3 and "re-run: plainkeep confirmy --approved" in r.stderr, r.stderr)
         r = cli("confirmy", "--yes")
         check("CLI confirm-class with --yes → exit 0", r.returncode == 0, r.stderr)
+        r = cli("confirmy", "--approved")
+        check("CLI confirm-class with --approved → exit 0", r.returncode == 0, r.stderr)
         r = cli("denyy")
         check("CLI deny-class → exit 5", r.returncode == 5, r.stderr)
         r = cli("dryable", "--dry-run")

@@ -14,7 +14,7 @@ architecture every future autonomous capability reuses: propose-then-approve, ne
           commit per op, a per-run edit budget (default 20 ops / 300 lines; flags may only LOWER it),
           protected paths (conventions/index/hubs/pinned) review-only regardless of confidence, and
           retitle / propose_merge / deletions NEVER auto-apply. --safe-only applies only the four
-          additive primitives above 0.8 confidence. apply is confirm-class (needs --yes; --dry-run
+          additive primitives above 0.8 confidence. apply is confirm-class (needs --approved; --dry-run
           previews the exact replay writing nothing, per the Part 0.5 contract) and is NEVER
           schedulable (doctor warns on any confirm/deny verb in jobs/registry.json).
 
@@ -355,7 +355,7 @@ def cmd_scan(argv, dry):
         for r in rs:
             out.append(f"  {DIM}{r['confidence']:.2f}{RESET} {r['op']:<15} {CYAN}{r['target']:<24}{RESET} "
                        f"{DIM}{r['rationale'][:50]}{RESET}")
-        out.append(f"\n  review:  plainkeep organize review        apply:  plainkeep organize apply --yes"
+        out.append(f"\n  review:  plainkeep organize review        apply:  plainkeep organize apply --approved"
                    + ("  (dry run — nothing written)" if dry else ""))
         return "\n".join(out)
 
@@ -461,12 +461,12 @@ def _int_flag(argv, name, default):
 
 
 def cmd_apply(argv, dry: bool = False):
-    yes = "--yes" in argv or "-y" in argv
+    yes = output.consented(argv)
     if not yes and not dry:                             # confirm-class: self-gate for direct calls too
         output.fail(output.EXIT_CONFIRM,
-                    "plainkeep organize apply is confirm-class — re-run with --yes to replay approved ops"
+                    "plainkeep organize apply is confirm-class — re-run with --approved to replay approved ops"
                     " (or preview with --dry-run)",
-                    hint="re-run: plainkeep organize apply --yes", verb="organize")
+                    hint="re-run: plainkeep organize apply --approved", verb="organize")
     safe_only = "--safe-only" in argv
     max_ops = _int_flag(argv, "--max-ops", DEFAULT_MAX_OPS)
     max_lines = _int_flag(argv, "--max-lines", DEFAULT_MAX_LINES)
@@ -507,13 +507,14 @@ def cmd_apply(argv, dry: bool = False):
         if not dry:                                     # a true dry-run IS a read: no write/commit/ledger
             rel = path.relative_to(paths.PLAINKEEP_HOME).as_posix()
             vaultio.write_text(path, new, encoding="utf-8")
+            paths.index_written(path)
             _commit(rel, f"organize: {o['op']} {o['target']} — {o['rationale']}")
             _append_status(qpath, oid, "applied")
         applied += 1; changed_lines += nlines
         note("would apply" if dry else "applied", msg)
     if not dry:
         paths.append_journal(f"organize apply -> {applied} op(s) applied, {skipped} skipped, {rejected} rejected"
-                             + (" (budget reached)" if budget_hit else ""))
+                             + (" (budget reached)" if budget_hit else "") + output.consent_note(argv))
 
     def render(rs):
         verbed = "would apply" if dry else "applied"
@@ -525,7 +526,7 @@ def cmd_apply(argv, dry: bool = False):
         if budget_hit:
             out.append(f"  {YEL}stopped at the edit budget — re-run to continue{RESET}")
         if dry:
-            out.append(f"  {DIM}(dry run — nothing written; apply for real: plainkeep organize apply --yes){RESET}")
+            out.append(f"  {DIM}(dry run — nothing written; apply for real: plainkeep organize apply --approved){RESET}")
         return "\n".join(out)
 
     return output.emit_rows(results, "organize", human=render,
@@ -536,7 +537,7 @@ def cmd_apply(argv, dry: bool = False):
 def main(argv):
     _, argv = output.parse_argv(argv)
     dry = "--dry-run" in argv
-    yes = "--yes" in argv or "-y" in argv
+    yes = output.consented(argv)
     js = output.json_mode()
     action = argv[0] if argv else "scan"
     rest = argv[1:]
@@ -548,7 +549,7 @@ def main(argv):
         return cmd_apply(rest, dry)
     output.fail(output.EXIT_USAGE,
                 "usage: plainkeep organize scan [--dry-run] | review [--accept|--reject|--defer <ids|all>] "
-                "[--dry-run|--yes] | apply [--yes|--dry-run] [--safe-only] [--max-ops N] [--max-lines N]",
+                "[--dry-run|--approved] | apply [--approved|--dry-run] [--safe-only] [--max-ops N] [--max-lines N]",
                 verb="organize")
 
 

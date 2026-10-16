@@ -392,6 +392,19 @@
    ],
    "answerable": true,
    "note": "alias; denser notes repeat 'vat' and 'deadlines'"
+  },
+  {
+   "id": "exhaustive-01",
+   "query": "webhook",
+   "expected": [
+    "wiki/notes/release-freeze-windows.md"
+   ],
+   "tags": [
+    "exhaustive",
+    "en"
+   ],
+   "answerable": true,
+   "note": "13 notes match; this one ranks 13th, past the default cap of 10 - only `search --all` reaches it"
   }
  ]
 }

@@ -23,7 +23,7 @@ sentence that becomes a downloader if nobody defines it, so:
      would be doing the one thing the whole update contract exists to make atomic.
   4. **Doctor never reaches the network.** No fetch, no `uv sync`, no `pip`, no model pull. Where a
      dependency is missing, the row NAMES the command that would install it and stops there — the
-     `setup` verbs are where a download happens, behind their own `--yes`.
+     `setup` verbs are where a download happens, behind their own `--approved`.
 
 Enforcement, not assertion (ADR-019 D1/D2): `test/run_engineupdate.py::case_doctor_never_mutates`
 snapshots the whole vault and the whole engine install root, runs the real `plainkeep doctor` through
@@ -40,7 +40,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, guardrail, launchdlib, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
+from lib import enginetree, guardrail, hostconfig, launchdlib, output, paths, pluginenv, provision, setuplib, vaultio  # noqa: E402
 from lib.setuplib import REQUIRED_DIRS  # noqa: E402
 
 GREEN, RED, YEL, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
@@ -58,6 +58,11 @@ def _plugin_overlay() -> dict | None:
         return None
     o = lock.get("overlay")
     return o if isinstance(o, dict) else None
+
+
+_FENCE = re.compile(r"(?ms)^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[^\n]*$")
+_ICODE = re.compile(r"(`+)[^\n]*?\1")
+_WIKI_MD_LINK = re.compile(r"\[\[[^\]\n]+\]\]\([^)\s]*\)")
 
 
 def ok(m): checks.append(("ok", m))
@@ -160,7 +165,7 @@ def main(argv):
     # 1. tools
     for t in ("git", "python3", "sqlite3"):
         (ok if shutil.which(t) else (warn if t == "sqlite3" else fail))(f"tool: {t} {'present' if shutil.which(t) else 'MISSING'}")
-    vectors_requested = os.environ.get("PLAINKEEP_VECTORS", "").lower() in ("1", "true", "yes", "on")
+    vectors_requested = hostconfig.flag("search.vectors")
     for mod, why in (("lancedb", "stage-2 vectors"), ("fastembed", "stage-3 rerank")):
         try:
             __import__(mod); ok(f"optional: {mod} present ({why})")
@@ -169,10 +174,13 @@ def main(argv):
             # import, `plainkeep index` will silently fall back to keyword-only. That mismatch is a
             # misconfiguration worth calling out loudly, with the exact remedy.
             if mod == "lancedb" and vectors_requested:
-                warn("PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3 (`which python3`) — "
+                src = hostconfig.resolve("search.vectors", False)[1]
+                how = ("PLAINKEEP_VECTORS=1" if src == "env"
+                       else f"search.vectors = true in {hostconfig.path()}")
+                warn(f"{how} but lancedb is NOT importable by this python3 (`which python3`) — "
                      "`plainkeep index` falls back to keyword-only. Fix: install requirements.txt into THIS "
                      "interpreter and put $PLAINKEEP_HOME/.venv/bin first on PATH (in an agent terminal, in "
-                     "its shell init) — see docs/agent-terminal-search.md; or unset PLAINKEEP_VECTORS.")
+                     "its shell init) — see docs/agent-terminal-search.md; or turn vectors off (unset PLAINKEEP_VECTORS / set search.vectors = false).")
             else:
                 warn(f"optional: {mod} not installed ({why} disabled)")
 
@@ -217,6 +225,16 @@ def main(argv):
             warn("enrich model/Ollama not reachable — `files extract`/`bookmark` auto-enrich will "
                  "fall back to the stdlib keyword floor (no description, no LLM keywords). Fix: run "
                  "ollama and pull the configured PLAINKEEP_ENRICH_MODEL; or set PLAINKEEP_ENRICH=off.")
+
+    # host config (v2 0.5): a legacy env.sh whose exports the config already holds is dead weight.
+    # Suggest only — doctor never deletes a user's file.
+    try:
+        redundant = hostconfig.redundant_env_sh()
+    except Exception:
+        redundant = None
+    if redundant:
+        warn(f"{redundant} duplicates {hostconfig.path()} — the config file is read by every process, "
+             f"so you can delete env.sh (and its `source` line) once you agree")
 
     # 1b. the ENGINE tree (Phase 2 Task 2). The full ownership manifest, not the four-file probe the
     # dispatcher runs on every invocation: doctor is where an operator asks "is my install intact",
@@ -364,7 +382,7 @@ def main(argv):
         want = f"{sys.version_info.major}.{sys.version_info.minor}"
         if overlay.get("python") and overlay["python"] != want:
             warn(f"plugins: the dependency overlay was installed for python {overlay['python']}, "
-                 f"this interpreter is {want} — re-run `plainkeep plugin sync --yes`")
+                 f"this interpreter is {want} — re-run `plainkeep plugin sync --approved`")
         else:
             ok(f"plugins: dependency overlay matches this interpreter (python {want})")
 
@@ -490,9 +508,78 @@ def main(argv):
     else:
         warn("not a git repo (or nothing tracked) — skipped secret/binary scan")
 
+    # 5b. link lint (v2 0.10) — WARN only. Two patterns that read as links and are not:
+    #   `[[x]](url)`  an Obsidian wikilink wrapped as a markdown link; neither renderer resolves it.
+    #   a committed symlink with an ABSOLUTE target outside the vault and the engine; it dangles on
+    #   any other machine (or after the engine moves), and git carries it as if it were content.
+    wiki_dir = paths.PLAINKEEP_HOME / "wiki"
+    scan = [d for d in (wiki_dir, paths.PLAINKEEP_HOME / "journal", paths.PLAINKEEP_HOME / "tasks") if d.is_dir()]
+    if scan:
+        hits = []
+        for d in scan:
+            for md in d.rglob("*.md"):
+                try:
+                    body = md.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                body = _ICODE.sub("", _FENCE.sub("", body))
+                if _WIKI_MD_LINK.search(body):
+                    hits.append(str(md.relative_to(paths.PLAINKEEP_HOME)))
+        if hits:
+            shown = ", ".join(hits[:5]) + (f" (+{len(hits) - 5} more)" if len(hits) > 5 else "")
+            warn(f"{len(hits)} note(s) use `[[x]](url)`, a wikilink wrapped as a markdown link: {shown} "
+                 "(write `[[x]]` or `[label](url)`; a citation like `[[1]](url)` also counts)")
+        else:
+            ok("no `[[x]](url)` links in wiki, journal or tasks")
+    # inside = the vault or the engine, spelled raw OR resolved: the engine writes links through
+    # `…/engine/current/…` (a symlink), and a vault under /tmp resolves to /private/tmp.
+    roots = {Path(paths.PLAINKEEP_HOME), Path(_real(paths.PLAINKEEP_HOME)), Path(paths.ENGINE),
+             Path(_real(paths.ENGINE)), enginetree.install_root(), Path(_real(enginetree.install_root()))}
+    stray = []
+    for ln in paths.git("ls-files", "-s").splitlines():
+        meta, _, rel = ln.partition("\t")
+        if not meta.startswith("120000") or not rel:
+            continue
+        try:
+            tgt = os.readlink(paths.PLAINKEEP_HOME / rel)
+        except OSError:
+            continue
+        if os.path.isabs(tgt):
+            spelled = Path(os.path.normpath(tgt))
+            resolved = Path(os.path.realpath(tgt))
+            if not any(c == r or r in c.parents for c in (spelled, resolved) for r in roots):
+                stray.append(f"{rel} -> {tgt}")
+    if stray:
+        warn(f"{len(stray)} committed symlink(s) with an absolute target outside the vault and engine: "
+             f"{'; '.join(stray[:5])} (use a relative target, or untrack it)")
+    elif tracked:
+        ok("no committed symlink points at an absolute path outside the vault and engine")
+
+    # 5c. slug fold (v2 0.13) — informational. New slugs fold accents (`ugyfel`); notes made earlier may
+    # carry the old dropped-letter form (`gyf-l`). Nothing is renamed.
+    if wiki_dir.is_dir():
+        differ = []
+        # an existing slug is ASCII by construction, so the question is whether re-slugifying its TITLE
+        # now gives a different file name than the one on disk
+        for md in wiki_dir.rglob("*.md"):
+            title = paths.fm_field(md, "title").strip("\"' ")
+            if title and not title.isascii() and paths.slugify(title) != md.stem \
+                    and paths.slugify_legacy(title) == md.stem:
+                differ.append(f"{md.relative_to(paths.PLAINKEEP_HOME)} -> {paths.slugify(title)}.md")
+        if differ:
+            shown = "; ".join(differ[:5]) + (f" (+{len(differ) - 5} more)" if len(differ) > 5 else "")
+            ok(f"info: {len(differ)} note name(s) predate accent-folding slugs and would differ now: {shown} "
+               "(nothing is renamed; rename a note yourself if you want the new form)")
+
     # 6. index
     db = paths.PLAINKEEP_HOME / ".index" / "plainkeep.sqlite"
-    (ok if db.exists() else warn)("index built" if db.exists() else "index not built (run: plainkeep index)")
+    from lib import indexlib
+    if indexlib.last_full_index_ts() is not None:
+        ok("index built")
+    elif db.exists():
+        warn("index partial — notes were indexed one write at a time but `plainkeep index` never finished (run: plainkeep index)")
+    else:
+        warn("index not built (run: plainkeep index)")
 
     # 7. sync-wall (Part 0.4): a .git tree must NEVER live under iCloud/Dropbox/Syncthing
     home_real = _real(paths.PLAINKEEP_HOME)
@@ -651,7 +738,7 @@ def main(argv):
                  f"{', '.join(drifted)} (re-render: plainkeep job apply)")
         if unloaded:
             warn(f"{len(unloaded)} scheduled job(s) rendered but not loaded into launchd: "
-                 f"{', '.join(unloaded)} (activate: plainkeep job enable --all --yes)")
+                 f"{', '.join(unloaded)} (activate: plainkeep job enable --all --approved)")
         if rendered and not drifted and not unloaded:
             ok(f"{len(rendered)} scheduled job(s) rendered and loaded into launchd")
 

@@ -54,12 +54,14 @@ and CHANGELOG entries.
 
 ## Stage 0 — quick fixes (§2)
 
-Ordering rationale: build the measuring stick first (0.0), then fix retrieval (0.1–0.4), then fix
-correctness and linting (0.9, 0.10, 0.6, 0.12), then configuration (0.5), then MCP (0.8), then
+Ordering rationale: build the measuring stick first (0.0), make the test harness safe to run in
+parallel (0.14), then fix retrieval (0.1–0.4), then fix
+correctness and linting (0.9, 0.10, 0.6, 0.12, 0.13, 0.15), the consent flag (0.16), then
+configuration (0.5), then MCP (0.8), then
 docs last (0.7, 0.11), so the docs describe the finished state.
 
 ### 0.0 Retrieval bench harness
-- **What:** Add `test/bench/queries.yaml` with entries of the form `{query, expected: [paths],
+- **What:** Add `test/bench/queries.json` (JSON, stdlib only — decision D1) with entries of the form `{query, expected: [paths],
   tags}`. Add `test/run_bench.py`, which reports recall@5, recall@10 and MRR per mode (`keyword`,
   `hybrid`, `hybrid+rerank`). Modes whose dependencies are missing are skipped.
 - **Seed set:** about 30 queries over a fixture vault in `test/fixtures/bench/`:
@@ -75,6 +77,39 @@ docs last (0.7, 0.11), so the docs describe the finished state.
   0.1, the keyword-mode Hungarian subset becomes a gate.
 - **Done when:** the bench runs and records the baseline. The expected baseline is roughly 0 on
   the Hungarian lexical subset and partial on the task and journal subsets.
+
+### 0.14 Test harness hygiene (follow-up, found while orchestrating 0.0/0.1)
+Do this next, right after 0.0 and 0.1. It is what made parallel agent runs pile up.
+- **Bug 1 — no timeout, orphaned children:**
+  - `test/run_all.py:156` runs each suite with `subprocess.run(...)`, which has no timeout.
+  - Stopping `run_all` leaves the suite it was running alive as an orphan.
+  - On 2026-10-12, two abandoned `run_all` runs and their `run_migrate.py` children kept running
+    for 14 minutes. Nothing would have stopped them.
+- **Bug 2 — environment leaks into the suites:**
+  - `test/lib/hermetic.py` `seal()` isolates the config home, launchd and the agent home, but not
+    `PLAINKEEP_VECTORS`, `PLAINKEEP_RERANK`, `PLAINKEEP_CONTENT`, `PLAINKEEP_ENRICH_MODEL` or
+    `PLAINKEEP_AGENT_MODEL`.
+  - Example: with your shell's exports, `python3 test/run_search_impl.py` fails its
+    `wikilink-graph` check when run alone, but passes under `run_all`.
+- **What:**
+  - **Per-suite timeout.** Each suite gets a timeout: a default of 600 s, overridable per suite in
+    `SUITES`, and globally with `PLAINKEEP_TEST_TIMEOUT`. A timeout counts as a FAIL with the
+    suite name and the elapsed time.
+  - **Clean shutdown.** Start each suite in its own process group
+    (`start_new_session=True`). On timeout, Ctrl-C or SIGTERM, `run_all` stops the whole group,
+    first with TERM and then with KILL after 5 s. `run_all` installs the SIGTERM/SIGINT handler
+    that does this.
+  - **One run per checkout.** `run_all` takes a lock (`fcntl.flock` on a file under
+    `test/.run_all.lock`, git-ignored). A second concurrent run in the same checkout exits 2 with
+    the holder's PID. Separate worktrees stay independent.
+  - **Environment isolation.** `seal()` pops the search and model variables listed above. Suites
+    that need them (`run_search_vec.py`, `run_bench.py` hybrid modes) set them explicitly after
+    `seal()`.
+- **Tests:** a meta-suite case with a fixture suite that sleeps forever. `run_all` with a 2 s
+  timeout reports FAIL, and no process from that suite survives. Two concurrent runs: the second
+  refuses. `run_search_impl.py` passes with `PLAINKEEP_VECTORS=1 PLAINKEEP_RERANK=1` exported.
+- **Done when:** the meta cases pass, and every suite passes both standalone and under `run_all`
+  with your real shell environment.
 
 ### 0.1 Unicode query tokens
 - **Where:** `bin/lib/indexlib.py:293-295` (`_fts_query`).
@@ -163,6 +198,80 @@ docs last (0.7, 0.11), so the docs describe the finished state.
 - **What:** Change the default from `gemma3:1b` to `gemma4:e2b`, kept separate from the enrich
   default (`gemma4:e4b`). Update `setup models` so it pulls the new tag.
 - **Done when:** heuristics remain the fallback when Ollama is absent, and the suite is green.
+
+### 0.13 Accent-folding slugs (follow-up, found by the 0.0 architect)
+- **Bug:** `bin/lib/paths.py:107-109` `slugify` keeps only `[a-z0-9]`, so accented letters are
+  dropped, not folded: `Ügyfél szerződés` becomes `gyf-l-szerz-d-s`. Every verb that names a file
+  from a title is affected: `wiki new`, `new`, `bookmark`, `triage`, `files`, `invoice`, `repo`,
+  `filing.py`, and the plugin SDK (`bin/lib/api.py`).
+- **What:**
+  - Fold before filtering: NFKD-normalize, drop combining marks, then apply the existing
+    `[a-z0-9]` rule. `Ügyfél szerződés` becomes `ugyfel-szerzodes`. Slugs stay ASCII, so file
+    names and existing links are unaffected.
+  - Fold `ő`/`ű` the same way (to `o`/`u`). Add explicit cases for letters NFKD does not decompose
+    (`ß`, `ø`, `æ`, `ł`), or document that they are dropped.
+  - **Never rename existing notes.** Only new slugs change. `doctor` gets an informational check
+    listing existing slugs that a fold would have produced differently (for example `gyf-l`), so the
+    human can choose to `move` them.
+- **Compatibility:** `api.slugify` is part of the frozen plugin SDK (ADR-018). Changed output for
+  non-ASCII input is a behavior change: note it in the CHANGELOG under "Changed". If the SDK
+  contract forbids it, keep `api.slugify` on the old behavior and add `api.slugify_folded`.
+  ◆ Decide at implementation time after reading ADR-018.
+- **Tests:** a `run_new.py`/`run_wiki.py` case with `wiki new note "Ügyfél szerződés"` producing
+  `ugyfel-szerzodes.md`. ASCII titles must produce byte-identical slugs to today's.
+- **Why before B5:** the exact tier matches slugs, so Hungarian titles need folded slugs to hit it.
+
+### 0.15 Disclose the result cap; exhaustive tag listing (#18, part 1)
+- **Bug:**
+  - `search` returns the top 10 (`indexlib.search(k=10)`) with no truncation notice, and
+    `bin/search/run.py` has no limit flag.
+  - In #18, a 35-note collection that all share one tag showed 10 notes. The operator could only
+    conclude that the other 25 did not exist.
+- **What:**
+  - **`search --limit N` and `--all`.** `--all` removes the cut on the lexical arm: every FTS match
+    is ranked, plus the fused vector and graph additions. It is not "a bigger k".
+  - **Cap disclosure.** Human output ends with `showing 10 of ≥N — use --limit/--all` when
+    truncated. JSON adds `returned`, `limit`, `truncated`, and `lexical_total` (an exact count of
+    FTS-matching notes). Never present a vector candidate count as an exhaustive total.
+  - **`wiki list --tag <tag>`.** Exhaustive, deterministic membership:
+    - It matches whole normalized frontmatter `tags` values, with an optional leading `#`, and
+      hyphenated tags count as one value.
+    - It never matches body text or wikilinks, and a prefix or suffix of another tag does not
+      match.
+    - Results are sorted by slug, and each row has title, slug, type and path, with `--json`.
+    - Reuse the tag-membership code from `wiki canvas '#tag'` (`bin/wiki/run.py`, `_canvas_model`).
+  - Update `cmd.json`, `plainkeep.json`, completion, and the manual: use `wiki list --tag` for
+    "everything in a collection", and `search` for discovery.
+- **Tests:** #18 acceptance criteria 1–3, 6 and 7, on a fixture with 35 tagged notes, prose-only
+  mentions, and similar-prefix tags. Add a bench query tagged `exhaustive`.
+- **Why Stage 0:** it is cheap, it prevents a wrong conclusion ("only 10 exist"), and it needs no
+  retrieval redesign. The filtered and exact parts of #18 are B10.
+
+### 0.16 `--approved`: name the consent flag for what it means
+Decided by the owner on 2026-10-16. `--yes` reads as "skip the prompt", but what it actually
+asserts is that **a human approved this exact action**. `--approved` says that.
+- **What:**
+  - `--approved` becomes the canonical consent flag for every confirm-class action.
+  - `--yes` and `-y` stay as permanent aliases, because spellings are never removed (contract
+    rule).
+  - The exit-3 remediation, `cmd.json`, `plainkeep.json`, completion, the manual, and every doc
+    example switch to `--approved`.
+  - The guardrail log and the journal line record which spelling was used.
+  - Both guards change in the same PR, with a parity test:
+    - Python: `bin/lib/guardrail.py`, plus the verbs that parse `--yes` themselves (≈19 files
+      under `bin/`).
+    - TypeScript: `cli/src/core/guardrail.ts:319,358`.
+- **Semantics (unchanged, now explicit in the manual):**
+  - An agent passes `--approved` only when the human asked for *that* action in this
+    conversation (the 0.7 / #15 rule).
+  - It never passes it for an action it decided on itself, a scheduled job never can, and the
+    MCP surfaces never expose it (D1).
+  - The flag records a claim and does not prove one. That is why the remote surfaces have no
+    confirm actions at all.
+- **Tests:** in both guards, `--approved` and `--yes` behave identically; `--approved` never clears
+  a deny; and the exit-3 message names `--approved`.
+- **Done when:** a grep of the docs and manual finds no remaining `--yes` example outside the
+  alias note.
 
 ### 0.5 Host config file
 - **Where:**
@@ -331,13 +440,22 @@ numbers in the PR.
   | 11 and below | 40% | 60% |
 
 ### B5 Exact tier
-- **What:** A slug, title or alias match ranks first regardless of fusion.
+- **What:** A slug, title or alias match ranks first regardless of fusion. Needs 0.13 so
+  Hungarian titles have matchable slugs.
 - **Done when:** the exact-title subset has MRR = 1.0 in every mode.
 
 ### B6 Fused graph seeding
 - **Where:** `indexlib.py:369-378`.
 - **What:** Move the one-hop expansion after RRF so it seeds from the fused candidates. Penalise
   hubs by degree (`1/log(2+degree)`).
+- **Evidence from the 0.0 bench review (2026-10-16):** hub notes act as magnets. `webhook-relay`
+  and `redis-streams` rank #1–2 even for unrelated queries. Two causes add up:
+  - `_fts_query` ORs every token, stopwords included, so nearly every note is a keyword hit.
+  - The graph arm then boosts the best-linked hubs.
+- **Add to this step:**
+  - Drop a small bilingual stopword set (EN + HU: `a`, `az`, `és`, `the`, `of`…) from the
+    query's OR list, unless the query is nothing but stopwords.
+  - Measure the hub penalty on the bench's `en` groups (MRR).
 
 ### B7 Result labels
 - **What:** Every hit carries the following additive fields:
@@ -346,6 +464,18 @@ numbers in the PR.
   - `mode_used`
 - **Empty results:** distinguish `no_match`, `index_stale` and `semantic_unavailable` in the
   envelope.
+
+### B10 `search --tag` and `search --exact` (#18, part 2)
+- **`--tag T`:** restrict candidates **before** every stage: the FTS `WHERE`, the vector query
+  filter (LanceDB `where` on a stored `tags` column, added in B2's generation), rerank input, and
+  graph expansion. Expansion must not leak notes outside the filter. Combine it with `--author`
+  and `--collection`.
+- **`--exact "phrase"`:** a literal contiguous phrase via an FTS5 phrase query, then verified with
+  a case-insensitive substring check on the stored chunk text, because unicode61 splits `-`. No
+  vector or graph additions. Each note appears once, with its matching heading. It is not a tag
+  match.
+- **Tests:** #18 acceptance criteria 4 and 5 in every mode (keyword, hybrid, hybrid+rerank, with
+  the graph on).
 
 ### B8 `orient --project <slug> --query "<task>" --budget N` (briefing)
 - **What:** Deterministic assembly of:
@@ -384,16 +514,40 @@ is tagged.
 - **What:** Remove the in-vault links, have `setup agents` install user-level links only, and
   ignore the old paths in `.gitignore`.
 
-### C3 `sync` verb
-- **What:**
-  - New `bin/sync/` with `cmd.json` and `run.py`.
-  - `sync` runs `git pull --ff-only`, then `index --changed`. Its risk class is `safe_write`.
-  - `sync --push` commits the vault's own pending changes with a generated message, then pushes.
-    Its risk class is `confirm`.
-  - On divergence, `sync` refuses with the exact fix commands.
-  - Add a `sync` entry to `jobs/registry.json`, off by default, every 15 minutes.
-- **Done when:** the jobs suite still proves that only `read`/`safe_write` work is scheduled, and
-  the guardrail suite shows `--push` needs `--yes`.
+### C3 `sync` verb (#16, amended by #19)
+#19 records the field failure this verb must own. An untracked local
+`journal/2026/10/2026-10-14.md`, which the incoming commit also created, blocked `git pull`. The
+agent then hand-moved the file and merged it back.
+- **What:** a new `bin/sync/` with `cmd.json` and `run.py`. In order:
+  1. **Park.** Compute the incoming tree (`git fetch`, then `git diff --name-only HEAD..@{u}`).
+     Stash the tracked modifications and only those untracked files that collide with incoming
+     paths, using `git stash push --include-untracked -- <paths>`. Leave unrelated untracked
+     files alone.
+  2. **Fast-forward.** `git merge --ff-only @{u}`. Never merge, rebase or force. On divergence,
+     refuse with the exact commands to fix it.
+  3. **Restore.** `git stash pop`. If the pop conflicts, stop: name the paths, give the next
+     command, leave the stash recoverable, and do not commit or push. Two journals for the same
+     day are the expected case. ◆ Should the journal get a line-union merge driver (append-only
+     files: union is lossless), or should it always stop? Decide when building C3.
+  4. **Publish.** If the tree is clean after the pop and there are local changes, stage vault
+     content only, commit with a generated message (paths plus a one-line summary), and push to
+     the vault's own remote.
+     - Refuse `.env`, secret-looking files, and paths outside the vault.
+     - Refuse when the push URL is disabled, or when it points at the plainkeep template repo.
+  5. **Reindex.** Run `index --changed` (or `index_paths` from 0.4) so pulled notes are findable.
+     With nothing to publish, don't make an empty commit, and say so.
+- **Flags:** `--pull-only` runs steps 1–3 and 5, with no stage, commit or push. `--dry-run`
+  prints the colliding paths, incoming commits, and what would be committed. It is a read.
+- **Risk class (decided 2026-10-16, option a):**
+  - A full `sync` that pushes is `confirm` and needs `--approved` (0.16). An agent passes it when
+    the human asked to sync, so "please sync" is still one command.
+  - `--pull-only` is `safe_write`, and it is the only form `jobs/registry.json` may schedule (off
+    by default, every 15 min).
+  - `--dry-run` is a read.
+- **Tests:** #19 acceptance criteria 1–9 as fixture scenarios with two clones and one bare remote.
+  The guardrail suite shows a scheduled job can only reach `--pull-only`.
+- **Ordering:** two machines and a phone already share one remote (#19), so C3 is the most
+  valuable step in Stage C. ◆ Consider pulling C1 and C3 forward to run right after Stage 0.
 
 ### C4 `node status [--peer host]`
 - **What:** A read-only report of:
@@ -425,6 +579,44 @@ is tagged.
   - A failed model pull fails the layer, names the minimum Ollama version and exits non-zero.
   - The UI layer installs from the pinned release, not from a git remote on a sealed engine.
   - Optional layers install from the shipped `uv.lock` (`setuplib.py:219`) instead of pip ranges.
+
+### C8 Implicit day boundaries (start/close without the ritual)
+Requested by the owner on 2026-10-16.
+- **Evidence for the change:**
+  - On this Mac no scheduled job is installed (`plainkeep job status`), so the 07:30 start and
+    18:30 close never run.
+  - What they would write can be derived on demand. Carried-forward tasks are copies of
+    `tasks/active|waiting`, and the close block is `git log` plus task dates.
+  - A clock-driven `start` on two machines creates `journal/YYYY/MM/DD.md` on both, which is the
+    exact collision in #19.
+- **What:**
+  1. **Lazy journal.** Today's journal file is created on the first real write (capture, task
+     change, note, an agent's journal line), never by a clock. A day with no activity has no file.
+  2. **The start of the day becomes a view.** `orient` (which agents already run first, 0.7)
+     shows today: open and waiting tasks, the inbox count, yesterday's loose ends (active tasks
+     without progress, uncommitted changes), and the sync state. It writes nothing.
+  3. **The close becomes a view, plus the one step that matters.** `orient --day <date>` (and
+     `week`) rebuilds a day's summary from git and task files with no write. `close` = that
+     summary + `sync`, so nothing is left unpushed. Its push still needs `--approved`, and it runs
+     `sync --pull-only` semantics without it.
+  4. **Compatibility.**
+     - `start` and `close` keep working as thin wrappers (spellings are never removed).
+     - `start` = ensure today's journal + `orient`, without copying the carried-forward list.
+     - `close --automated` is accepted and does nothing beyond the summary.
+  5. **Optional written record.** A per-node opt-in in host config (0.5),
+     `journal.daily_summary = true`, appends the facts block at night. Only the vault's writer
+     node may enable it (§7). The `start` job is removed from `jobs/registry.json`, and
+     `close_nudge` becomes writer-only and off by default.
+- **ADR:** amend ADR-022 ("automation is the default offering"). Automation stays available but
+  is no longer the default for journal writes. Maintenance jobs (index, consolidate, backup check)
+  keep their defaults.
+- **Tests:**
+  - A day with no activity leaves no journal file.
+  - `orient` output covers everything the old carried-forward list showed.
+  - With two clones, both run `start` and then `sync`, and no collision occurs.
+  - The old `start`/`close` invocations still exit 0.
+- **Ordering:** after C3, because `close` calls `sync`. Steps 1–2 can land earlier, alone, if
+  wanted.
 
 **Stage C exit:** a fresh laptop runs `node join` and comes back green, `doctor` fails on every
 failure case from #16, and 4.4.0 is tagged.
@@ -541,6 +733,8 @@ tagged.
   | #15 | 0.7 + A7 |
   | #16 | C1–C7 + 0.5 |
   | #17 | A2 + 0.4 + 0.9 |
+  | #18 | 0.15 + B10 |
+  | #19 | C3 + C8 |
 
 - **When a step diverges from the design:** amend this plan in the same PR and leave the design
   doc as written. ADRs record what was actually decided.

@@ -16,8 +16,26 @@
       "name": "--collection",
       "type": "enum",
       "required": false,
-      "enum": ["wiki", "tasks", "journal", "inbox"],
+      "enum": [
+        "wiki",
+        "tasks",
+        "journal",
+        "inbox"
+      ],
       "help": "search one collection only (filtered before the top-k cut)"
+    },
+    {
+      "name": "--limit",
+      "type": "int",
+      "required": false,
+      "default": 10,
+      "help": "return at most N hits (default 10; a cut is always disclosed)"
+    },
+    {
+      "name": "--all",
+      "type": "flag",
+      "required": false,
+      "help": "no cut on the lexical arms: rank every FTS match (exclusive with --limit)"
     }
   ],
   "reads": [
@@ -30,7 +48,7 @@
   "writes": [
     ".logs/queries.jsonl"
   ],
-  "hints": "Ranked file#heading hits with an FTS5 snippet excerpt (keyword + graph, +vectors if PLAINKEEP_VECTORS). `--author human` excludes agent + derived material; `--author agent` keeps only agent notes (provenance planes). `--collection wiki|tasks|journal|inbox` searches one collection only (every hit carries its `collection`). `--open` jumps to the top hit via `plainkeep open`; bare `plainkeep search` in a tty with fzf opens a live search session. Common mistake: running before `plainkeep index`, or too narrow a query \u2014 broaden and reindex.",
+  "hints": "Ranked file#heading hits with an FTS5 snippet excerpt (keyword + graph, +vectors if PLAINKEEP_VECTORS). `--author human` excludes agent + derived material; `--author agent` keeps only agent notes (provenance planes). `--collection wiki|tasks|journal|inbox` searches one collection only (every hit carries its `collection`). `--limit N` / `--all` set the cap (default 10); a truncated result says so: the human output ends with `showing N of \u2265M \u2014 use --limit/--all` and `--json` adds `returned`, `limit`, `truncated` and `lexical_total` (the exact count of FTS-matching notes) to the header line. For \"everything with this tag\" use `plainkeep wiki list --tag <tag>`, not search. `--open` jumps to the top hit via `plainkeep open`; bare `plainkeep search` in a tty with fzf opens a live search session. Common mistake: running before `plainkeep index`, or too narrow a query \u2014 broaden and reindex.",
   "output": {
     "mode": "rows",
     "fields": {

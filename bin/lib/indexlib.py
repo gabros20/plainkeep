@@ -485,8 +485,22 @@ def _authorship(con) -> dict:
 
 
 def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
-           author: str | None = None, collection: str | None = None) -> list[tuple[str, str, float]]:
+           author: str | None = None, collection: str | None = None,
+           all_hits: bool = False) -> list[tuple[str, str, float]]:
     """Return [(path, heading, score)] — FTS5 keyword + one-hop wikilink-graph, fused by RRF.
+    See `search_full` for the cap-disclosure counts; this is its hits-only form."""
+    return search_full(query, k, graph, log, author, collection, all_hits)["hits"]
+
+
+def search_full(query: str, k: int = 10, graph: bool = True, log: bool = False,
+                author: str | None = None, collection: str | None = None,
+                all_hits: bool = False) -> dict:
+    """{hits, returned, limit, truncated, lexical_total} (v2 0.15). `hits` is search()'s list.
+
+    `lexical_total` is the EXACT number of notes the FTS arms match (exact + prefix, after the
+    collection/author filters) — never a vector candidate count. `all_hits` removes the cut on the
+    lexical arms: every FTS match is ranked and returned, plus the fused vector and graph additions.
+    `truncated` is true when a lexical match, or a fused candidate, was left out by the limit.
 
     `collection` (wiki|tasks|journal|inbox) restricts every arm to that collection BEFORE the top-k cut.
     `author` filters by provenance plane (Part 4.3): 'human' excludes agent-authored AND derived
@@ -496,8 +510,10 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
         # for it, so answer no hits; the query is still logged
         if log:
             log_query(query, [])
-        return []
+        return {"hits": [], "returned": 0, "limit": None if all_hits else k, "truncated": False,
+                "lexical_total": 0}
     con = connect()
+    cap = 10 ** 9 if all_hits else k * 4   # SQL LIMIT of each lexical arm
     amap = _authorship(con) if author else {}
     fts = _fts_query(query)
     cfilter, cargs = (" AND collection = ?", (collection,)) if collection else ("", ())
@@ -505,7 +521,7 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
         rows = con.execute(
             "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ?" + cfilter
             + " ORDER BY r LIMIT ?",
-            (fts, *cargs, k * 4),
+            (fts, *cargs, cap),
         ).fetchall()
     except sqlite3.OperationalError:
         rows = []
@@ -521,7 +537,7 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
             prows = con.execute(
                 "SELECT path, heading, bm25(chunks) AS r FROM chunks WHERE chunks MATCH ?" + cfilter
                 + " ORDER BY r LIMIT ?",
-                (pfx, *cargs, k * 4),
+                (pfx, *cargs, cap),
             ).fetchall()
         except sqlite3.OperationalError:
             prows = []
@@ -533,10 +549,17 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
         for i, p in enumerate(porder, 1):
             if p not in scores:  # only notes the exact arm missed: exact-form ranking stays untouched
                 scores[p] = 0.5 / (60 + i)
+    # exact FTS-matching note set (both lexical arms, uncapped) for the cap disclosure
+    try:
+        lex_q = fts if not pfx else f"({fts}) OR ({pfx})"
+        lex_all = {r[0] for r in con.execute(
+            "SELECT DISTINCT path FROM chunks WHERE chunks MATCH ?" + cfilter, (lex_q, *cargs))}
+    except sqlite3.OperationalError:
+        lex_all = set()
     if graph and order:
         slug_to_file = {Path(p).stem: p for (p,) in
                         con.execute("SELECT path FROM files ORDER BY collection = 'wiki'")}  # wiki wins a clash
-        for i, p in enumerate(order[:k], 1):
+        for i, p in enumerate(order if all_hits else order[:k], 1):
             for (dst,) in con.execute("SELECT dst FROM links WHERE src=?", (p,)):
                 fp = slug_to_file.get(dst)
                 if fp:
@@ -581,6 +604,7 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                 return a == "agent"
             return True
         scores = {p: s for p, s in scores.items() if _keep(p)}
+        lex_all = {p for p in lex_all if _keep(p)}
     pool = sorted(scores.items(), key=lambda x: -x[1])
     # --- stage 3: local cross-encoder rerank of the top candidates (precision layer) ---
     if _rerank_on() and len(pool) > 1:
@@ -595,8 +619,11 @@ def search(query: str, k: int = 10, graph: bool = True, log: bool = False,
                 pool = [(cand[i], rs[i]) for i in order] + pool[n:]
         except Exception:
             pass  # reranker is a precision layer; never let it break search
-    ranked = pool[:k]
+    ranked = pool if all_hits else pool[:k]
     hits = [(p, best.get(p, "(top)"), float(sc)) for p, sc in ranked]
     if log:
         log_query(query, hits)
-    return hits
+    shown = {p for p, _h, _s in hits}
+    return {"hits": hits, "returned": len(hits), "limit": None if all_hits else k,
+            "truncated": (not all_hits) and (len(pool) > len(hits) or bool(lex_all - shown)),
+            "lexical_total": len(lex_all)}

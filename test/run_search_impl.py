@@ -287,6 +287,84 @@ def main() -> int:
             print(f"  [measure] index_paths per write: median {med:.1f} ms, max {mx:.1f} ms {r.stderr[-200:]}")
             check("index-on-write: median cost per write < 50 ms", med < 50, f"{med:.1f} ms")
 
+        # 0.15 cap disclosure + exhaustive tag listing: 35 tagged notes, prose-only mentions, look-alike tags
+        with tempfile.TemporaryDirectory() as vtd:
+            vault = Path(vtd) / "v"
+            for i in range(35):
+                tags = "[Coll-X, extra]" if i % 2 else "[#coll-x]"
+                (vault / "wiki" / "notes").mkdir(parents=True, exist_ok=True)
+                (vault / "wiki" / "notes" / f"member-{i:02d}.md").write_text(
+                    f"---\ntype: note\ntitle: Member {i:02d}\ntags: {tags}\n---\n# Member {i:02d}\n\nquasar entry {i}\n",
+                    encoding="utf-8")
+            others = {
+                "prose-only": "---\ntype: note\ntitle: Prose only\ntags: [misc]\n---\n# Prose only\n\nAbout coll-x and #coll-x and quasar.\n",
+                "linker": "---\ntype: note\ntitle: Linker\ntags: []\n---\n# Linker\n\nSee [[member-00]] and coll-x quasar.\n",
+                "prefix-tag": "---\ntype: note\ntitle: Prefix tag\ntags: [coll-x-extra]\n---\n# Prefix tag\n\nquasar\n",
+                "suffix-tag": "---\ntype: note\ntitle: Suffix tag\ntags: [old-coll-x]\n---\n# Suffix tag\n\nquasar\n",
+                "split-tag": "---\ntype: note\ntitle: Split tag\ntags: [coll, x]\n---\n# Split tag\n\nquasar\n",
+            }
+            for slug, body in others.items():
+                (vault / "wiki" / "notes" / f"{slug}.md").write_text(body, encoding="utf-8")
+            _vid, pk = vaultfx.dispatchable_vault(vault, REPO)
+            venv = {k: v for k, v in os.environ.items() if k not in ("PLAINKEEP_CONTENT", "PLAINKEEP_VECTORS", "PLAINKEEP_RERANK")}
+            venv["PLAINKEEP_HOME"] = str(vault)
+
+            def pk3(*a):
+                r = subprocess.run([str(pk), *a], capture_output=True, text=True, env=venv)
+                return r.returncode, r.stdout, r.stderr
+
+            def jl(out):
+                objs = [json.loads(ln) for ln in out.splitlines() if ln.strip()]
+                return objs[0], objs[1:]
+
+            pk3("index")
+            members = [f"member-{i:02d}" for i in range(35)]
+            rc, out, _e = pk3("wiki", "list", "--tag", "coll-x", "--json")
+            head, rows = jl(out)
+            check("tag list: exactly the 35 tagged notes, sorted by slug",
+                  [r["slug"] for r in rows] == members, f"{[r['slug'] for r in rows][:5]}... n={len(rows)}")
+            check("tag list: row has title, slug, type and path",
+                  rows and set(rows[0]) >= {"title", "slug", "type", "path"} and rows[0]["path"] == "wiki/notes/member-00.md"
+                  and rows[0]["type"] == "note" and rows[0]["title"] == "Member 00", f"{rows[:1]}")
+            for variant in ("#coll-x", "COLL-X", "#Coll-X"):
+                _rc, o2, _e2 = pk3("wiki", "list", "--tag", variant, "--json")
+                check(f"tag list: {variant} is the same set (case + leading # normalized)",
+                      [r["slug"] for r in jl(o2)[1]] == members)
+            check("tag list: prose, wikilink, prefix/suffix and split tags never match",
+                  not {r["slug"] for r in rows} & set(others))
+            _rc, o3, _e3 = pk3("wiki", "list", "--tag", "no-such-tag", "--json")
+            h3, r3 = jl(o3)
+            check("tag list: an unused tag is an empty list, not an error", _rc == 0 and r3 == [] and h3["count"] == 0)
+            rc, _o, _e = pk3("wiki", "list", "--tag")
+            check("tag list: --tag without a value is a usage error", rc == 2, f"rc={rc}")
+
+            rc, out, _e = pk3("search", "quasar", "--json")
+            head, rows = jl(out)
+            check("cap: default returns 10 and says it was cut",
+                  head["returned"] == 10 and head["limit"] == 10 and head["truncated"] is True and len(rows) == 10, f"{head}")
+            check("cap: lexical_total is the exact FTS match count (40 notes say quasar)",
+                  head["lexical_total"] == 40, f"{head['lexical_total']}")
+            rc, out, _e = pk3("search", "quasar")
+            check("cap: human output ends with the showing-of footer",
+                  out.rstrip().splitlines()[-1] == "showing 10 of \u226540 \u2014 use --limit/--all", out.rstrip().splitlines()[-1:])
+            rc, out, _e = pk3("search", "quasar", "--limit", "4", "--json")
+            head, rows = jl(out)
+            check("cap: --limit 4 returns 4, truncated", head["returned"] == 4 and head["limit"] == 4 and head["truncated"] and len(rows) == 4)
+            rc, out, _e = pk3("search", "quasar", "--all", "--json")
+            head, rows = jl(out)
+            check("cap: --all returns every FTS match, not truncated",
+                  head["returned"] == 40 and head["truncated"] is False and head["limit"] is None
+                  and head["lexical_total"] == 40 and len({r["path"] for r in rows}) == 40, f"{head}")
+            rc, out, _e = pk3("search", "quasar", "--all")
+            check("cap: no footer when nothing was cut", "showing" not in out, out.rstrip().splitlines()[-1:])
+            rc, out, _e = pk3("search", "member 07", "--json")
+            head, _rows = jl(out)
+            check("cap: a small result is not marked truncated",
+                  head["truncated"] is False or head["returned"] == 10, f"{head}")
+            for bad in (("--limit", "0"), ("--limit", "x"), ("--limit",), ("--limit", "3", "--all")):
+                rc, _o, _e = pk3("search", "quasar", *bad)
+                check(f"cap: bad flags {' '.join(bad)} are a usage error", rc == 2, f"rc={rc}")
+
         # subprocess smoke of the real CLI
         env = {**os.environ}
         idx = subprocess.run(["python3", str(REPO / "bin/index/run.py")], capture_output=True, text=True, env=env)

@@ -27,6 +27,18 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   one-line warning and the write stands. Cost: 1.4 ms median per write in-process, about 10 to 30 ms
   on a whole `capture`.
 
+- **`search` says when it cut the list, and `wiki list --tag` lists everything (v2 step 0.15).** `search`
+  returned its top 10 silently, so a collection of 35 notes sharing one tag looked like 10. Now
+  `search --limit N` sets the cap and `--all` ranks every FTS match (plus the fused vector and graph
+  additions). A cut is always disclosed: the human output ends with `showing 10 of ≥N — use
+  --limit/--all`, and `--json` adds `returned`, `limit`, `truncated` and `lexical_total` (the exact
+  count of FTS-matching notes, never a vector candidate count) to the header line.
+  `plainkeep wiki list --tag <tag>` is the exhaustive, deterministic listing: it matches whole
+  frontmatter `tags` values (case-insensitive, optional leading `#`, `a-b` is one value), never body
+  text, links or a prefix/suffix of another tag, sorted by slug, one row per note (`title`, `slug`,
+  `type`, `path`); `wiki canvas '#tag'` shares the same matching. The bench gained an `exhaustive` query
+  (the 13th of 13 matches) that only `--all` reaches, with a `recall@all` gate.
+
 ### Changed
 - **Search finds inflected Hungarian words (v2 step 0.2).** Hungarian suffixes defeated exact-token
   matching, so `ügyfelek` never found a note that says `ügyfél`. `search` now runs a second FTS query

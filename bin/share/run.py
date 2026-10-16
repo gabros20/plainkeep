@@ -269,7 +269,7 @@ def cmd_share(argv):
     _write_ledger(led)
     for _, p in sel:
         _stamp_frontmatter(p, url)
-    paths.append_journal(f"share {kind} {key} -> {sid}")
+    paths.append_journal(f"share {kind} {key} -> {sid}{output.consent_note(argv)}")
 
     data = {"id": sid, "url": url, "agent_url": agent_url, "kind": kind, "key": key,
             "expires_ts": entry["expires_ts"]}
@@ -347,7 +347,7 @@ def cmd_revoke(argv):
     entry["revoked_ts"] = int(datetime.now(timezone.utc).timestamp())
     _write_ledger(led)
     cleared = _unstamp_entry(entry)   # the note must stop advertising a URL that now 404s
-    paths.append_journal(f"share revoke {sid}")
+    paths.append_journal(f"share revoke {sid}{output.consent_note(argv)}")
     return output.emit({"id": sid, "revoked": True, "unstamped": cleared}, "share",
                        human=lambda _: f"{GREEN}revoked{RESET} {sid}"
                                        + (f" ({len(cleared)} note(s) unstamped)" if cleared else ""))
@@ -395,7 +395,7 @@ def cmd_prune(argv):
         cleared += _unstamp_entry(s)     # a pruned entry must not leave notes pointing at a dead URL
     led["shares"] = keep
     _write_ledger(led)
-    paths.append_journal(f"share prune ({len(doomed)} dead entr(y/ies))")
+    paths.append_journal(f"share prune ({len(doomed)} dead entr(y/ies)){output.consent_note(argv)}")
     return output.emit({"pruned": len(doomed), "kept": len(keep),
                         "entries": listing, "unstamped": cleared}, "share",
                        human=lambda _: f"{GREEN}pruned{RESET} {len(doomed)} dead entr(y/ies), "

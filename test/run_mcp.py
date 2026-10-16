@@ -69,7 +69,7 @@ def main() -> int:
         (vault / "wiki" / "notes" / "widget.md").write_text(
             "---\ntype: note\ntitle: Widget design\nstatus: active\ntags: [demo]\n---\n"
             "# Widget design\n\nThe widget subsystem is the heart of the demo.\n", encoding="utf-8")
-        env = {**os.environ, "PLAINKEEP_HOME": str(vault)}
+        env = {**os.environ, "PLAINKEEP_HOME": str(vault), "PLAINKEEP_ENGINE_HOME": str(engine_home)}
         subprocess.run([str(ops), "index"], capture_output=True, text=True, env=env)
 
         resp = drive(ops, env, [

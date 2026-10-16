@@ -134,6 +134,9 @@ test("mainCli: confirm prints the exact remediation to stderr at exit 3", () => 
   const d = mainCli(["v_confirm", "--yes"]);
   expect(d.code).toBe(0);
   expect(d.stderr).toBeUndefined();
+  // whichever spelling the caller typed clears it, and the refusal names only the canonical one
+  expect(mainCli(["v_confirm", "x", "-y"]).code).toBe(0);
+  expect(r.stderr).not.toContain("--yes");
   const a = mainCli(["v_confirm", "--approved"]);
   expect(a.code).toBe(0);
   expect(a.stderr).toBeUndefined();

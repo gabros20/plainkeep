@@ -617,6 +617,30 @@ def case_plugin_mid_session(m: Mode) -> bytes:
         remove_pack(m.vault, "latepack")
 
 
+def case_annotations_follow_ceiling(m: Mode) -> bytes:
+    """0.8 r1: an untrusted pack (lock entry without `trusted`) is capped at confirm by the gate, so its
+    tool is advertised as a confirm-class one even though its cmd.json declares `read`."""
+    remove_pack(m.vault, "ceilpack")
+    lock = m.vault / "plugins" / "plugins.lock.json"
+    write_pack(m.vault, "ceilpack", ["echoargs"])
+    lock.write_text(json.dumps({"plugins": {"ceilpack": {}}}), encoding="utf-8")
+    try:
+        s = m.session("annotations-ceiling")
+        s.send(INIT)
+        s.frame()
+        s.send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+        tools = {t["name"]: t for t in s.frame()["result"]["tools"]}
+        check(f"[{m.name}] an untrusted pack's `read` verb is advertised as confirm-class",
+              tools["echoargs"]["annotations"] == {"readOnlyHint": False, "destructiveHint": True},
+              tools["echoargs"].get("annotations"))
+        rc = s.finish()
+        check(f"[{m.name}] the ceiling-annotation session exits 0", rc == 0, f"rc={rc}")
+        return s.raw
+    finally:
+        lock.unlink(missing_ok=True)
+        remove_pack(m.vault, "ceilpack")
+
+
 def case_non_object_frame(m: Mode) -> bytes:
     """A JSON array as a frame. run.py calls `.get` on whatever json.loads returned, so this ENDS the
     session on the floor — reproduced rather than papered over, because a port that kept serving would
@@ -1106,6 +1130,7 @@ DIFFERENTIAL = [
     ("argument ordering follows the sidecar, not the client", case_argument_ordering),
     ("confirm-class call → ops_confirm_needed, never --yes", case_confirm_class),
     ("a pack installed mid-session becomes visible", case_plugin_mid_session),
+    ("an untrusted pack's annotations follow the gate's ceiling", case_annotations_follow_ceiling),
     ("integer-like arg names keep the sidecar's order", case_key_order),
     ("non-ASCII rides the wire as raw UTF-8, never \\uXXXX", case_unicode),
     ("a non-object frame ends the session on both sides", case_non_object_frame),
@@ -1197,7 +1222,7 @@ def main() -> int:
             return 1
         engine = engine_home / "engine" / "current"
         engine_core = engine / ".local" / "bin" / "plainkeep-core"
-        base = {**os.environ, "PLAINKEEP_HOME": str(vault)}
+        base = {**os.environ, "PLAINKEEP_HOME": str(vault), "PLAINKEEP_ENGINE_HOME": str(engine_home)}
         base.pop("PLAINKEEP_PATH", None)
         base.pop("PLAINKEEP_ENGINE", None)
         core = Mode("core", engine, vault, tmp, {**base, "PLAINKEEP_CORE": "require",

@@ -1227,7 +1227,7 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
                          f"(no {vaultreg.MARKER_DIR}/{vaultreg.MARKER_NAME})",
                          hint="mark and register it first:\n    "
                               f"PLAINKEEP_HOME={vault} python3 "
-                              f"{enginetree.engine_bin() / 'vault' / 'run.py'} register {vault} --approved")
+                              f"{enginetree.engine_bin() / 'vault' / 'run.py'} register {vault} --yes")   # --yes: the INSTALLED engine may predate --approved
     vault_id = marker["id"]
     reg = vaultreg.read_registry()
     entry = next((v for v in reg["vaults"] if v["id"] == vault_id), None)

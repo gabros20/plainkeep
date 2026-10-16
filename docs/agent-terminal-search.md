@@ -83,7 +83,7 @@ The interpreter is handled for you. Two things still must reach the agent's shel
   ```
 
   Every plainkeep process reads it, including a non-interactive `ssh host plainkeep search …`, so no shell
-  profile is involved. `plainkeep setup search --yes` writes `search.vectors = true` for you. Precedence:
+  profile is involved. `plainkeep setup search --approved` writes `search.vectors = true` for you. Precedence:
   CLI flag, then environment (`PLAINKEEP_VECTORS=1` / `PLAINKEEP_RERANK=1`, which still override), then the
   file, then the default. The same file holds `models.enrich`, `models.triage` and `ollama.host`.
 

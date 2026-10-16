@@ -158,7 +158,7 @@ def classify(action: dict) -> Decision:
     """
     action keys (all optional except kind):
       kind: read | write | transmit | delete | read_secret | resolve_secret | draft | propose | ask | verb
-      path, realpath, command, flags{yes,force}, repo, task_repo
+      path, realpath, command, flags{approved|yes,force}, repo, task_repo
       create_only: the write is an ATOMIC CREATE — a syscall that fails EEXIST rather than replacing
         (`link(2)`, `O_CREAT|O_EXCL`, `mkdir(2)`). Only `bin/lib/vaultio.py`'s primitives may say it;
         it is what distinguishes an original ARRIVING under ~/files/**/in/ from one being overwritten.
@@ -182,8 +182,8 @@ def classify(action: dict) -> Decision:
                 if force:
                     return Decision(DENY, f"forced external transmit ({label}) is denied: '{command}'", "deny")
                 if yes:
-                    return Decision(ALLOW, f"external transmit ({label}) authorized by --yes", "confirm")
-                return Decision(CONFIRM, f"external transmit ({label}) needs explicit --yes: '{command}'", "confirm")
+                    return Decision(ALLOW, f"external transmit ({label}) authorized by --approved", "confirm")
+                return Decision(CONFIRM, f"external transmit ({label}) needs explicit --approved: '{command}'", "confirm")
 
     # --- 1. Secrets ---
     if kind == "read_secret" or (path and re.search(r"(^|/)\.env($|\.|/)", path)):
@@ -203,8 +203,8 @@ def classify(action: dict) -> Decision:
         if force:
             return Decision(DENY, "forced external transmit is denied", "deny")
         if yes:
-            return Decision(ALLOW, "external transmit authorized by explicit --yes", "confirm")
-        return Decision(CONFIRM, "external transmit (email/post/deploy/payment) needs explicit --yes", "confirm")
+            return Decision(ALLOW, "external transmit authorized by explicit --approved", "confirm")
+        return Decision(CONFIRM, "external transmit (email/post/deploy/payment) needs explicit --approved", "confirm")
 
     # --- 4. delete ---
     if kind == "delete":
@@ -213,7 +213,7 @@ def classify(action: dict) -> Decision:
                 return Decision(DENY, "~/files/**/in/ is append-only: an original is never deleted", "deny")
         if force:
             return Decision(DENY, "forced delete is denied", "deny")
-        return Decision(CONFIRM, "delete is irreversible — needs explicit --yes", "confirm")
+        return Decision(CONFIRM, "delete is irreversible — needs explicit --approved", "confirm")
 
     # --- 5. draft_only ---
     if kind == "draft":

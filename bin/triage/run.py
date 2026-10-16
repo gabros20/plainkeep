@@ -123,7 +123,7 @@ def cmd_drafts(argv, dry, yes, js):
         if choice in ("r", "reject"):
             p.unlink()
             _commit(rel, f"organize: reject agent draft {p.stem}")
-            paths.append_journal(f"triage drafts: rejected {p.stem} (deleted)")
+            paths.append_journal(f"triage drafts: rejected {p.stem} (deleted)" + (output.consent_note(argv) if yes else ""))
             print("    rejected (deleted)")
         elif choice in ("s", "skip"):
             print("    skipped")
@@ -132,7 +132,7 @@ def cmd_drafts(argv, dry, yes, js):
             vaultio.write_text(p, re.sub(r"(?m)^status:\s*draft\s*$", "status: active", text, count=1),
                          encoding="utf-8")
             _commit(rel, f"organize: promote agent draft {p.stem} -> active")
-            paths.append_journal(f"triage drafts: promoted {p.stem} -> active")
+            paths.append_journal(f"triage drafts: promoted {p.stem} -> active" + (output.consent_note(argv) if yes else ""))
             print("    promoted -> active")
     if dry:
         print("\n(dry run — nothing changed)")
@@ -234,7 +234,8 @@ def main(argv):
             continue
         new = make_task(text) if choice == "task" else make_note(text)
         p.unlink()
-        paths.append_journal(f"triaged {p.name} -> {new.relative_to(paths.PLAINKEEP_HOME)}")
+        paths.append_journal(f"triaged {p.name} -> {new.relative_to(paths.PLAINKEEP_HOME)}"
+                             + (output.consent_note(argv) if yes else ""))
         print(f"    filed -> {new.relative_to(paths.PLAINKEEP_HOME)}")
         if (not yes) and choice != kind:  # override -> offer to learn the rule (§10)
             if input("    record a filing rule for next time? [y/N] ").strip().lower() == "y":

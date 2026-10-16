@@ -513,7 +513,7 @@ def cmd_apply(argv, dry: bool = False):
         note("would apply" if dry else "applied", msg)
     if not dry:
         paths.append_journal(f"organize apply -> {applied} op(s) applied, {skipped} skipped, {rejected} rejected"
-                             + (" (budget reached)" if budget_hit else ""))
+                             + (" (budget reached)" if budget_hit else "") + output.consent_note(argv))
 
     def render(rs):
         verbed = "would apply" if dry else "applied"

@@ -273,7 +273,7 @@ function pluginLock(): Record<string, unknown> {
 // the verb belongs to a pack recorded in plugins.lock.json that has NOT been trusted — a pack's
 // self-declared risk never takes effect at install. null for engine verbs, for user-placed packs
 // with no lock entry (plugins/local, $PLAINKEEP_PATH), and for explicitly trusted packs.
-function pluginCeiling(verb: string): "confirm" | null {
+export function pluginCeiling(verb: string): "confirm" | null {
   const src = sourceOf(verb);
   if (!src || !src.startsWith("plugin:")) return null;
   const pack = src.slice("plugin:".length);

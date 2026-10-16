@@ -328,7 +328,7 @@ def _status_search(layer: Layer) -> dict:
         cfg = hostconfig.path()
         off = []
         if not vectors_env:
-            off.append("search.vectors = true in " + str(cfg) + " (or run: plainkeep setup search --yes)")
+            off.append("search.vectors = true in " + str(cfg) + " (or run: plainkeep setup search --approved)")
         if not rerank_env:
             off.append("search.rerank = true in " + str(cfg))
         nxt = "set " + "; set ".join(off) if off else ""
@@ -726,7 +726,7 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
     before = status(layer.id)[0]
     if before["status"] == "ready":
         # A provisioned host (deps, model, index all present) is "ready" whether or not vectors are
-        # switched on durably — exactly the machine whose switch lives in an env.sh. With --yes the
+        # switched on durably — exactly the machine whose switch lives in an env.sh. With --approved the
         # one thing left to do is persist it, so do that rather than report a no-op.
         if layer.id == "search" and yes:
             _persist_vectors(res, fake)

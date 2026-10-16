@@ -257,6 +257,9 @@ def test_organize() -> None:
         before = len(git(ops, "log", "--oneline").stdout.splitlines())
         r = run("organize", ops, "apply", "--yes")
         after = len(git(ops, "log", "--oneline").stdout.splitlines())
+        jtext = "".join(f.read_text() for f in (ops / "journal").rglob("*.md"))
+        check("0.16: the journal line records the consent spelling the caller typed (--yes)",
+              "organize apply ->" in jtext and "(approved via --yes)" in jtext, jtext[-300:])
         alpha = (ops / "wiki" / "notes" / "alpha.md").read_text()
         check("apply normalized the approved tag (ProjectX -> projectx)",
               "projectx" in alpha and "ProjectX" not in alpha, alpha[:160])

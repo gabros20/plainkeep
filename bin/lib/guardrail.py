@@ -6,7 +6,8 @@ in test/lib/guardrail.py (kept in lock-step by test/run_guardrail.py's parity ch
      delete/verb). Reusable: a write-verb calls this on the path IT computes (Iron Law — the verb
      owns placement), so the wall holds where the path is actually known.
   2. gate(verb, args, risk) + the CLI — the dispatcher's per-verb risk gate: deny is refused,
-     confirm needs an explicit --approved (--yes / -y are permanent aliases), new/undeclared verbs default to confirm. Logs every call.
+     confirm needs an explicit --approved (--yes / -y are permanent aliases), new/undeclared
+     verbs default to confirm. Logs every call.
 
 The dispatcher runs `guardrail.py <verb> <args...>` before exec; nonzero exit blocks the verb.
 """
@@ -310,7 +311,7 @@ def gate(verb: str, args: list[str], risk: str | None = None) -> Decision:
 
     Dry-run rule (Part 0.5): a verb that declares `"dry_run": true`, invoked with `--dry-run`, is
     downgraded to a read — a true dry-run IS a read — so confirm-class verbs stay explorable without
-    `--yes`."""
+    `--approved`."""
     if verb not in _known_verbs():
         return Decision(DENY, f"unknown/invented verb: '{verb}' (not in plainkeep.json)", "deny")
     risk = risk or risk_of(verb) or "confirm"  # §5: new/undeclared verbs default to confirm

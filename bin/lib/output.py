@@ -57,9 +57,20 @@ EXIT_CONFIRM = 3
 EXIT_NOT_FOUND = 4
 EXIT_DENY = 5
 
-# 0.16: `--approved` is the canonical consent flag (a human approved this exact action); `--approved` and
-# `-y` are permanent aliases — spellings are never removed. Verbs that self-gate use these two.
+# 0.16: `--approved` is the canonical consent flag (a human approved this exact action); `--yes` and
+# `-y` are permanent aliases — spellings are never removed. Verbs that self-gate use these.
 CONSENT_FLAGS = ("--approved", "--yes", "-y")
+
+
+def consent_spelling(argv) -> str | None:
+    """The consent spelling the caller typed (first one found in argv), or None."""
+    return next((a for a in argv if a in CONSENT_FLAGS), None)
+
+
+def consent_note(argv) -> str:
+    """Journal suffix recording which spelling authorised the action ('' when none was given)."""
+    f = consent_spelling(argv)
+    return f" (approved via {f})" if f else ""
 
 
 def consented(argv) -> bool:

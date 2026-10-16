@@ -79,7 +79,7 @@ import path from "node:path";
 import type { CoreResult } from "./cli.js";
 import { jsonDepthExceeds, pyStrip } from "./complete.js";
 import { resolveHome, signalNumberOf } from "./dispatch.js";
-import { EXIT_CONFIRM, EXIT_OK, pythonStr, pythonTruthy } from "./guardrail.js";
+import { EXIT_CONFIRM, EXIT_OK, pluginCeiling, pythonStr, pythonTruthy } from "./guardrail.js";
 import { EXIT_ANOMALOUS, runOwningStdio } from "./interception.js";
 import { iterCmds } from "./resolver.js";
 
@@ -286,7 +286,8 @@ function dictKey(name: unknown): string {
 const OPEN_WORLD_VERBS = ["bookmark"];
 
 function annotationsOf(cmd: Record<string, unknown>): Record<string, boolean> {
-  const risk = cmd.risk;
+  // an untrusted pack is capped at confirm by the gate: advertise what the call will do
+  const risk = typeof cmd.verb === "string" && pluginCeiling(cmd.verb) === "confirm" ? "confirm" : cmd.risk;
   let a: Record<string, boolean>;
   if (risk === "read") a = { readOnlyHint: true, destructiveHint: false, openWorldHint: false };
   else if (risk === "safe_write" || risk === "draft_only") a = { readOnlyHint: false, destructiveHint: false, openWorldHint: false };
@@ -332,7 +333,7 @@ function toolOf(cmd: Record<string, unknown>): Record<string, unknown> {
   props.set("args", {
     type: "array",
     items: { type: "string" },
-    description: "additional positional args / flags (e.g. sub-action tokens, --approved)",
+    description: "additional positional args / flags (e.g. sub-action tokens, --dry-run)",
   });
   const schema: Record<string, unknown> = { type: "object", properties: props };
   if (required.length) schema.required = required;

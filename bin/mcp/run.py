@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from lib import enginetree, manifest, output, paths  # noqa: E402
+from lib import enginetree, guardrail, manifest, output, paths  # noqa: E402
 
 PROTOCOL_VERSION = "2024-11-05"          # echoed back to the client if it doesn't pin its own
 SERVER_NAME = "plainkeep"
@@ -54,6 +54,8 @@ OPEN_WORLD_VERBS = ("bookmark",)
 
 def _annotations(cmd: dict) -> dict:
     risk = cmd.get("risk")
+    if guardrail._plugin_ceiling(cmd.get("verb", "")) == "confirm":
+        risk = "confirm"                    # an untrusted pack is capped by the gate: advertise what the call does
     if risk == "read":
         a = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
     elif risk in ("safe_write", "draft_only"):
@@ -79,7 +81,7 @@ def _tool(cmd: dict) -> dict:
         if a.get("required"):
             required.append(name)
     props["args"] = {"type": "array", "items": {"type": "string"},
-                     "description": "additional positional args / flags (e.g. sub-action tokens, --approved)"}
+                     "description": "additional positional args / flags (e.g. sub-action tokens, --dry-run)"}
     schema = {"type": "object", "properties": props}
     if required:
         schema["required"] = required

@@ -1552,10 +1552,6 @@
           "required": false
         },
         {
-          "name": "--approved",
-          "required": false
-        },
-        {
           "name": "--dry-run",
           "required": false
         },

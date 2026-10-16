@@ -38,11 +38,18 @@ Six principles fall out of that bet. Every later decision traces back to one of 
 ## The shape: four roots, one repo of truth
 
 ```
-~/plainkeep  THE SYSTEM   knowledge (wiki/), tasks/, journal/, the verbs (bin/), plugins/   [git: your repo]
-~/work       CODE         one git repo per project: products/ labs/ tools/ clients/         [git: each its own]
-~/files      BINARIES     client docs, PDFs, datasets — referenced by wiki "shadow notes"   [restic, not git]
-~/dotfiles   THE MACHINE  installs tools, puts plainkeep on PATH                            [git: separate]
+<vault>      THE SYSTEM   knowledge (wiki/), tasks/, journal/, plugins/, config — DATA only   [git: your repo]
+~/work       CODE         one git repo per project: products/ labs/ tools/ clients/           [git: each its own]
+~/files      BINARIES     client docs, PDFs, datasets — referenced by wiki "shadow notes"     [restic, not git]
+~/dotfiles   THE MACHINE  installs tools, puts plainkeep on PATH                              [git: separate]
+
+engine       THE VERBS    bin/, skills/, templates/ — a versioned, read-only tree              [outside every vault]
+             at ${XDG_DATA_HOME:-~/.local/share}/plainkeep/engine/<version>/
 ```
+
+The vault is wherever `plainkeep vault status` says it is; `~/plainkeep` was only ever a default. The
+engine is not one of the four roots: it is installed code that no vault contains and no agent edits
+(ADR-014, ADR-017). A vault is data you can move, back up or register next to another one.
 
 Separation **by location** is what makes the rest enforceable.
 

@@ -73,6 +73,19 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   `OLLAMA_HOST`; the config path is already a scratch directory under `seal()`. `test/run_hostconfig.py`. `setup search --dry-run` writes nothing, `setup search --yes` persists the switch even on a host that is already ready, and the `env.sh` hint appears only when the file holds nothing but exports the config repeats.
 
 ### Changed
+- **Doc drift fixed (v2 step 0.11).** `docs/architecture.md` draws the roots for the engine/vault split
+  (the vault is data, the engine a versioned read-only tree outside it). The mobile guide no longer says
+  nothing on mobile edits the wiki while recommending Obsidian mobile: capture only fills `inbox/`, and
+  editor apps make your own commits. `docs/README.md` links the v2 design and plan, and the search docs
+  cover collections, `--limit/--all`, `wiki list --tag`, and `config.toml` replacing env exports.
+- **The operating manual starts with `orient` and carries a recipe table (v2 step 0.7).**
+  `skills/operate-plainkeep/SKILL.md` §3 is now one step, `plainkeep orient`; §6a lists the common
+  jobs (find, capture, file a document, file a finished note, share, task, resume) in the fewest calls,
+  with `search --collection`, the `--limit/--all` cut footer, `wiki list --tag` for exhaustive lists,
+  and how to read the partial-index, `pending_embeddings` and backup lines. §6b states the consent
+  rule: `--approved` is passed only when the human asked for that exact action in this conversation,
+  never for an action the agent chose, never by scheduled jobs, never over MCP. The manual says
+  `--approved` throughout, with `--yes`/`-y` named once as aliases.
 - **New slugs fold accents (v2 step 0.13).** `Ügyfél szerződés` becomes `ugyfel-szerzodes`, not
   `gyf-l-szerz-d-s`, in every verb that names a file from a title. ASCII titles are byte-identical and
   existing notes are never renamed; `doctor` lists, as information, the ones a fold would name differently.

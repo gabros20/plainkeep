@@ -8,12 +8,14 @@ plainkeep has no server, no daemon, no account. The vault is plaintext plus git.
 
 The only sync transport is `git push` / `git pull` over your own private remote. Everything here rides on that one fact.
 
-**URIs and share-sheets OPEN and CAPTURE. All writes still go through a verb.**
+**URIs and share-sheets OPEN and CAPTURE. On the desktop, all writes still go through a verb.**
 
-- Capture drops a file into `inbox/`.
+- Capture (hotkey, Shortcut, share sheet) drops a file into `inbox/` and nothing else.
 - You run `plainkeep triage` later on a real machine.
-- Nothing on mobile edits the wiki or tasks directly.
-- Nothing here bypasses the `plainkeep` dispatcher or the guardrail.
+- Capture never edits the wiki or tasks. Reading and editing notes in Obsidian mobile or GitJournal
+  (section 3) is a separate, deliberate act: those edits are plain markdown commits made by you, and the
+  desktop picks them up with `git pull` and `plainkeep index --changed`.
+- Nothing here bypasses the `plainkeep` dispatcher or the guardrail on the machine that runs plainkeep.
 
 ---
 
@@ -50,7 +52,7 @@ Two workable shapes follow. Working Copy is the lower-friction path for most peo
 
 ### 2a. Working Copy (recommended — real git on iOS)
 
-[Working Copy](https://workingcopy.app) clones your private `~/plainkeep` remote on-device and exposes *Write File* and *Append* Shortcut actions.
+[Working Copy](https://workingcopy.app) clones your vault's private remote on-device and exposes *Write File* and *Append* Shortcut actions.
 
 1. Clone the plainkeep remote into Working Copy once.
 2. Build a Shortcut *Plainkeep Capture*:
@@ -68,7 +70,7 @@ If you run [a-Shell](https://holzschu.github.io/a-Shell_iOS/), you can `git clon
 
 This is heavier to set up than Working Copy.
 
-> **Never** point iCloud, Dropbox, or Syncthing at the `.git` directory to "sync" the vault. See anti-roadmap #9. `plainkeep doctor` fails if `~/plainkeep` resolves under a sync-wall. git push/pull is the transport; a file-sync tool corrupts the repo.
+> **Never** point iCloud, Dropbox, or Syncthing at the `.git` directory to "sync" the vault. See anti-roadmap #9. `plainkeep doctor` fails if the vault resolves under a sync-wall. git push/pull is the transport; a file-sync tool corrupts the repo.
 
 ---
 
@@ -98,9 +100,9 @@ Re-index after pulling: `plainkeep index --changed` picks up externally-edited n
  private remote (your own git host — GitHub private repo, a self-hosted bare repo, …)
         ▲
         │  git push / pull
- desktop (~/plainkeep, the plainkeep verbs, the index)
+ desktop (the vault, the plainkeep verbs, the index)
 ```
 
 No provider ever sees plaintext beyond your chosen git host. No piece here transmits on its own — you push, you pull.
 
-Capture is additive (`inbox/`). Triage is deliberate. The guardrail sits on every write on the desktop side.
+Capture is additive (`inbox/`). Triage is deliberate. Edits from an editor app are yours and arrive as commits. The guardrail sits on every write plainkeep itself makes on the desktop side.

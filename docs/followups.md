@@ -443,8 +443,8 @@ deliberately left. Each was reproduced by the reviewer.
   `dependency-overlay-is-not-a-pack`).
 - **`test/run_pluginsdk.py` (the two installed-engine cases)** — they `skip()` rather than fail if the
   installer breaks, so an installer regression surfaces here as a SKIP rather than a red check.
-- **MCP can supply `--yes` for any confirm-class `plugin` subcommand.** `bin/mcp/run.py`'s `_argv_from`
-  passes the free-form `args` array through verbatim and nothing strips `--yes`, so an agent can
+- **MCP can supply `--approved`/`--yes`/`-y` for any confirm-class `plugin` subcommand.** `bin/mcp/run.py`'s `_argv_from`
+  passes the free-form `args` array through verbatim and nothing strips the consent flag, so an agent can
   self-confirm `plugin add`/`trust`/`remove`/`backup`/`sync`. Pre-existing and not a Task 3
   regression — but it is what made the (now closed) `--pip-arg` hole reachable with no human present,
   and no test pins that `--yes` cannot be smuggled. **This is the one item on this list with a

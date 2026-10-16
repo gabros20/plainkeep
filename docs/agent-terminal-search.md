@@ -67,11 +67,22 @@ interpreter with no per-agent PATH ordering.
 > On **macOS Intel (x86_64)**, `pip` resolves `lancedb` to 0.25.x. That is expected and works.
 > The `[search]` extra carries platform-aware markers, so it installs cleanly on every host. `requirements-search.txt` is a mirror of it for by-hand installs.
 
-## What the agent terminal still needs: `PLAINKEEP_HOME` and the `PLAINKEEP_*` flags
+## Using search from an agent: collections, the cap, and exhaustive lists
 
-The interpreter is handled for you. Two things still must reach the agent's shell:
+`plainkeep search` indexes every content collection: `wiki`, `tasks`, `journal` and `inbox`.
+`--collection <name>` restricts a query to one (the filter applies before the top-k cut, so a small
+collection is not crowded out; with vectors on, the vector arm filters after its ANN cut and can
+under-fill a very small collection). Results are capped at 10 by default and the human output ends with
+`showing 10 of ≥N — use --limit/--all` whenever something was cut; `--limit N` raises the cap and `--all`
+ranks every lexical match. Search is for discovery. To list every wiki note carrying a tag, use the exhaustive
+`plainkeep wiki list --tag <tag>` (wiki only; tasks via `plainkeep task list`) instead of paging search. Write verbs index the note they write, so a
+fresh note is findable immediately; `status`/`orient` report `pending_embeddings` while vectors lag.
 
-- **`PLAINKEEP_HOME`** — so `plainkeep` and its venv resolve to *your* vault, not a default.
+## What the agent terminal still needs: `PLAINKEEP_HOME` (maybe) and the search switches
+
+The interpreter is handled for you. Two things must be in place:
+
+- **`PLAINKEEP_HOME`** — so `plainkeep` and its venv resolve to *your* vault, not a default (only if the registry default or a marker walk-up would pick the wrong vault).
 - **`search.vectors` / `search.rerank`** — the opt-in switches that turn the vector/rerank arms *on* at
   query time. The venv makes them importable; these make search *use* them. Set them once in the host
   config file, `~/.config/plainkeep/config.toml` (or `$XDG_CONFIG_HOME/plainkeep/`):
@@ -87,14 +98,17 @@ The interpreter is handled for you. Two things still must reach the agent's shel
   CLI flag, then environment (`PLAINKEEP_VECTORS=1` / `PLAINKEEP_RERANK=1`, which still override), then the
   file, then the default. The same file holds `models.enrich`, `models.triage` and `ollama.host`.
 
-An interactive login shell sources `~/.zshrc`, so these are already present.
+An interactive login shell sources `~/.zshrc`, so any exports you chose to keep are already present.
 
 An agent terminal frequently is not. It builds its own environment per session and may source only
 bash profiles (`~/.profile`, `~/.bash_profile`), which on a zsh-only Mac often don't exist.
 
-The fix is generic: **point the agent's terminal at a bash-safe init file that exports
-`PLAINKEEP_HOME` and the `PLAINKEEP_*` flags.** Use `export` statements only, no zsh-only syntax, because agent terminals
-typically source init files with `bash`. You do not need to prepend `.venv/bin` to `PATH` — the
+Since v2 step 0.5 the search flags live in `config.toml`, so they no longer need exporting at all: **the
+only thing an agent terminal may still need is `PLAINKEEP_HOME`** (and only when it cannot resolve your vault
+the usual way). If you still prefer environment variables, the generic fix is a bash-safe init file that exports
+them. Use `export` statements only, no zsh-only syntax, because agent terminals
+typically source init files with `bash`. `plainkeep doctor` suggests dropping `env.sh` exports that
+`config.toml` now makes redundant. You do not need to prepend `.venv/bin` to `PATH` — the
 dispatcher does that job.
 
 ### Worked example — Hermes (`~/.hermes/config.yaml`)
@@ -123,8 +137,10 @@ If your `~/.zshrc` has zsh-only constructs, don't source it with bash. Use a ded
 ```bash
 # ~/.hermes/plainkeep-shell-init.sh   (bash-safe: export only)
 export PLAINKEEP_HOME="$HOME/plainkeep"
-export PLAINKEEP_VECTORS=1     # the dispatcher already prefers $PLAINKEEP_HOME/.venv/bin/python3 — no PATH surgery
-export PLAINKEEP_RERANK=1
+# search.vectors / search.rerank come from ~/.config/plainkeep/config.toml (above); only add
+#   export PLAINKEEP_VECTORS=1   /   export PLAINKEEP_RERANK=1
+# if you want the environment to override the file. The dispatcher already prefers
+# $PLAINKEEP_HOME/.venv/bin/python3 — no PATH surgery.
 ```
 
 ```yaml
@@ -155,7 +171,7 @@ If a check fails:
 | Symptom | Fix |
 |---|---|
 | `plainkeep setup search` reports `blocked` | Run the exact command in its `next` field (e.g. install ollama). |
-| `plainkeep doctor` prints `PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3` | The venv wasn't created or is missing deps. Re-run `plainkeep setup search --approved` (or preview with `--dry-run`). |
+| `plainkeep doctor` prints `PLAINKEEP_VECTORS=1 but lancedb is NOT importable by this python3` (or `search.vectors = true in <path> but lancedb is NOT importable`) | The venv wasn't created or is missing deps. Re-run `plainkeep setup search --approved` (or preview with `--dry-run`). |
 
 `plainkeep index` still succeeds keyword-only. It never crashes on a missing vector plane. That graceful
 fallback is by design — see the CHANGELOG / issue #3.

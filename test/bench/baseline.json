@@ -1,7 +1,17 @@
 {
-  "commit": "2f0481c",
+  "commit": "8f93e19",
   "content_root": "wiki",
-  "gates": [],
+  "gates": [
+    {
+      "metric": "recall@5",
+      "min": 0.6,
+      "mode": "keyword",
+      "since": "0.1",
+      "status": "pass",
+      "tag": "hu",
+      "value": 0.75
+    }
+  ],
   "modes": {
     "keyword": {
       "by_tag": {
@@ -24,16 +34,16 @@
           "recall@5": 0.75
         },
         "hu": {
-          "mrr": 0.0,
+          "mrr": 0.667,
           "n": 8,
-          "recall@10": 0.0,
-          "recall@5": 0.0
+          "recall@10": 0.75,
+          "recall@5": 0.75
         },
         "hu-exact": {
-          "mrr": 0.0,
+          "mrr": 0.889,
           "n": 6,
-          "recall@10": 0.0,
-          "recall@5": 0.0
+          "recall@10": 1.0,
+          "recall@5": 1.0
         },
         "hu-inflect": {
           "mrr": 0.0,
@@ -67,48 +77,85 @@
         }
       },
       "overall": {
-        "mrr": 0.13,
+        "mrr": 0.328,
         "n": 27,
-        "recall@10": 0.444,
-        "recall@5": 0.296
+        "recall@10": 0.667,
+        "recall@5": 0.519
       },
       "per_query": [
         {
           "id": "hu-01",
-          "rank": null,
+          "rank": 3,
           "top5": [
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
             "wiki/notes/ugyfel-bevezetes-ellenorzolista.md"
           ]
         },
         {
           "id": "hu-02",
-          "rank": null,
-          "top5": []
+          "rank": 1,
+          "top5": [
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/notes/ugyfel-bevezetes-ellenorzolista.md",
+            "wiki/notes/szerzodes-kotberes-megjegyzesek.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md"
+          ]
         },
         {
           "id": "hu-03",
-          "rank": null,
-          "top5": []
+          "rank": 1,
+          "top5": [
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/notes/atalanyado-es-afa.md",
+            "wiki/notes/ado-hataridok-naptar.md"
+          ]
         },
         {
           "id": "hu-04",
-          "rank": null,
-          "top5": []
+          "rank": 1,
+          "top5": [
+            "wiki/notes/atalanyado-es-afa.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/areas/invoicing-and-tax.md",
+            "wiki/notes/ado-hataridok-naptar.md",
+            "wiki/notes/tax-filing-calendar.md"
+          ]
         },
         {
           "id": "hu-05",
-          "rank": null,
-          "top5": []
+          "rank": 1,
+          "top5": [
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
+            "wiki/projects/webhook-relay.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/people/nagy-eszter.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md"
+          ]
         },
         {
           "id": "hu-06",
-          "rank": null,
-          "top5": []
+          "rank": 1,
+          "top5": [
+            "wiki/people/nagy-eszter.md",
+            "wiki/clients/kovacs-es-tarsa-kft.md",
+            "wiki/notes/egyeztetes-2026-09-kovacs-atutemezes.md",
+            "wiki/runbooks/havi-szamlazasi-folyamat.md",
+            "wiki/projects/webhook-relay.md"
+          ]
         },
         {
           "id": "hu-07",
           "rank": null,
-          "top5": []
+          "top5": [
+            "wiki/notes/szerzodes-kotberes-megjegyzesek.md",
+            "wiki/notes/szolgaltatasi-szerzodes-sablon.md"
+          ]
         },
         {
           "id": "hu-08",

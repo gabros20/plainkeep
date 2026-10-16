@@ -6,6 +6,8 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 
 ## [Unreleased]
 
+## [4.1.0] — 2026-10-16
+
 ### Added
 - **`--approved`, the consent flag named for what it means (v2 step 0.16).** `--approved` is now the
   canonical flag for every confirm-class action: it says a human approved this exact action. `--yes`

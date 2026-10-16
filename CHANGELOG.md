@@ -14,6 +14,16 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
   pattern, so Hungarian words were dropped: `ügyfél szerződés` searched as `gyf OR szerz` and found
   nothing. Tokens are now Unicode word characters, the FTS5 `unicode61` tokenizer folds diacritics so
   `ugyfel` also matches, and a query with no usable token returns no hits.
+- **Test runs can no longer pile up, hang or read your shell (v2 step 0.14).** `test/run_all.py` now
+  gives each suite its own process group and a timeout (600 s by default, a third `SUITES` element per
+  suite, `PLAINKEEP_TEST_TIMEOUT` to override all); a timeout is a FAIL naming the suite and the elapsed
+  seconds, the whole group is killed on timeout or SIGINT/SIGTERM, and a suite that returns while a
+  grandchild is alive gets that process killed and a `SUITE-NOTE`. A non-blocking lock on
+  `test/.run_all.lock` makes a second run in the same checkout exit 2 with the holder's PID. `seal()`
+  now drops `PLAINKEEP_VECTORS`, `RERANK`, `CONTENT`, `ENRICH_MODEL` and `AGENT_MODEL`, and an
+  inherited `PLAINKEEP_HOME`: with your real vault exported, `run_notetypes` wrote to its audit log and
+  `run_originals` created journal entries in it. `PLAINKEEP_TEST_KEEP_HOME=1` opts back in.
+  `test/run_harness.py` tests all of this (`run_all.py --suite PATH --lock PATH` exist for it).
 
 ## [4.0.8] — 2026-08-18
 

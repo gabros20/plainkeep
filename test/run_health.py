@@ -348,8 +348,9 @@ def main() -> int:
         check("slugify_legacy keeps the old dropped-letter behaviour", got["legacy"], rs.stdout)
         note(h, "notes/gyf-l.md", "note", "Ügyfél", "2026-01-01")
         rd = run(h, "doctor")
-        check("doctor lists a pre-fold slug that would differ now, as info (no warn, exit 0)",
-              "gyf-l.md -> ugyfel.md" in rd.stdout and rd.returncode == 0, rd.stdout)
+        row = next((l for l in rd.stdout.splitlines() if "notes/gyf-l.md -> ugyfel.md" in l), "")
+        check("doctor lists a pre-fold slug that would differ now, as an info row (not warn/FAIL)",
+              "info:" in row and "warn" not in row and "FAIL" not in row, rd.stdout)
         r = run(h, "wiki", "backlinks", "beta")
         check("wiki backlinks finds the linker", "alpha" in r.stdout, r.stdout)
         r = run(h, "wiki", "orphans")

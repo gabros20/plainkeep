@@ -1,5 +1,5 @@
 {
-  "description": "The §15 jobs registry — scheduler-neutral job definitions. `plainkeep job apply` renders launchd plists and `plainkeep job enable --all --yes` loads them into launchd (`plainkeep job status` shows which of the three states each job is in); `plainkeep job run <name>` runs any job manually (the universal fallback). Rules: jobs call ONE verb (no inline logic), only read/safe_write may be scheduled, everything logs to .logs/jobs/. JSON (not the design's YAML) to keep the core stdlib-only.",
+  "description": "The §15 jobs registry — scheduler-neutral job definitions. `plainkeep job apply` renders launchd plists and `plainkeep job enable --all --approved` loads them into launchd (`plainkeep job status` shows which of the three states each job is in); `plainkeep job run <name>` runs any job manually (the universal fallback). Rules: jobs call ONE verb (no inline logic), only read/safe_write may be scheduled, everything logs to .logs/jobs/. JSON (not the design's YAML) to keep the core stdlib-only.",
   "external_allowlist": ["restic"],
   "jobs": {
     "start":        { "command": "plainkeep start --automated",  "schedule": { "daily": "07:30" },       "risk": "safe_write", "writes": ["~/plainkeep/journal"] },

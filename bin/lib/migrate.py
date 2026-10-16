@@ -636,7 +636,7 @@ def prove(vault: Path, vault_id: str, launcher: Path, engine: Path, *, write: bo
                 f"vault id {selected!r} — not this vault ({vault_id})", code=output.EXIT_DENY,
                 hint="register this vault before migrating:\n    "
                      f"PLAINKEEP_HOME={vault} python3 {enginetree.engine_bin(engine) / 'vault' / 'run.py'}"
-                     f" register {vault} --yes")
+                     f" register {vault} --approved")
         report["probes"].append({"mode": mode, "probe": "vault status", "selected": selected,
                                  "selected_by": how})
 
@@ -1206,7 +1206,7 @@ def _clean_tree_gate(vault: Path, *, op: str = "migration") -> list[str]:
 
 def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict:
     """READ-ONLY and CONFIRM-FREE. Everything a migration would refuse on, asked before anything is
-    provisioned and before `--yes` is even looked at. It builds and VERIFIES the candidate tree —
+    provisioned and before `--approved` is even looked at. It builds and VERIFIES the candidate tree —
     the expensive, load-bearing half — because a preflight that only lists what it would do is a
     preflight an operator cannot trust.
 
@@ -1227,7 +1227,7 @@ def preflight(vault, *, engine_source=None, scratch: Path | None = None) -> dict
                          f"(no {vaultreg.MARKER_DIR}/{vaultreg.MARKER_NAME})",
                          hint="mark and register it first:\n    "
                               f"PLAINKEEP_HOME={vault} python3 "
-                              f"{enginetree.engine_bin() / 'vault' / 'run.py'} register {vault} --yes")
+                              f"{enginetree.engine_bin() / 'vault' / 'run.py'} register {vault} --approved")
     vault_id = marker["id"]
     reg = vaultreg.read_registry()
     entry = next((v for v in reg["vaults"] if v["id"] == vault_id), None)
@@ -1571,7 +1571,7 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
     `state == "pristine"` only moves the waiver into every other spelling of the state."""
     _check_kill_stage()
     if not yes:
-        raise VaultError("refusing to migrate without --yes", code=output.EXIT_CONFIRM,
+        raise VaultError("refusing to migrate without --approved", code=output.EXIT_CONFIRM,
                          hint="run the read-only preflight first:\n"
                               f"    python3 {Path(__file__).resolve()} --preflight {vault}")
     scratch = Path(tempfile.mkdtemp(prefix="pk-migrate-"))
@@ -1699,7 +1699,7 @@ def migrate(vault, *, yes: bool = False, engine_source=None, pre: dict | None = 
                            "left to remove and starting the migration again cannot change that. Fix "
                            "the failure above and re-check with `plainkeep doctor`. To put this "
                            "vault's engine copy back instead:\n"
-                           f"    python3 {Path(__file__).resolve()} --rollback {vault} --yes")})
+                           f"    python3 {Path(__file__).resolve()} --rollback {vault} --approved")})
         # Every note this migration wrote, in one field. The post-removal proof performs the same
         # guardrail-gated capture the pre-removal one does, and a `canary_writes` that listed only
         # the first half would under-report the migration's own footprint in the receipt an operator
@@ -1802,7 +1802,7 @@ def rollback(vault, *, yes: bool = False) -> dict:
     is refused, and the refusal says which of the three interruptions this vault is in rather than
     telling all of them the story of the earliest one."""
     if not yes:
-        raise VaultError("refusing to roll back without --yes", code=output.EXIT_CONFIRM)
+        raise VaultError("refusing to roll back without --approved", code=output.EXIT_CONFIRM)
     vault = Path(vaultreg.canonical(str(vault)))
     marker = vaultreg.read_marker(vault)
     if marker is None:
@@ -1952,8 +1952,8 @@ def rollback(vault, *, yes: bool = False) -> dict:
 
 # --- CLI --------------------------------------------------------------------------------------------------
 _USAGE = ("usage: migrate.py --preflight <vault> [--json]            (READ-ONLY, no confirmation)\n"
-          "       migrate.py --migrate   <vault> --yes [--engine-source <checkout>] [--json]\n"
-          "       migrate.py --rollback  <vault> --yes [--json]\n"
+          "       migrate.py --migrate   <vault> --approved [--engine-source <checkout>] [--json]\n"
+          "       migrate.py --rollback  <vault> --approved [--json]\n"
           "       migrate.py --print allowlist|receipt <vault>")
 
 
@@ -1993,7 +1993,7 @@ def _render_preflight(d: dict) -> None:
         print(f"would finish pruning: {', '.join(d['would_prune_worktree'])}")
     print(f"\n{d['verdict']}")
     if d["state"] != "migrated":
-        print(f"  migrate with: python3 {Path(__file__).resolve()} --migrate {d['vault']} --yes")
+        print(f"  migrate with: python3 {Path(__file__).resolve()} --migrate {d['vault']} --approved")
 
 
 def _render_migrate(d: dict) -> None:
@@ -2027,7 +2027,7 @@ def _render_migrate(d: dict) -> None:
              else f"{r.get('target') or r['kind']} (unchanged)"))
     for w in d.get("canary_writes", []):
         print(f"  canary wrote  {w}")
-    print(f"\n  roll back with: python3 {Path(__file__).resolve()} --rollback {d['vault']} --yes")
+    print(f"\n  roll back with: python3 {Path(__file__).resolve()} --rollback {d['vault']} --approved")
 
 
 def main(argv: list[str]) -> int:
@@ -2070,7 +2070,7 @@ def main(argv: list[str]) -> int:
                 return output.EXIT_USAGE
             opts = rest[1:]
             pre = preflight(rest[0], engine_source=_flag(opts, "--engine-source"))
-            if pre["state"] == "migrated" and "--yes" in opts:
+            if pre["state"] == "migrated" and output.consented(opts):
                 # THE SECOND RUN (acceptance item 12). Converging rather than refusing: a re-run
                 # after a kill at any stage finishes the job, and once it IS finished the tree half
                 # is a no-op that still RE-PROVES the property the migration exists to establish.
@@ -2116,16 +2116,16 @@ def main(argv: list[str]) -> int:
                               "engine": prov, "proof": proof,
                               "receipt_completed": bool(rec and rec.get("status") == "recovered")},
                              opts, _render_migrate)
-            return _emit(migrate(rest[0], yes="--yes" in opts,
+            return _emit(migrate(rest[0], yes=output.consented(opts),
                                  engine_source=_flag(opts, "--engine-source"),
-                                 pre=pre if "--yes" in opts else None),
+                                 pre=pre if output.consented(opts) else None),
                          opts, _render_migrate)
         if cmd == "--rollback":
             if not rest:
                 print("plainkeep: --rollback needs a vault", file=sys.stderr)
                 return output.EXIT_USAGE
             opts = rest[1:]
-            return _emit(rollback(rest[0], yes="--yes" in opts), opts,
+            return _emit(rollback(rest[0], yes=output.consented(opts)), opts,
                          lambda d: print(f"rolled back {d['vault']} to {d['head'][:12]} — "
                                          f"{len(d['restored'])} engine path(s) restored"
                                          + (", launcher symlink restored" if d["launcher_restored"]

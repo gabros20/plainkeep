@@ -19,7 +19,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from lib import output, paths  # noqa: E402
 
-INSTALL_HINT = ("run `plainkeep setup ui --yes` to download the terminal UI binary into .local/bin, "
+INSTALL_HINT = ("run `plainkeep setup ui --approved` to download the terminal UI binary into .local/bin, "
                 "or set PLAINKEEP_UI_BIN=/path/to/plainkeep-ui; then re-run `plainkeep ui`")
 
 

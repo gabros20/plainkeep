@@ -77,6 +77,8 @@ test("gate enforces declared risk classes", () => {
   expect(gate("v_confirm", []).verdict).toBe("confirm");
   expect(gate("v_confirm", ["--yes"]).verdict).toBe("allow");
   expect(gate("v_confirm", ["-y"]).verdict).toBe("allow");
+  expect(gate("v_confirm", ["--approved"]).verdict).toBe("allow");
+  expect(gate("v_deny", ["--approved"]).verdict).toBe("deny"); // --approved never clears a deny
   expect(gate("v_deny", []).verdict).toBe("deny");
   expect(gate("v_deny", ["--dry-run"]).verdict).toBe("deny"); // deny beats dry-run
   expect(gate("v_runonly", []).verdict).toBe("confirm"); // undeclared defaults to confirm
@@ -127,11 +129,14 @@ test("mainCli: confirm prints the exact remediation to stderr at exit 3", () => 
   const r = mainCli(["v_confirm", "x"]);
   expect(r.code).toBe(EXIT_CONFIRM);
   expect(r.stderr).toBe(
-    "guardrail: CONFIRM [confirm] — 'v_confirm' is confirm-class — re-run with --yes to proceed\n  re-run: plainkeep v_confirm x --yes",
+    "guardrail: CONFIRM [confirm] — 'v_confirm' is confirm-class — re-run with --approved to proceed\n  re-run: plainkeep v_confirm x --approved",
   );
   const d = mainCli(["v_confirm", "--yes"]);
   expect(d.code).toBe(0);
   expect(d.stderr).toBeUndefined();
+  const a = mainCli(["v_confirm", "--approved"]);
+  expect(a.code).toBe(0);
+  expect(a.stderr).toBeUndefined();
 });
 
 test("mainCli: deny prints the decision to stderr at exit 5", () => {

@@ -22,7 +22,7 @@ intercept instead would have meant one in the bash floor and a second in the com
 implementations of a safety-relevant path, which is the drift this repo has already paid for.
 
 init/register/rebind/deregister/default mutate state outside the current vault, so each refuses
-without an explicit `--yes` (exit 3, with the exact re-run line). list/status are read-only.
+without an explicit `--approved` (exit 3, with the exact re-run line). list/status are read-only.
 
 `vault status` (Task 1b) is the DEBUGGING SURFACE for discovery: it re-runs the real chain
 (lib/vaultroot.discover) and prints which of the four mechanisms won and what each of the others saw
@@ -47,10 +47,10 @@ def _refuse(e: vaultreg.VaultError):
 
 
 def _need_yes(action: str, argv: list[str]) -> None:
-    if "--yes" not in argv and "-y" not in argv:
+    if not output.consented(argv):
         output.fail(output.EXIT_CONFIRM,
-                    f"'vault {action}' changes the vault registry — re-run with --yes",
-                    hint="re-run: plainkeep vault " + " ".join([action, *argv, "--yes"]),
+                    f"'vault {action}' changes the vault registry — re-run with --approved",
+                    hint="re-run: plainkeep vault " + " ".join([action, *argv, "--approved"]),
                     verb="vault")
 
 
@@ -137,7 +137,7 @@ READING has a surface too, and skipping it is the failure this section exists to
 ## The operating manual
 
 Engine-owned, and it travels with the engine rather than with these notes. It is normally already
-loaded as one of your SKILLS — `plainkeep setup agents --yes` installs it into every agent skills
+loaded as one of your SKILLS — `plainkeep setup agents --approved` installs it into every agent skills
 directory on this machine (`~/.claude/skills/`, `~/.agents/skills/`, `~/.hermes/skills/`,
 `~/.grok/skills/`), which is where each agent already looks.
 
@@ -156,7 +156,7 @@ The vault's instructions live in AGENTS.md, which every agent adapter reads. Thi
 to it, so there is one set of instructions rather than two that drift.
 
 The operating manual is the `operate-plainkeep` SKILL, installed into `~/.claude/skills/` by
-`plainkeep setup agents --yes`. It is engine-owned and lives outside this vault — there is no
+`plainkeep setup agents --approved`. It is engine-owned and lives outside this vault — there is no
 `skills/` directory here to read it from.
 """
 
@@ -216,12 +216,12 @@ def _init_refusals(target: Path) -> None:
                     f"{target} already carries engine code ({', '.join(engine_here[:3])}) — "
                     f"`init` creates a DATA-ONLY vault and will not adopt a checkout",
                     hint=f"to make this checkout a vault instead:\n    "
-                         f"plainkeep vault register {target} --yes",
+                         f"plainkeep vault register {target} --approved",
                     verb="vault")
     if vaultreg.read_marker(target) is not None:
         output.fail(output.EXIT_USAGE, f"{target} is already a plainkeep vault "
                                        f"({vaultreg.marker_path(target)})",
-                    hint=f"register it: plainkeep vault register {target} --yes", verb="vault")
+                    hint=f"register it: plainkeep vault register {target} --approved", verb="vault")
 
 
 def _generate_manifest(target: Path) -> tuple[bool, str]:
@@ -264,7 +264,7 @@ def cmd_init(argv):
     rest = [a for a in argv if not a.startswith("-")]
     if not rest:
         output.fail(output.EXIT_USAGE, "usage: plainkeep vault init <path> [--name <slug>] "
-                                       "[--default] --yes", verb="vault")
+                                       "[--default] --approved", verb="vault")
     raw = Path(os.path.abspath(os.path.expanduser(rest[0])))
     if raw.exists() and not raw.is_dir():
         output.fail(output.EXIT_USAGE, f"not a directory: {raw}", verb="vault")
@@ -409,7 +409,7 @@ def cmd_register(argv):
     if existing_path:
         output.fail(output.EXIT_USAGE,
                     f"already registered as '{existing_path['name']}': {target}",
-                    hint="rename with: plainkeep vault deregister <name> --yes, then register again",
+                    hint="rename with: plainkeep vault deregister <name> --approved, then register again",
                     verb="vault")
 
     marker = vaultreg.read_marker(target)
@@ -422,7 +422,7 @@ def cmd_register(argv):
         output.fail(output.EXIT_USAGE,
                     f"this vault (id {marker['id']}) is already registered as '{other['name']}' "
                     f"at {other['path']}",
-                    hint=f"it MOVED? re-point it with: plainkeep vault rebind {other['name']} {target} --yes",
+                    hint=f"it MOVED? re-point it with: plainkeep vault rebind {other['name']} {target} --approved",
                     verb="vault")
 
     name = name or vaultreg.suggest_name(target)
@@ -438,7 +438,7 @@ def cmd_register(argv):
         # NOT behind the path-wall, deliberately — see test/run_pathwall.py EXEMPT. This is the one
         # write that ESTABLISHES where the wall goes: the target vault is by definition not yet the
         # active data root, so classifying against the active root would refuse every registration
-        # but the current vault's. It writes exactly one file, and only with --yes.
+        # but the current vault's. It writes exactly one file, and only with --approved.
         d = vaultreg.marker_path(target).parent
         d.mkdir(parents=True, exist_ok=True)
         vaultreg.marker_path(target).write_text(vaultreg.marker_bytes(marker), encoding="utf-8")
@@ -467,7 +467,7 @@ def cmd_rebind(argv):
     _need_yes("rebind", argv)
     rest = [a for a in argv if not a.startswith("-")]
     if len(rest) < 2:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep vault rebind <name|id> <new-path> --yes",
+        output.fail(output.EXIT_USAGE, "usage: plainkeep vault rebind <name|id> <new-path> --approved",
                     verb="vault")
     reg = vaultreg.read_registry(required=True)
     entry = vaultreg.find(reg, rest[0])
@@ -481,7 +481,7 @@ def cmd_rebind(argv):
     if marker is None:
         output.fail(output.EXIT_USAGE, f"no vault marker at {target}",
                     hint="rebind re-points an EXISTING vault; a new location needs: "
-                         "plainkeep vault register <path> --yes",
+                         "plainkeep vault register <path> --approved",
                     verb="vault")
     # The id is the identity. A different id means this is a DIFFERENT vault, and silently accepting
     # it would repoint a name at someone else's notes.
@@ -505,7 +505,7 @@ def cmd_deregister(argv):
     _need_yes("deregister", argv)
     rest = [a for a in argv if not a.startswith("-")]
     if not rest:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep vault deregister <name|id> --yes", verb="vault")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep vault deregister <name|id> --approved", verb="vault")
     reg = vaultreg.read_registry(required=True)
     entry = vaultreg.find(reg, rest[0])
     if not entry:
@@ -532,7 +532,7 @@ def cmd_default(argv):
     _need_yes("default", argv)
     rest = [a for a in argv if not a.startswith("-")]
     if not rest:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep vault default <name|id> --yes", verb="vault")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep vault default <name|id> --approved", verb="vault")
     reg = vaultreg.read_registry(required=True)
     entry = vaultreg.find(reg, rest[0])
     if not entry:
@@ -553,7 +553,7 @@ def cmd_list(_argv):
     def render(rs):
         if not rs:
             print(f"no vaults registered ({vaultreg.registry_path()})")
-            print(f"  register this one: {CYAN}plainkeep vault register --yes{RESET}")
+            print(f"  register this one: {CYAN}plainkeep vault register --approved{RESET}")
             return
         for r in rs:
             mark = f"{CYAN}*{RESET}" if r["default"] else " "

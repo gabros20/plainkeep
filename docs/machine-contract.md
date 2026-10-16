@@ -63,9 +63,11 @@ same. The error surface is identical for humans and machines.
 | `0` | ok | the verb |
 | `1` | unexpected failure (or a semantic "at-risk" status, e.g. `backup`/`repo health`) | the verb |
 | `2` | usage error (message on stderr, or the error envelope under `--json`) | the verb |
-| `3` | guardrail: confirm-class call without `--yes` — message contains the **exact re-run** | guardrail or the verb's self-gate |
+| `3` | guardrail: confirm-class call without `--approved` — message contains the **exact re-run** | guardrail or the verb's self-gate |
 | `4` | not found (unknown verb → includes a did-you-mean; missing note/task/asset) | guardrail / the verb |
 | `5` | guardrail: deny-class — never runs | guardrail |
+
+`--approved` is the canonical consent flag (a human approved this exact action). `--yes` and `-y` are permanent aliases and behave identically; none of the three ever clears a `deny`.
 
 Constants: `output.EXIT_OK / EXIT_UNEXPECTED / EXIT_USAGE / EXIT_CONFIRM / EXIT_NOT_FOUND / EXIT_DENY`.
 The dispatcher propagates guardrail codes verbatim — a refused call is `3`/`5`, never a flattened `1`.
@@ -106,7 +108,7 @@ Every mutating verb declares `"dry_run": true` in its `cmd.json` and implements 
 preview: print what *would* happen, write nothing.
 
 The guardrail honours the declaration. A confirm-class verb invoked with `--dry-run` is **downgraded
-to a read** and allowed without `--yes` — a true dry-run *is* a read. This makes the entire surface
+to a read** and allowed without `--approved` — a true dry-run *is* a read. This makes the entire surface
 explorable: `plainkeep archive foo --dry-run`, `plainkeep organize apply --dry-run`, and
 `plainkeep share <slug> --dry-run` all run freely and mutate nothing.
 
@@ -266,10 +268,10 @@ a positional. The rest are optional.
   path it uses the action's non-interactive sibling instead (e.g. `triage decide` /
   `triage drafts decide` rather than the interactive pager). Omitted ⇒ `false`.
 - **Per-action `risk` is declarative; the guardrail gates on the verb's top-level `risk`.** The
-  dispatcher's guardrail reads the verb's top-level `risk` (a confirm-class *verb* needs `--yes`). A
+  dispatcher's guardrail reads the verb's top-level `risk` (a confirm-class *verb* needs `--approved`). A
   subaction that is stricter than its verb — e.g. a `confirm` subaction under a `safe_write` verb
   (`share revoke`, `backup run --target cloud`, `models pull`) — enforces that stricter class **inside
-  the verb**, self-gating on `--yes` and returning `EXIT_CONFIRM` (3). So the per-action `risk` is an
+  the verb**, self-gating on `--approved` and returning `EXIT_CONFIRM` (3). So the per-action `risk` is an
   honest description a UI can pre-gate on (confirm just the subactions that need it), and it is
   enforced — by the verb, not double-gated by the dispatcher (which cannot know a subaction's
   *conditional* gates, e.g. `backup run` is free for `--target local` but confirm for `cloud`). A
@@ -409,7 +411,7 @@ Within one `plainkeep doctor` run each label is probed **once**, not once per re
 ### How to reverse it
 
 ```sh
-plainkeep job disable --all --yes
+plainkeep job disable --all --approved
 ```
 
 Unloads every job and removes every `~/Library/LaunchAgents/com.plainkeep.*.plist`. The rendered
@@ -423,8 +425,8 @@ rm ~/Library/LaunchAgents/com.plainkeep.<job>.plist
 
 ### Consent
 
-`enable` and `disable` are **confirm-class**: without `--yes` they exit `3` (§2) and write nothing.
-`--dry-run` prints the exact files and service targets that would be touched, needs no `--yes`, and
+`enable` and `disable` are **confirm-class**: without `--approved` they exit `3` (§2) and write nothing.
+`--dry-run` prints the exact files and service targets that would be touched, needs no `--approved`, and
 calls launchctl zero times.
 
 `plainkeep job set` — which changes a job's schedule — is **not** part of this surface and is

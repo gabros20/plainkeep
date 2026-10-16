@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
 """
-plainkeep models list | status | stop [--all] [<model>] | pull [--stage <s>|--all] --yes
-        | test <stage> [--model <m>] [--input <file>] --yes — the download/offload/on-demand test
+plainkeep models list | status | stop [--all] [<model>] | pull [--stage <s>|--all] --approved
+        | test <stage> [--model <m>] [--input <file>] --approved — the download/offload/on-demand test
 surface for the model layer behind every stage (search-enrichment proposal §2.1). Model choice is env
 config (PLAINKEEP_OCR/PLAINKEEP_VLM/PLAINKEEP_ENRICH_MODEL/PLAINKEEP_EMBED_MODEL/PLAINKEEP_RERANK_MODEL); this verb lets you SEE what
 each stage is configured to use, whether it's actually pulled/available, offload a resident model, and
 A/B a candidate on a sample without wiring anything — adopt it after by setting its env var.
 
 Risk: safe_write at the surface so `list`/`status` (read) and `stop` (unloads a model — reloads on
-next use, no data loss) stay free of --yes. The two TRANSMITTING/downloading subactions self-gate:
-`pull` and `test` can each pull gigabytes, so both refuse without --yes -> EXIT_CONFIRM(3), mirroring
+next use, no data loss) stay free of --approved. The two TRANSMITTING/downloading subactions self-gate:
+`pull` and `test` can each pull gigabytes, so both refuse without --approved -> EXIT_CONFIRM(3), mirroring
 how `plainkeep share`/`plainkeep backup` gate their own transmitting subactions.
 
 Every real model call goes over urllib to the local Ollama daemon (bin/lib/embed.py's pattern) or an
@@ -200,11 +200,11 @@ def cmd_stop(argv):
 
 
 def cmd_pull(argv):
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     all_ = "--all" in argv
     stage = argv[argv.index("--stage") + 1] if "--stage" in argv else None
     if not all_ and not stage:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep models pull [--stage <s>|--all] --yes", verb="models")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep models pull [--stage <s>|--all] --approved", verb="models")
     stages = list(STAGES) if all_ else [stage]
     for s in stages:
         if s not in STAGES:
@@ -214,7 +214,7 @@ def cmd_pull(argv):
     skipped = [s for s, m in targets if not m]
     if not yes:
         names = ", ".join(f"{s}:{m}" for s, m in pullable) or "(none ollama-backed in this selection)"
-        rerun_args = [a for a in argv if a not in ("--yes", "-y")] + ["--yes"]
+        rerun_args = [a for a in argv if a not in output.CONSENT_FLAGS] + ["--approved"]
         output.fail(output.EXIT_CONFIRM,
                     f"pulling {len(pullable)} model(s) downloads gigabytes ({names})",
                     hint="re-run: plainkeep models pull " + " ".join(rerun_args), verb="models")
@@ -293,15 +293,15 @@ def cmd_test(argv):
     stage = pos[0] if pos else ""
     if stage not in STAGES:
         output.fail(output.EXIT_USAGE,
-                    f"usage: plainkeep models test <stage> [--model <m>] [--input <file>] --yes  "
+                    f"usage: plainkeep models test <stage> [--model <m>] [--input <file>] --approved  "
                     f"(stage one of: {', '.join(STAGES)})", verb="models")
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     model = argv[argv.index("--model") + 1] if "--model" in argv else None
     input_path = argv[argv.index("--input") + 1] if "--input" in argv else None
     if not yes:
         output.fail(output.EXIT_CONFIRM,
                     f"testing '{stage}' runs a real model (may pull gigabytes first)",
-                    hint=f"re-run: plainkeep models test {stage} --yes", verb="models")
+                    hint=f"re-run: plainkeep models test {stage} --approved", verb="models")
     t0 = time.time()
     try:
         out = _run_stage_test(stage, model, input_path)  # pragma: no cover - real model call
@@ -327,7 +327,7 @@ def main(argv):
         return cmd_test(rest)
     output.fail(output.EXIT_USAGE,
                "usage: plainkeep models list | status | stop [--all] [<model>] | "
-               "pull [--stage <s>|--all] --yes | test <stage> [--model <m>] [--input <file>] --yes",
+               "pull [--stage <s>|--all] --approved | test <stage> [--model <m>] [--input <file>] --approved",
                verb="models")
 
 

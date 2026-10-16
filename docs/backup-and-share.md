@@ -16,10 +16,10 @@ restic path degrades with an install hint when restic is absent.
 
 | Subcommand | Class | What it does |
 |---|---|---|
-| `backup init` | confirm (`--yes`) | Human-run once. Writes `.backup/config.json` with the local external-SSD repo and B2 bucket as **`op://` references** (never resolved), renders `com.plainkeep.backup.cloud.plist`, and prints the `cp` / `launchctl load` lines. It never installs a launch agent for you. |
+| `backup init` | confirm (`--approved`) | Human-run once. Writes `.backup/config.json` with the local external-SSD repo and B2 bucket as **`op://` references** (never resolved), renders `com.plainkeep.backup.cloud.plist`, and prints the `cp` / `launchctl load` lines. It never installs a launch agent for you. |
 | `backup status` | read | Snapshot age per target. Exits 1 if any target is stale over 48h, unconfigured, or unverifiable. Works without restic. |
 | `backup run [--target local\|cloud]` | safe_write; **cloud is confirm** | `restic backup` of `~/files`, `~/dotfiles`, and the working trees of `~/plainkeep` and `~/work`, then `restic check`. |
-| `backup drill` | confirm (`--yes`) | Restore the latest snapshot to a temp dir and diff. A backup that has never been restored is a hypothesis. |
+| `backup drill` | confirm (`--approved`) | Restore the latest snapshot to a temp dir and diff. A backup that has never been restored is a hypothesis. |
 | `backup bundle` | safe_write | Rotated `git bundle --all` of `~/plainkeep` and every `~/work` repo into `~/files/backups/bundles/` (keep last N, `PLAINKEEP_BUNDLE_KEEP`). Closes the "remote-less repo has one copy in the world" hole; captured by restic. |
 
 ### The append-only cloud push runs outside the verb surface
@@ -27,7 +27,7 @@ restic path degrades with an install hint when restic is absent.
 The scheduled cloud backup is **launchd invoking restic directly**. It uses a dedicated append-only
 (no-delete, no-prune) B2 key, resolved at runtime from `op://` via `op read`.
 
-This resolves the never-transmit tension honestly. The human consents once at `init --yes`.
+This resolves the never-transmit tension honestly. The human consents once at `init --approved`.
 Thereafter it is machine infrastructure, like Time Machine.
 
 Even a fully compromised laptop or agent can only ADD to history, never erase it. Pruning is manual
@@ -66,7 +66,7 @@ There is no second "agent URL" to construct and no header to set. Append `.md`, 
 
 ### Rules and safeguards
 
-- Publishing is a transmission, so every transmitting subaction self-gates `--yes`
+- Publishing is a transmission, so every transmitting subaction self-gates `--approved`
   (`EXIT_CONFIRM=3`). `--dry-run` renders locally and stops before the PUT. The verb's output is a
   **draft link** — the human sends it.
 - `PUT /` requires a matching `X-Publish-Token` header when the `PUBLISH_TOKEN` wrangler secret is

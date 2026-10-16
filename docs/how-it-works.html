@@ -377,7 +377,7 @@
       <ol class="steps">
         <li><div><b>Use this template → your own repo</b>, then clone it to <span class="mono">~/plainkeep</span> (the path matters — the safety wall is rooted there).<code>git clone git@github.com:&lt;you&gt;/plainkeep.git ~/plainkeep &amp;&amp; cd ~/plainkeep</code></div></li>
         <li><div><b>Run setup</b> — puts <span class="mono">plainkeep</span> on your PATH, creates the sibling roots, tracks the template as fetch-only <span class="mono">upstream</span>, runs a health check, makes the first commit. It never pushes.<code>./script/setup --lean</code></div></li>
-        <li><div><b>Make it live</b> — push to your GitHub, then finish the optional layers with the guided first-run: <span class="mono">plainkeep setup --wizard</span> (≤5 skippable prompts, safe defaults — search/models/jobs off). Or <span class="mono">plainkeep setup --all --yes</span> non-interactively.<code>git push -u origin main
+        <li><div><b>Make it live</b> — push to your GitHub, then finish the optional layers with the guided first-run: <span class="mono">plainkeep setup --wizard</span> (≤5 skippable prompts, safe defaults — search/models/jobs off). Or <span class="mono">plainkeep setup --all --approved</span> non-interactively.<code>git push -u origin main
 plainkeep setup --wizard</code><div class="cap">Later: <span class="mono">./script/update</span> pulls only engine files from upstream — your notes are never touched.</div></div></li>
       </ol>
     </div>
@@ -401,7 +401,7 @@ const RISK = {
   read:{c:'var(--read)',label:'read',rule:'Pure read. Runs freely, even unattended.'},
   safe_write:{c:'var(--write)',label:'safe_write',rule:'Writes inside the roots — every change is a revertible git diff.'},
   draft_only:{c:'var(--draft)',label:'draft_only',rule:'Produces a draft. A human sends; the system never transmits.'},
-  confirm:{c:'var(--confirm)',label:'confirm',rule:'Needs an explicit --yes. New/undeclared verbs default here.'},
+  confirm:{c:'var(--confirm)',label:'confirm',rule:'Needs an explicit --approved. New/undeclared verbs default here.'},
   deny:{c:'var(--deny)',label:'deny',rule:'Always refused: force-push, rm -rf, reading secrets, writing iCloud.'}
 };
 const GROUPS = [
@@ -500,16 +500,16 @@ const FLOWS=[
    verb:{x:110,y:170,w:140,h:50,kind:'terminal',label:'any plainkeep verb'},
    classify:{x:350,y:170,w:160,h:66,kind:'decision',label:'classify risk'},
    deny:{x:640,y:70,w:170,h:50,kind:'terminal',label:'deny → refuse'},
-   confirm:{x:640,y:185,w:160,h:66,kind:'decision',label:'needs --yes?'},
+   confirm:{x:640,y:185,w:160,h:66,kind:'decision',label:'needs --approved?'},
    run:{x:880,y:185,w:120,h:50,label:'run + log'},
-   ask:{x:640,y:300,w:180,h:46,kind:'terminal',label:'ask for --yes'}},
-  edges:[['verb','classify'],['classify','deny','force-push · rm -rf · secret'],['classify','confirm','otherwise'],['confirm','run','ok / has --yes'],['confirm','ask','needs --yes']],
+   ask:{x:640,y:300,w:180,h:46,kind:'terminal',label:'ask for --approved'}},
+  edges:[['verb','classify'],['classify','deny','force-push · rm -rf · secret'],['classify','confirm','otherwise'],['confirm','run','ok / has --approved'],['confirm','ask','needs --approved']],
   seq:[
    {n:['verb'],t:'Before anything actually runs…'},
    {n:['classify'],e:[['verb','classify']],t:'…the guardrail classifies the action by risk.'},
    {n:['deny'],e:[['classify','deny']],t:'Dangerous classes (deny) are always refused — for you and for any agent.'},
    {n:['confirm','run'],e:[['classify','confirm'],['confirm','run']],t:'read & safe_write run freely — every write is a revertible git diff.'},
-   {n:['ask'],e:[['confirm','ask']],t:'confirm-class (and any new verb) asks for an explicit --yes first.'}]},
+   {n:['ask'],e:[['confirm','ask']],t:'confirm-class (and any new verb) asks for an explicit --approved first.'}]},
 
  {name:'Search (3 local stages)', vb:'0 0 1020 220',
   nodes:{
@@ -679,8 +679,8 @@ const SCN=[
   human:[
    {t:'cap',s:'confirm-class verbs refuse first — the error teaches the exact re-run.'},
    {t:'cmd',s:'plainkeep organize apply'},
-   {t:'out',lines:[[['plainkeep organize apply is confirm-class — re-run with --yes to replay approved ops (or preview with --dry-run) (re-run: plainkeep organize apply --yes)','warn']]]},
-   {t:'cmd',s:'plainkeep organize apply --yes'},
+   {t:'out',lines:[[['plainkeep organize apply is confirm-class — re-run with --approved to replay approved ops (or preview with --dry-run) (re-run: plainkeep organize apply --approved)','warn']]]},
+   {t:'cmd',s:'plainkeep organize apply --approved'},
    {t:'out',lines:[
      [['applied  ','path'],['move: inbox/old-idea.md -> wiki/notes/old-idea.md','out']],
      [['1 op applied · 1 commit — revert any op with git','dim']]]},
@@ -688,11 +688,11 @@ const SCN=[
   agent:[
    {t:'cap',s:'Same wall, same door: the agent hits exit 3 and must bring the question to you.'},
    {t:'user',s:'clean up the vault'},
-   {t:'tool',s:'plainkeep organize apply --json',out:[['exit 3 · confirm-class — re-run with --yes','warn']]},
+   {t:'tool',s:'plainkeep organize apply --json',out:[['exit 3 · confirm-class — re-run with --approved','warn']]},
    {t:'think',s:'The guardrail stopped me — this needs your consent, not mine.'},
    {t:'say',s:'1 approved cleanup op is queued: move inbox/old-idea.md → wiki/notes/. Apply it? (yes / no)'},
    {t:'user',s:'yes'},
-   {t:'tool',s:'plainkeep organize apply --yes --json',out:[['{"ops_json": 1, "ok": true, "verb": "organize", "data": {"applied": 1}…}','dim']]},
+   {t:'tool',s:'plainkeep organize apply --approved --json',out:[['{"ops_json": 1, "ok": true, "verb": "organize", "data": {"applied": 1}…}','dim']]},
    {t:'fs',m:FX5[0]},{t:'fs',m:TOUCH},
    {t:'say',s:'Done — one op, one git commit. Revertible like everything else.'}]}
 ];

@@ -99,7 +99,7 @@ CRASH_NOISE_OPT_INS = ("PLAINKEEP_REQUIRE_CORE", "PLAINKEEP_PARITY_FAULT_SIGNALS
 # pinned so that deleting a case (or an invocation) reddens instead of quietly shrinking coverage; see
 # the accounting invariant at the bottom of main() for why a self-consistency check cannot do that job.
 # ADDING cases is expected and welcome: raise this number in the same commit that adds them.
-EXPECTED_CATALOG_INVOCATIONS = 210
+EXPECTED_CATALOG_INVOCATIONS = 213
 
 results: list[tuple[str, bool, str]] = []
 skipped: list[tuple[str, str]] = []

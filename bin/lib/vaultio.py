@@ -88,7 +88,7 @@ CREATE_ONLY = "create_only"
 
 def guard(path, **action) -> Path:
     """Classify a write to `path` and return it, or refuse and exit 5. Extra kwargs are merged into
-    the action dict (`repo`/`task_repo` for the ~/work scoping rule, `flags` for --yes/--force)."""
+    the action dict (`repo`/`task_repo` for the ~/work scoping rule, `flags` for --approved/--force)."""
     action.pop(CREATE_ONLY, None)   # not the caller's to claim — see CREATE_ONLY above
     return _guard(path, **action)
 

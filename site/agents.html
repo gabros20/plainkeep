@@ -111,7 +111,7 @@
  <span class="tk-key">"data"</span>:{<span class="tk-key">"id"</span>:<span class="tk-str">"T-20260816-01"</span>,<span class="tk-key">"status"</span>:<span class="tk-str">"active"</span>}}
 
 <span class="tk-dim"># exit codes are the protocol:</span>
-<span class="tk-dim"># 0 ok · 2 usage · 3 needs --yes · 4 not found · 5 denied</span></pre>
+<span class="tk-dim"># 0 ok · 2 usage · 3 needs --approved · 4 not found · 5 denied</span></pre>
             </div>
           </div>
         </div>
@@ -132,11 +132,11 @@
             <div class="terminal-panel__body">
 <pre><span class="tk-prompt">$</span> plainkeep backup run --json
 {<span class="tk-key">"plainkeep_json"</span>:1,<span class="tk-key">"ok"</span>:<span class="tk-err">false</span>,<span class="tk-key">"error"</span>:{<span class="tk-key">"code"</span>:3,
- <span class="tk-key">"message"</span>:<span class="tk-str">"restic backup of the working set needs --yes"</span>,
- <span class="tk-key">"hint"</span>:<span class="tk-str">"re-run: plainkeep backup run --yes"</span>}}
+ <span class="tk-key">"message"</span>:<span class="tk-str">"restic backup of the working set needs --approved"</span>,
+ <span class="tk-key">"hint"</span>:<span class="tk-str">"re-run: plainkeep backup run --approved"</span>}}
 
 <span class="tk-dim"># exit 3 — the agent reports to the human and waits.
-# it never pre-appends --yes on its own.</span></pre>
+# it never pre-appends --approved on its own.</span></pre>
             </div>
           </div>
           <div class="terminal-panel">

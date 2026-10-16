@@ -7,6 +7,17 @@ ADR log ([`docs/DECISIONS.md`](docs/DECISIONS.md)); this file records *what chan
 ## [Unreleased]
 
 ### Added
+- **`--approved`, the consent flag named for what it means (v2 step 0.16).** `--approved` is now the
+  canonical flag for every confirm-class action: it says a human approved this exact action. `--yes`
+  and `-y` stay as permanent aliases and behave identically, and none of the three clears a deny. The
+  exit-3 message, the re-run line, the MCP `ops_confirm_needed` re-run, `cmd.json`, `plainkeep.json`,
+  the docs and the script help all say `--approved`; the guardrail log keeps the args as typed, so the
+  spelling used is recorded. Both guards (`bin/lib/guardrail.py` and `cli/src/core/guardrail.ts`) and
+  every verb that self-gates share one list, with parity cases for `--approved` in both.
+- **MCP tool annotations (v2 step 0.8).** `tools/list` now carries `readOnlyHint`, `destructiveHint`
+  and `openWorldHint` derived from each verb's risk class (read: read-only; safe_write and draft_only:
+  writes, not destructive; confirm or undeclared: destructive). `bookmark`, which fetches URLs, also
+  sets `openWorldHint: true`. `PROTOCOL_VERSION` is unchanged.
 - **Retrieval bench (v2 step 0.0): `test/run_bench.py`.** A fixed set of 30 queries (Hungarian exact and inflected forms, answers deep inside long notes, tasks, journal days, superseded decisions, unanswerable questions, exact titles and aliases) scored against a fixture vault through the real `indexlib` in keyword mode by default (hybrid and hybrid+rerank are opt-in via `--modes all`), reported as recall@5, recall@10 and MRR per tag. `baseline.json` records the keyword numbers so each later retrieval change can show what it moved, and `test/bench/gates.json` holds one gate so far: Hungarian keyword recall@5 ≥ 0.6, added with the Unicode-token fix below. `--vault PATH` runs your own queries against a real vault, read-only. Private queries go in `test/bench/queries.private.json`, which is gitignored.
 
 ### Fixed

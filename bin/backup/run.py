@@ -4,17 +4,17 @@ plainkeep backup — the durability family (§14, proposal Part 5.1). Bare `plai
 read-only nag that verifies ~/plainkeep is committed + pushed and exits 1 if at risk (it NEVER commits or
 pushes — §3, transmit is the human's call). Subcommands add the restic floor + git-bundle safety net:
 
-  backup init        interactive, human-run ONCE (confirm/--yes): collect a local external-SSD restic
+  backup init        interactive, human-run ONCE (confirm/--approved): collect a local external-SSD restic
                      repo + B2 bucket as op:// REFERENCES (never resolved), render the launchd plist,
                      PRINT where to copy it (never installs a launch agent). Writes .backup/config.json.
   backup status      snapshot age per configured target; exit 1 if stale >48h or unconfigured. Works
                      WITHOUT restic (reports unconfigured / install hint).
   backup run [--target local|cloud]   restic backup of ~/files, ~/dotfiles + working-tree mirrors of
-                     ~/plainkeep and ~/work, then `restic check`. Cloud is confirm-class ALWAYS (--yes).
+                     ~/plainkeep and ~/work, then `restic check`. Cloud is confirm-class ALWAYS (--approved).
                      The SCHEDULED cloud push runs from launchd invoking restic DIRECTLY with an
                      append-only B2 key — OUTSIDE this verb surface (see the rendered plist).
   backup drill       restore latest snapshot (or --subset N) to tmp, diff vs source, fail loud
-                     (confirm/--yes). A backup that has never been restored is a hypothesis.
+                     (confirm/--approved). A backup that has never been restored is a hypothesis.
   backup bundle      rotated `git bundle --all` of ~/plainkeep + every ~/work repo into
                      ~/files/backups/bundles/ with retention (keep last N) — closes the
                      remote-less-repo-has-one-copy hole. Captured by restic.
@@ -181,13 +181,13 @@ def cmd_status(argv):
 
 def cmd_run(argv):
     target = argv[argv.index("--target") + 1] if "--target" in argv else "local"
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     dry = "--dry-run" in argv
     if target not in ("local", "cloud"):
         output.fail(output.EXIT_USAGE, "usage: plainkeep backup run [--target local|cloud]", verb="backup")
     if target == "cloud" and not yes and not dry:
         output.fail(output.EXIT_CONFIRM, "cloud backup publishes off-machine (a transmission)",
-                    hint="re-run: plainkeep backup run --target cloud --yes", verb="backup")
+                    hint="re-run: plainkeep backup run --target cloud --approved", verb="backup")
     cfg = _config()
     t = cfg.get("targets", {}).get(target)
     if not t:
@@ -214,10 +214,10 @@ def cmd_run(argv):
 # --------------------------------------------------------------------------- drill
 
 def cmd_drill(argv):
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     if not yes:
         output.fail(output.EXIT_CONFIRM, "drill restores a snapshot to a temp dir",
-                    hint="re-run: plainkeep backup drill --yes", verb="backup")
+                    hint="re-run: plainkeep backup drill --approved", verb="backup")
     if not _have_restic():
         output.fail(output.EXIT_UNEXPECTED, "restic not installed", hint=RESTIC_HINT, verb="backup")
     cfg = _config()
@@ -321,7 +321,7 @@ restic backup {src} --tag scheduled &amp;&amp; restic check</string>
 
 
 def cmd_init(argv):
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
 
     def flag(name, default=""):
         return argv[argv.index(name) + 1] if name in argv else default
@@ -329,7 +329,7 @@ def cmd_init(argv):
     if not yes:
         output.fail(output.EXIT_CONFIRM, "init writes .backup/config.json + renders the launchd plist",
                     hint="re-run: plainkeep backup init --local-repo <path> --cloud-repo b2:<bucket>:plainkeep "
-                         "--password-ref op://... --yes", verb="backup")
+                         "--password-ref op://... --approved", verb="backup")
     # References ONLY — op:// values are stored verbatim and NEVER resolved (§4).
     cfg = {
         "targets": {

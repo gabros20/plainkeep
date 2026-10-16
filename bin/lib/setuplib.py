@@ -87,8 +87,8 @@ LAYERS: list[Layer] = [
     # CONFIRM, not safe_write (r1/I1). Every other layer installs into the vault or into its own
     # `.venv`; this one writes into `~/Library/LaunchAgents` and mutates a running launchd domain.
     # `plainkeep job enable` is confirm-class for exactly that reason, and while this gate said
-    # `safe_write` the setup path around it handed out the `--yes` the verb was asking for — so
-    # `plainkeep setup automation`, with no `--yes` anywhere, loaded launch agents. Three documents
+    # `safe_write` the setup path around it handed out the `--approved` the verb was asking for — so
+    # `plainkeep setup automation`, with no `--approved` anywhere, loaded launch agents. Three documents
     # claimed otherwise. The wizard is unaffected (it advances with yes=True after its own prompt).
     Layer("automation", "Schedules", "Scheduled jobs, loaded into launchd", False, "confirm"),
     Layer("ui", "Terminal UI", "The guided plainkeep-ui binary for humans (`plainkeep ui`)", False, "confirm"),
@@ -329,7 +329,7 @@ def _status_search(layer: Layer) -> dict:
             "semantic search operational (set PLAINKEEP_VECTORS=1 / PLAINKEEP_RERANK=1 to enable the arms)"
         return _row(layer, "ready", detail, items, nxt)
     state = "partial" if any(core) else "absent"
-    return _row(layer, state, "semantic search prerequisites are incomplete", items, "plainkeep setup search --yes")
+    return _row(layer, state, "semantic search prerequisites are incomplete", items, "plainkeep setup search --approved")
 
 
 def _status_backups(layer: Layer) -> dict:
@@ -365,7 +365,7 @@ def _status_models(layer: Layer) -> dict:
                     "install ollama: https://ollama.com")
     state = _items_status(items)
     detail = "file-processing models ready" if state == "ready" else "file-processing model layer is incomplete"
-    return _row(layer, state, detail, items, "plainkeep setup models --yes" if state != "ready" else "")
+    return _row(layer, state, detail, items, "plainkeep setup models --approved" if state != "ready" else "")
 
 
 def _status_automation(layer: Layer) -> dict:
@@ -401,7 +401,7 @@ def _status_automation(layer: Layer) -> dict:
     if refusal:
         return _row(layer, "blocked", f"jobs registry is not usable: {refusal}",
                     [{"id": "registry", "title": "jobs/registry.json is readable", "ok": False}],
-                    "fix jobs/registry.json, then: plainkeep setup automation --yes")
+                    "fix jobs/registry.json, then: plainkeep setup automation --approved")
     sched = [s for s in launchdlib.job_states() if s["schedulable"]]
     rendered = bool(sched) and all(s["rendered"] and not s["drift"] for s in sched)
     loaded = bool(sched) and all(s["loaded"] for s in sched)
@@ -415,7 +415,7 @@ def _status_automation(layer: Layer) -> dict:
         # running. Activating is its own confirm-class verb, so `next` points at it rather than at
         # the layer (which would re-render files that are already correct).
         return _row(layer, state, "job plists are rendered but not loaded into launchd", items,
-                    "plainkeep job enable --all --yes")
+                    "plainkeep job enable --all --approved")
     detail = ("job plists have not been rendered" if not sched or not any(s["rendered"] for s in sched)
               else "rendered job plists no longer match jobs/registry.json")
     return _row(layer, state, detail, items, "plainkeep setup automation")
@@ -526,7 +526,7 @@ def _status_ui(layer: Layer) -> dict:
     if exe:
         # Offline update detection: the engine ships the version it expects (bin/ui/version.txt,
         # bumped by `script/update`); the binary self-reports via `--version`. A mismatch makes the
-        # layer `partial` — attemptable — so the ordinary `plainkeep setup ui --yes` performs the update
+        # layer `partial` — attemptable — so the ordinary `plainkeep setup ui --approved` performs the update
         # (pinned to the expected release). No network in status; no extra flags to learn.
         expected = _ui_expected_version()
         if expected:
@@ -535,21 +535,21 @@ def _status_ui(layer: Layer) -> dict:
                 items.append({"id": "version", "title": f"plainkeep-ui {expected}", "ok": False})
                 return _row(layer, "partial",
                             f"update available: installed {installed or 'unknown'} → {expected}",
-                            items, "plainkeep setup ui --yes")
+                            items, "plainkeep setup ui --approved")
             items.append({"id": "version", "title": f"plainkeep-ui {expected}", "ok": True})
         return _row(layer, "ready", f"plainkeep ui launches {exe}", items)
     asset = _ui_asset()
     can_download = _gh_present() and asset is not None and _ui_repo() is not None
     if can_download or _ui_source_buildable():
         return _row(layer, "absent", "the terminal UI binary is not installed", items,
-                    "plainkeep setup ui --yes")
+                    "plainkeep setup ui --approved")
     if asset is None:
         return _row(layer, "not_applicable",
                     f"no prebuilt plainkeep-ui for this platform ({_platform_system()}/{_platform_machine()}), "
                     "and no cli/ source + bun to build from", items, "")
     return _row(layer, "blocked",
                 "the GitHub CLI is required to download the plainkeep-ui release binary", items,
-                "install the GitHub CLI: brew install gh (then `plainkeep setup ui --yes`)")
+                "install the GitHub CLI: brew install gh (then `plainkeep setup ui --approved`)")
 
 
 def _status_agents(layer: Layer) -> dict:
@@ -573,12 +573,12 @@ def _status_agents(layer: Layer) -> dict:
     if foreign:
         return _row(layer, "partial",
                     f"{foreign[0]['id']}/{agentskills.SKILL_NAME} is a real directory, not a link — "
-                    "move it aside, then re-run", items, "plainkeep setup agents --yes")
+                    "move it aside, then re-run", items, "plainkeep setup agents --approved")
     state = _items_status(items)
     if state == "ready":
         return _row(layer, "ready", f"{len(items)} agent(s) read the operating manual", items)
     return _row(layer, state, "the operating manual is not in the folders these agents read", items,
-                "plainkeep setup agents --yes")
+                "plainkeep setup agents --approved")
 
 
 def _install_agents(res: dict, *, fake: bool) -> None:
@@ -746,7 +746,7 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
             # HALF 1 of the two this verb does (MODELS_HALVES): the weights. It is a verb call, not a
             # package install, and it is first because it is the expensive one — an operator who
             # interrupts here has downloaded nothing they did not agree to.
-            res["ran"].append(_run_verb("models", "pull", "--all", "--yes", fake=fake))
+            res["ran"].append(_run_verb("models", "pull", "--all", "--approved", fake=fake))
             # HALF 2: the pip packages, from the `[models]` extra as delivered. Markers ride through
             # pip, so mlx-vlm excludes itself off Apple Silicon instead of being appended by an `if`.
             _ensure_venv(res, fake=fake)
@@ -754,12 +754,12 @@ def advance(layer_id, *, yes: bool, fake: bool) -> dict:
         elif layer.id == "automation":
             # BOTH HALVES, through the ONE advance path (ADR-022). Rendering was all this did, which
             # is why the layer could report success on a machine whose schedule never ran. `enable`
-            # is confirm-class as a verb, so the layer passes `--yes` — the operator's consent was
+            # is confirm-class as a verb, so the layer passes `--approved` — the operator's consent was
             # given to `plainkeep setup automation` (or the wizard prompt, which now names the jobs
             # and times), and re-asking inside a step they already approved is how a wizard becomes
             # a thing people click through.
             res["ran"].append(_run_verb("job", "apply", fake=fake))
-            res["ran"].append(_run_verb("job", "enable", "--all", "--yes", fake=fake))
+            res["ran"].append(_run_verb("job", "enable", "--all", "--approved", fake=fake))
         elif layer.id == "ui":
             # ADR-011: download the compiled plainkeep-ui release binary (sha256-verified) into
             # $PLAINKEEP_HOME/.local/bin — or compile from cli/ source in a contributor checkout.

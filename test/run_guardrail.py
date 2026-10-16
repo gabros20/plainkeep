@@ -58,6 +58,13 @@ def main() -> int:
         ("read verb allowed", v("search", ["q"]) == "allow"),
         ("confirm-class blocked without --yes", v("capture", [], "confirm") == "confirm"),
         ("confirm-class allowed with --yes", v("capture", ["--yes"], "confirm") == "allow"),
+        ("confirm-class allowed with --approved", v("capture", ["--approved"], "confirm") == "allow"),
+        ("confirm-class allowed with -y", v("capture", ["-y"], "confirm") == "allow"),
+        ("--approved never clears a deny", v("capture", ["--approved"], "deny") == "deny"),
+        ("exit-3 remediation names --approved",
+         "--approved" in bg._remediation("capture", ["x"]) and "--yes" not in bg._remediation("capture", ["x"])),
+        ("remediation not duplicated when --yes already given", bg._remediation("capture", ["--yes"]).count("--") == 1),
+        ("confirm refusal reason names --approved", "--approved" in bg.gate("capture", [], "confirm").reason),
         ("deny-class refused", v("capture", [], "deny") == "deny"),
         ("unknown verb denied", v("totally-made-up", []) == "deny"),
         ("undeclared verb defaults to confirm", bg.gate("capture", [], None).verdict in ("allow",)),  # capture declares safe_write

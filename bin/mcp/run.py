@@ -12,8 +12,8 @@ tools/call) is implemented by hand over newline-delimited JSON on stdin/stdout �
   • A tools/call SHELLS OUT: subprocess [<abs>/plainkeep, verb, ...args, --json]. Execution RE-ENTERS through
     the dispatcher, so the guardrail + .logs stay the single enforcement path (anti-roadmap #2 — never
     import verb/lib code to skip the dispatcher).
-  • Exit 3 (confirm-needed) becomes a structured needs-`--yes` result carrying the exact re-run; the
-    server NEVER auto-appends --yes.
+  • Exit 3 (confirm-needed) becomes a structured needs-`--approved` result carrying the exact re-run; the
+    server NEVER auto-appends --approved.
 
 `plainkeep mcp --setup` prints the `claude mcp add plainkeep -- <abs>/plainkeep mcp` line. Hidden/read-class (like
 __complete), so the guardrail runs it freely.
@@ -47,6 +47,24 @@ def _dispatcher_bin() -> str:
 
 
 # ── tool generation (from the plainkeep surface = plainkeep.json/3) ────────────────────────────
+# 0.8: MCP tool annotations from the verb's risk class. Verbs that fetch URLs reach beyond the vault
+# and the engine, so they also carry openWorldHint.
+OPEN_WORLD_VERBS = ("bookmark",)
+
+
+def _annotations(cmd: dict) -> dict:
+    risk = cmd.get("risk")
+    if risk == "read":
+        a = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": False}
+    elif risk in ("safe_write", "draft_only"):
+        a = {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False}
+    else:                                   # confirm, and anything undeclared (the gate defaults to confirm)
+        a = {"readOnlyHint": False, "destructiveHint": True}
+    if cmd.get("verb") in OPEN_WORLD_VERBS:
+        a["openWorldHint"] = True
+    return a
+
+
 def _tool(cmd: dict) -> dict:
     """One MCP tool from a cmd.json dict: description = summary (+hints), inputSchema from args."""
     desc = cmd.get("summary", "")
@@ -61,11 +79,12 @@ def _tool(cmd: dict) -> dict:
         if a.get("required"):
             required.append(name)
     props["args"] = {"type": "array", "items": {"type": "string"},
-                     "description": "additional positional args / flags (e.g. sub-action tokens, --yes)"}
+                     "description": "additional positional args / flags (e.g. sub-action tokens, --approved)"}
     schema = {"type": "object", "properties": props}
     if required:
         schema["required"] = required
-    return {"name": cmd["verb"], "description": desc or cmd["verb"], "inputSchema": schema}
+    return {"name": cmd["verb"], "description": desc or cmd["verb"], "inputSchema": schema,
+            "annotations": _annotations(cmd)}
 
 
 def _tools() -> list[dict]:
@@ -73,7 +92,7 @@ def _tools() -> list[dict]:
 
 
 def _argv_from(cmd: dict | None, arguments: dict) -> list[str]:
-    """Build the positional argv (WITHOUT --json/--yes) from the tool arguments, declared args first
+    """Build the positional argv (WITHOUT --json/--approved) from the tool arguments, declared args first
     in order, then the free-form `args` passthrough."""
     argv: list[str] = []
     for a in (cmd.get("args", []) if cmd else []):
@@ -108,9 +127,9 @@ def _call(mid, params: dict) -> dict:
     proc = subprocess.run([_dispatcher_bin(), name, *argv, "--json"], capture_output=True, text=True)
     out, err = proc.stdout.strip(), proc.stderr.strip()
     if proc.returncode == output.EXIT_CONFIRM:
-        rerun = " ".join(["plainkeep", name, *argv, "--yes"])
+        rerun = " ".join(["plainkeep", name, *argv, "--approved"])
         payload = {"ops_confirm_needed": True, "verb": name, "rerun": rerun,
-                   "detail": out or err or "this call is confirm-class — re-run with --yes"}
+                   "detail": out or err or "this call is confirm-class — re-run with --approved"}
         return _result(mid, _text_result(json.dumps(payload, ensure_ascii=False), is_error=True))
     if proc.returncode == output.EXIT_OK:
         return _result(mid, _text_result(out or "{}"))

@@ -165,7 +165,7 @@ def classify(action: dict) -> Decision:
     """
     kind = action.get("kind", "verb")
     flags = action.get("flags", {}) or {}
-    yes = bool(flags.get("yes"))
+    yes = bool(flags.get("approved") or flags.get("yes"))
     force = bool(flags.get("force"))
     path = _norm(action.get("path"))
     realpath = _norm(action.get("realpath"))

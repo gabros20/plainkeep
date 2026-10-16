@@ -216,7 +216,7 @@
             <div class="terminal-panel__body">
 <pre><span class="tk-prompt">$</span> plainkeep backup run
 <span class="tk-err">✗</span> backing up needs your explicit yes
-  <span class="tk-dim">re-run:</span> <span class="tk-str">plainkeep backup run --yes</span>
+  <span class="tk-dim">re-run:</span> <span class="tk-str">plainkeep backup run --approved</span>
 
 <span class="tk-dim"># a "no" always carries the exact corrected command.
 # nothing happened; nothing was half-done.</span></pre>
@@ -296,7 +296,7 @@
               <tr><td><span class="pill pill--read">read</span></td><td>just looking — runs freely, even unattended</td></tr>
               <tr><td><span class="pill pill--safe">safe_write</span></td><td>writes inside your own folders — every change is a git snapshot you can undo</td></tr>
               <tr><td><span class="pill pill--draft">draft_only</span></td><td>produces a draft (an invoice, say) — the system never sends anything, ever</td></tr>
-              <tr><td><span class="pill pill--confirm">confirm</span></td><td>needs your explicit <code class="t-mono-sm">--yes</code> — without it you get the corrected command, and nothing happens</td></tr>
+              <tr><td><span class="pill pill--confirm">confirm</span></td><td>needs your explicit <code class="t-mono-sm">--approved</code> — without it you get the corrected command, and nothing happens</td></tr>
               <tr><td><span class="pill pill--deny">deny</span></td><td>always refused: deleting recklessly, touching secrets, writing outside the walls</td></tr>
             </tbody>
           </table>

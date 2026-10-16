@@ -13,7 +13,7 @@ treat the link as the secret. The worker requires an `X-Publish-Token` header (i
 secret, mirrored in `.share/config.json` as `publish_token`) so only this vault can publish.
 
 Governance: risk safe_write at the surface so `list` stays free, but every TRANSMITTING subaction
-(share/collection/revoke, and `init` deploy) self-gates `--yes` → EXIT_CONFIRM(3). Publishing the
+(share/collection/revoke, and `init` deploy) self-gates `--approved` → EXIT_CONFIRM(3). Publishing the
 note off-machine IS a transmission; the transport is factored into _publish()/_revoke_remote() and is
 NEVER exercised by tests (PLAINKEEP_SHARE_FAKE short-circuits it deterministically). `--dry-run` renders
 locally and stops before the PUT. Fallback for the unprovisioned: `--gist` (secret gist via
@@ -209,7 +209,7 @@ def _positional(argv):
 
 def cmd_share(argv):
     dry = "--dry-run" in argv
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     gist = "--gist" in argv
     expires = argv[argv.index("--expires") + 1] if "--expires" in argv else "7d"
     out = argv[argv.index("--out") + 1] if "--out" in argv else None
@@ -245,7 +245,7 @@ def cmd_share(argv):
     if not yes:
         output.fail(output.EXIT_CONFIRM,
                     f"publishing the note off-machine is a transmission ({len(body)} bytes)",
-                    hint=f"re-run: plainkeep share {' '.join(pos)} --yes", verb="share")
+                    hint=f"re-run: plainkeep share {' '.join(pos)} --approved", verb="share")
 
     cfg = _config()
     endpoint = cfg.get("endpoint")
@@ -278,13 +278,13 @@ def cmd_share(argv):
                        f"  {url}\n"
                        f"  {YEL}agents / LLMs: {agent_url}   (raw markdown — paste into any chat or "
                        f"coding agent){RESET}\n"
-                       f"  {DIM}revoke: plainkeep share revoke {sid} --yes{RESET}")
+                       f"  {DIM}revoke: plainkeep share revoke {sid} --approved{RESET}")
 
 
 def _gist(docs, yes):
     if not yes:
         output.fail(output.EXIT_CONFIRM, "creating a secret gist is a transmission",
-                    hint="re-run with --gist --yes", verb="share")
+                    hint="re-run with --gist --approved", verb="share")
     import shutil
     if not shutil.which("gh"):
         output.fail(output.EXIT_UNEXPECTED, "gh not installed", hint="brew install gh", verb="share")
@@ -320,7 +320,7 @@ def cmd_list():
 
     def render(rs):
         if not rs:
-            return "no shares yet — `plainkeep share <slug> --yes`"
+            return "no shares yet — `plainkeep share <slug> --approved`"
         out = [f"{len(rs)} share(s):"]
         for r in rs:
             out.append(f"  {r['id']:<18} {r['state']:<8} {r['kind']}:{r['key']}")
@@ -331,16 +331,16 @@ def cmd_list():
 
 def cmd_revoke(argv):
     sid = next((a for a in argv if not a.startswith("-")), "")
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     if not sid:
-        output.fail(output.EXIT_USAGE, "usage: plainkeep share revoke <id> --yes", verb="share")
+        output.fail(output.EXIT_USAGE, "usage: plainkeep share revoke <id> --approved", verb="share")
     led = _ledger()
     entry = next((s for s in led["shares"] if s["id"] == sid), None)
     if not entry:
         output.fail(output.EXIT_NOT_FOUND, f"no share '{sid}' in ledger", verb="share")
     if not yes:
         output.fail(output.EXIT_CONFIRM, f"revoking '{sid}' deletes the published blob",
-                    hint=f"re-run: plainkeep share revoke {sid} --yes", verb="share")
+                    hint=f"re-run: plainkeep share revoke {sid} --approved", verb="share")
     cfg = _config()
     _revoke_remote(cfg.get("endpoint", "https://fake.invalid"), sid, entry.get("admin_token", ""))
     entry["revoked"] = True
@@ -362,7 +362,7 @@ def cmd_prune(argv):
     expired share just stops resolving. `share list` therefore reports links that cannot be fetched,
     and the entries keep holding an `admin_token` and `key` for blobs that no longer exist.
     """
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     led = _ledger()
     now = int(datetime.now(timezone.utc).timestamp())
 
@@ -383,12 +383,12 @@ def cmd_prune(argv):
         return output.emit({"pruned": 0, "kept": len(keep), "entries": []}, "share",
                            human=lambda _: f"nothing to prune ({len(keep)} live share(s))")
     if not yes:
-        # A dry run is a read, so it needs no --yes; the WRITE is what is gated.
+        # A dry run is a read, so it needs no --approved; the WRITE is what is gated.
         return output.emit({"pruned": 0, "kept": len(keep), "would_prune": listing}, "share",
                            human=lambda _: f"would prune {len(doomed)} dead entr(y/ies), keeping "
                                            f"{len(keep)}:\n  "
                                            + "\n  ".join(f"{e['id']} — {e['reason']}" for e in listing)
-                                           + "\n(re-run with --yes to write)")
+                                           + "\n(re-run with --approved to write)")
 
     cleared = []
     for s, _why in doomed:
@@ -412,7 +412,7 @@ def cmd_prune(argv):
 # wrangler.toml is NOT in upstream (per-vault)"). Under Phase 1 both halves sat inside the vault and
 # the distinction cost nothing. After the engine moved out, writing the config beside its own source
 # meant writing into the sealed engine: the path-wall refused it (correctly — the path escapes the
-# three roots) and `share init --yes`, the only way to configure the worker, could not run at all.
+# three roots) and `share init --approved`, the only way to configure the worker, could not run at all.
 #
 # So the two halves are anchored separately: the worker source stays where the engine put it, and the
 # config joins `.share/config.json` in the vault it belongs to. `wrangler` is told where to find it
@@ -543,7 +543,7 @@ def cmd_pull(argv):
 
 
 def cmd_init(argv):
-    yes = ("--yes" in argv) or ("-y" in argv)
+    yes = output.consented(argv)
     endpoint = argv[argv.index("--endpoint") + 1] if "--endpoint" in argv else None
     if endpoint:
         _merge_config(endpoint=endpoint)  # merge, never clobber an existing publish_token
@@ -558,13 +558,13 @@ def cmd_init(argv):
         f"PUBLISH_TOKEN --config {WRANGLER_TOML}   # then put the same value in .share/config.json "
         "as publish_token",
         "plainkeep share init --endpoint https://<your-worker>.workers.dev",
-        "# canonical flow: once wrangler.toml has its KV id, just re-run `plainkeep share init --yes` —",
+        "# canonical flow: once wrangler.toml has its KV id, just re-run `plainkeep share init --approved` —",
         "# it deploys, generates + sets PUBLISH_TOKEN, and mirrors it into .share/config.json.",
     ]
     if not yes:
         return output.emit({"deployed": False, "worker": str(WORKER_DIR), "steps": steps},
                            "share", human=lambda _:
-                           "deploy the share worker once (confirm with --yes to run wrangler):\n  "
+                           "deploy the share worker once (confirm with --approved to run wrangler):\n  "
                            + "\n  ".join(steps))
     # pragma: no cover - confirm-gated wrangler deploy, never in tests
     import secrets, shutil, subprocess
@@ -620,7 +620,7 @@ def main(argv):
     if not action or action.startswith("-"):
         output.fail(output.EXIT_USAGE,
                     "usage: plainkeep share <slug> [--expires 7d] | collection <tag> | list | pull <url> "
-                    "| revoke <id> | prune [--yes] | init",
+                    "| revoke <id> | prune [--approved] | init",
                     verb="share")
     return cmd_share(argv)
 

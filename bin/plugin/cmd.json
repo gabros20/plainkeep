@@ -1,7 +1,7 @@
 {
   "verb": "plugin",
   "summary": "install/list/trust/update/remove/sync plugin packs (untrusted until you trust them)",
-  "usage": "plainkeep plugin add <owner/repo|path>[@tag] --yes | list | trust <name> --yes | update <name> --yes | remove <name> --yes | sync [<name>] --yes",
+  "usage": "plainkeep plugin add <owner/repo|path>[@tag] --approved | list | trust <name> --approved | update <name> --approved | remove <name> --approved | sync [<name>] --approved",
   "risk": "safe_write",
   "reads": ["plugins", "plugins/plugins.lock.json"],
   "writes": ["plugins", "plugins/plugins.lock.json"],
@@ -9,7 +9,7 @@
     {"name": "action", "required": false, "default": "list"},
     {"name": "target", "required": false, "default": "-"}
   ],
-  "hints": "Installs a pack under plugins/<name>/, but its verbs are capped at confirm until `plainkeep plugin trust <name> --yes` — self-declared risk never takes effect at install. add/update/remove/trust need --yes; list is read-only. Common mistake: expecting a freshly added pack to run at its declared risk.",
+  "hints": "Installs a pack under plugins/<name>/, but its verbs are capped at confirm until `plainkeep plugin trust <name> --approved` — self-declared risk never takes effect at install. add/update/remove/trust need --approved; list is read-only. Common mistake: expecting a freshly added pack to run at its declared risk.",
   "output": {
     "mode": "rows",
     "fields": {
@@ -31,7 +31,7 @@
     },
     {
       "name": "add",
-      "summary": "install a pack (capped at confirm until trusted); needs --yes",
+      "summary": "install a pack (capped at confirm until trusted); needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "target", "type": "string", "required": true, "help": "owner/repo, a local path, optionally @tag", "example": "acme/example-pack@v1" }
@@ -39,7 +39,7 @@
     },
     {
       "name": "trust",
-      "summary": "let a pack's verbs run at their declared risk; needs --yes",
+      "summary": "let a pack's verbs run at their declared risk; needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "name", "type": "string", "required": true, "help": "the installed pack name" }
@@ -47,7 +47,7 @@
     },
     {
       "name": "update",
-      "summary": "update an installed pack; needs --yes",
+      "summary": "update an installed pack; needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "name", "type": "string", "required": true, "help": "the installed pack name" }
@@ -55,7 +55,7 @@
     },
     {
       "name": "remove",
-      "summary": "remove an installed pack; needs --yes",
+      "summary": "remove an installed pack; needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "name", "type": "string", "required": true, "help": "the installed pack name" }
@@ -63,7 +63,7 @@
     },
     {
       "name": "sync",
-      "summary": "install packs' declared dependencies into <vault>/.plugin-deps/; needs --yes. Only the lockfile's declarations reach pip — there is no pass-through for arbitrary pip arguments",
+      "summary": "install packs' declared dependencies into <vault>/.plugin-deps/; needs --approved. Only the lockfile's declarations reach pip — there is no pass-through for arbitrary pip arguments",
       "risk": "confirm",
       "args": [
         { "name": "name", "type": "string", "required": false, "help": "one pack, or every pack when omitted" },

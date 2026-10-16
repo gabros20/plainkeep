@@ -92,7 +92,7 @@ async function drive(verb: Verb): Promise<void> {
   const supportsDry = action ? action.dry_run === true : verb.dry_run === true;
   const effectiveRisk = action?.risk ?? verb.risk;
 
-  // Optional dry-run preview (a dry-run is a read — no --yes needed).
+  // Optional dry-run preview (a dry-run is a read — no --approved needed).
   if (supportsDry) {
     const preview = await p.confirm({
       message: "Preview first? (dry-run — shows what would happen, writes nothing)",
@@ -123,11 +123,11 @@ async function execute(verb: Verb, argv: string[]): Promise<void> {
   if (res.exitCode === EXIT.CONFIRM) {
     // The verb self-gated — "refusals teach". Show its message + hint, then offer to confirm.
     renderResult(res);
-    const yes = await p.confirm({ message: "Confirm and run with --yes?", initialValue: false });
+    const yes = await p.confirm({ message: "Confirm and run with --approved?", initialValue: false });
     if (p.isCancel(yes) || !yes) return;
     const s2 = p.spinner();
     s2.start("running (confirmed)");
-    res = await runPlainkeep([verb.verb, ...argv, "--yes"]);
+    res = await runPlainkeep([verb.verb, ...argv, "--approved"]);
     s2.stop("done");
   }
   renderResult(res);

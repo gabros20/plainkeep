@@ -2,7 +2,7 @@
 # script/setup — turn a fresh clone of the template into YOUR living ~/plainkeep vault on this machine.
 # Idempotent and non-destructive by default. It does NOT push anything (that step stays yours, §3).
 #
-#   ~/plainkeep/script/setup [--lean|--full] [--yes] [--dry-run] [--no-commit] [--upstream URL]
+#   ~/plainkeep/script/setup [--lean|--full] [--approved] [--dry-run] [--no-commit] [--upstream URL]
 #
 # What it does: INSTALLS THE ENGINE out of this checkout into its own versioned tree, puts that
 # tree's `plainkeep` on PATH, creates the sibling roots (~/work, ~/files), adds the template as
@@ -31,7 +31,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --lean) LEAN=1 ;;
     --full) LEAN=0 ;;
-    --yes|-y) YES=1 ;;
+    --approved|-y) YES=1 ;;
     --dry-run) DRY=1 ;;
     --no-commit) COMMIT=0 ;;
     --upstream) shift; UPSTREAM_URL="$1" ;;
@@ -161,8 +161,8 @@ fi
 say "4b. mark + register this vault (the dispatcher will not act on an unregistered root)"
 REG_LOG="$(mktemp "${TMPDIR:-/tmp}/pk-setup-register.XXXXXX")"
 if [ "$DRY" = 1 ]; then
-  echo "  + env PLAINKEEP_HOME=$ROOT python3 $ROOT/bin/vault/run.py register $ROOT --yes"
-elif env PLAINKEEP_HOME="$ROOT" python3 "$ROOT/bin/vault/run.py" register "$ROOT" --yes >"$REG_LOG" 2>&1; then
+  echo "  + env PLAINKEEP_HOME=$ROOT python3 $ROOT/bin/vault/run.py register $ROOT --approved"
+elif env PLAINKEEP_HOME="$ROOT" python3 "$ROOT/bin/vault/run.py" register "$ROOT" --approved >"$REG_LOG" 2>&1; then
   sed 's/^/  /' "$REG_LOG"
 elif grep -q "already registered" "$REG_LOG"; then
   echo "  ok:    already registered"
@@ -200,7 +200,7 @@ echo
 say "done. next (these are yours to run — setup never pushes):"
 cat <<EOF
   • finish setup (guided):     plainkeep setup --wizard      (interactive first-run, safe defaults)
-                    or all-in:  plainkeep setup --all --yes   (non-interactive; 'plainkeep setup' = dashboard)
+                    or all-in:  plainkeep setup --all --approved   (non-interactive; 'plainkeep setup' = dashboard)
   • point at your GitHub:      git -C "$ROOT" remote set-url origin git@github.com:<you>/plainkeep.git
                                git -C "$ROOT" push -u origin main
   • daily:                     plainkeep start  ·  plainkeep capture "…"  ·  plainkeep triage  ·  plainkeep close

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-plainkeep triage [--dry-run|--yes] | drafts [--dry-run|--yes] — PROPOSE filing of inbox/ items into a task
+plainkeep triage [--dry-run|--approved] | drafts [--dry-run|--approved] — PROPOSE filing of inbox/ items into a task
 or a wiki note; the human approves (§4.1, §10). Interactive by default; --dry-run shows proposals
-only; --yes accepts all.
+only; --approved accepts all.
 
 Classification here is the deterministic pure-shell fallback (no agent required). When an agent is
 wired (PLAINKEEP_AGENT), it would improve the proposal — but the system works without it.
@@ -193,7 +193,7 @@ def cmd_drafts_decide(argv):
 def main(argv):
     js, argv = output.parse_argv(argv)
     dry = "--dry-run" in argv
-    yes = "--yes" in argv or "-y" in argv
+    yes = output.consented(argv)
     if argv and argv[0] == "decide":
         return cmd_decide(argv[1:])
     if argv and argv[0] == "drafts":

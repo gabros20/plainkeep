@@ -1,7 +1,7 @@
 {
   "verb": "vault",
   "summary": "register, name and re-point plainkeep vaults (marker + registry)",
-  "usage": "plainkeep vault list | status | init <path> [--name <slug>] [--default] --yes | register [<path>] [--name <slug>] [--default] --yes | rebind <name|id> <new-path> --yes | deregister <name|id> --yes | default <name|id> --yes",
+  "usage": "plainkeep vault list | status | init <path> [--name <slug>] [--default] --approved | register [<path>] [--name <slug>] [--default] --approved | rebind <name|id> <new-path> --approved | deregister <name|id> --approved | default <name|id> --approved",
   "risk": "safe_write",
   "reads": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
   "writes": [".plainkeep/vault.json", "$XDG_CONFIG_HOME/plainkeep/registry.json"],
@@ -35,7 +35,7 @@
     },
     {
       "name": "init",
-      "summary": "create a DATA-ONLY vault (content dirs, plugins/, plainkeep.json, marker, registry entry — no engine code); needs --yes",
+      "summary": "create a DATA-ONLY vault (content dirs, plugins/, plainkeep.json, marker, registry entry — no engine code); needs --approved",
       "risk": "confirm",
       "dry_run": false,
       "args": [
@@ -46,7 +46,7 @@
     },
     {
       "name": "register",
-      "summary": "adopt an EXISTING directory as a vault: mark it (if unmarked) and add it to the registry; needs --yes",
+      "summary": "adopt an EXISTING directory as a vault: mark it (if unmarked) and add it to the registry; needs --approved",
       "risk": "confirm",
       "dry_run": false,
       "args": [
@@ -57,7 +57,7 @@
     },
     {
       "name": "rebind",
-      "summary": "re-point a registered vault at its new location (same id); needs --yes",
+      "summary": "re-point a registered vault at its new location (same id); needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "selector", "type": "string", "required": true, "help": "registered name or id" },
@@ -66,7 +66,7 @@
     },
     {
       "name": "deregister",
-      "summary": "remove a registry entry; the vault and its marker are untouched; needs --yes",
+      "summary": "remove a registry entry; the vault and its marker are untouched; needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "selector", "type": "string", "required": true, "help": "registered name or id" }
@@ -74,7 +74,7 @@
     },
     {
       "name": "default",
-      "summary": "set the default vault; needs --yes",
+      "summary": "set the default vault; needs --approved",
       "risk": "confirm",
       "args": [
         { "name": "selector", "type": "string", "required": true, "help": "registered name or id" }

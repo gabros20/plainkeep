@@ -29,6 +29,8 @@
 
     { "name": "invoice-draft-ok",          "expect": "allow",   "action": {"kind": "draft"} },
     { "name": "send-email-needs-yes",      "expect": "confirm", "action": {"kind": "transmit"} },
+    { "name": "send-email-with-approved",  "expect": "allow",   "action": {"kind": "transmit", "flags": {"approved": true}} },
+    { "name": "send-email-forced-approved", "expect": "deny",    "action": {"kind": "transmit", "flags": {"approved": true, "force": true}} },
     { "name": "send-email-with-yes",       "expect": "allow",   "action": {"kind": "transmit", "flags": {"yes": true}} },
     { "name": "deploy-forced-denied",      "expect": "deny",    "action": {"kind": "transmit", "flags": {"force": true}} },
 

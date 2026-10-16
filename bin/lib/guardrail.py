@@ -6,7 +6,7 @@ in test/lib/guardrail.py (kept in lock-step by test/run_guardrail.py's parity ch
      delete/verb). Reusable: a write-verb calls this on the path IT computes (Iron Law — the verb
      owns placement), so the wall holds where the path is actually known.
   2. gate(verb, args, risk) + the CLI — the dispatcher's per-verb risk gate: deny is refused,
-     confirm needs an explicit --yes, new/undeclared verbs default to confirm. Logs every call.
+     confirm needs an explicit --approved (--yes / -y are permanent aliases), new/undeclared verbs default to confirm. Logs every call.
 
 The dispatcher runs `guardrail.py <verb> <args...>` before exec; nonzero exit blocks the verb.
 """
@@ -97,6 +97,7 @@ DOTFILES_ROOTS = _with_real(DOTFILES)
 # import above). They moved because vault SELECTION has to ask the same location question before a
 # root exists, and this module cannot be imported that early any more.
 ALLOW, CONFIRM, DENY = "allow", "confirm", "deny"
+CONSENT_FLAGS = ("--approved", "--yes", "-y")   # 0.16: --approved is canonical; the others are permanent aliases
 _ORDER = {ALLOW: 0, CONFIRM: 1, DENY: 2}
 SCHEDULABLE = {"read", "safe_write"}
 
@@ -190,7 +191,7 @@ def _write_verdict(path, action):
 def classify(action: dict) -> Decision:
     kind = action.get("kind", "verb")
     flags = action.get("flags", {}) or {}
-    yes, force = bool(flags.get("yes")), bool(flags.get("force"))
+    yes, force = bool(flags.get("approved") or flags.get("yes")), bool(flags.get("force"))
     path, realpath = _norm(action.get("path")), _norm(action.get("realpath"))
     command = (action.get("command") or "").strip()
 
@@ -204,7 +205,7 @@ def classify(action: dict) -> Decision:
                 if force:
                     return Decision(DENY, f"forced external transmit ({label}) is denied", "deny")
                 return Decision(ALLOW if yes else CONFIRM,
-                                f"external transmit ({label})" + (" authorized by --yes" if yes else " needs --yes"),
+                                f"external transmit ({label})" + (" authorized by --approved" if yes else " needs --approved"),
                                 "confirm")
     if kind == "read_secret" or (path and re.search(r"(^|/)\.env($|\.|/)", path)):
         return Decision(DENY, "reading .env / secret values is denied", "deny")
@@ -218,12 +219,12 @@ def classify(action: dict) -> Decision:
     if kind == "transmit":
         if force:
             return Decision(DENY, "forced external transmit is denied", "deny")
-        return Decision(ALLOW if yes else CONFIRM, "external transmit" + (" via --yes" if yes else " needs --yes"), "confirm")
+        return Decision(ALLOW if yes else CONFIRM, "external transmit" + (" via --approved" if yes else " needs --approved"), "confirm")
     if kind == "delete":
         for p in (path, realpath):   # append-only cuts both ways: an original is never removed either
             if p and _in_originals(p):
                 return Decision(DENY, "~/files/**/in/ is append-only: an original is never deleted", "deny")
-        return Decision(DENY if force else CONFIRM, "delete is irreversible" + (" (forced=deny)" if force else " — needs --yes"), "confirm")
+        return Decision(DENY if force else CONFIRM, "delete is irreversible" + (" (forced=deny)" if force else " — needs --approved"), "confirm")
     if kind == "draft":
         return Decision(ALLOW, "draft produced; a human transmits", "draft_only")
     if kind in ("propose", "ask"):
@@ -313,7 +314,7 @@ def gate(verb: str, args: list[str], risk: str | None = None) -> Decision:
     if verb not in _known_verbs():
         return Decision(DENY, f"unknown/invented verb: '{verb}' (not in plainkeep.json)", "deny")
     risk = risk or risk_of(verb) or "confirm"  # §5: new/undeclared verbs default to confirm
-    yes = ("--yes" in args) or ("-y" in args)
+    yes = any(a in args for a in CONSENT_FLAGS)
     dry = "--dry-run" in args
     if risk == "deny":
         return Decision(DENY, f"'{verb}' is deny-class — never run", "deny")
@@ -325,7 +326,7 @@ def gate(verb: str, args: list[str], risk: str | None = None) -> Decision:
     if capped and risk in ("read", "safe_write"):
         risk = "confirm"
     if risk == "confirm" and not yes:
-        return Decision(CONFIRM, f"'{verb}' is confirm-class — re-run with --yes to proceed", "confirm")
+        return Decision(CONFIRM, f"'{verb}' is confirm-class — re-run with --approved to proceed", "confirm")
     return Decision(ALLOW, f"{risk}", risk)
 
 
@@ -343,8 +344,8 @@ def _log(verb, args, d: Decision):
 def _remediation(verb: str, args: list[str]) -> str:
     """The exact re-run line a confirm-class refusal should print — self-teaching, not a class name."""
     parts = ["plainkeep", verb, *args]
-    if "--yes" not in args and "-y" not in args:
-        parts.append("--yes")
+    if not any(a in args for a in CONSENT_FLAGS):
+        parts.append("--approved")
     return "re-run: " + " ".join(parts)
 
 

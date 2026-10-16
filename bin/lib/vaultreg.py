@@ -250,7 +250,7 @@ def read_registry(*, required: bool = False) -> dict:
     if not f.is_file():
         if required:
             raise VaultError(f"no vault registry: {f}",
-                             hint="register this vault with: plainkeep vault register --yes")
+                             hint="register this vault with: plainkeep vault register --approved")
         return empty_registry()
     try:
         data = json.loads(f.read_text(encoding="utf-8"))

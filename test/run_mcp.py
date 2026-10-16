@@ -117,8 +117,8 @@ def main() -> int:
     check("confirm call is flagged isError", r4.get("isError") is True)
     payload = json.loads(r4.get("content", [{}])[0].get("text", "{}"))
     check("confirm call returns ops_confirm_needed", payload.get("ops_confirm_needed") is True, str(payload)[:120])
-    check("confirm call gives the exact --yes re-run",
-          payload.get("rerun") == "plainkeep plugin add local/x --yes", payload.get("rerun", ""))
+    check("confirm call gives the exact --approved re-run",
+          payload.get("rerun") == "plainkeep plugin add local/x --approved", payload.get("rerun", ""))
 
     # unknown method → JSON-RPC method-not-found, gracefully
     check("unknown method → -32601", resp.get(5, {}).get("error", {}).get("code") == -32601)

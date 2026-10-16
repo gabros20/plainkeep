@@ -4,7 +4,7 @@ import * as p from "@clack/prompts";
 import { complete, type Action, type Arg, type Verb } from "./contract.js";
 
 export interface FilledForm {
-  argv: string[]; // the args after the verb (+ action token), excluding --json / --yes
+  argv: string[]; // the args after the verb (+ action token), excluding --json / --approved
   cancelled: boolean;
 }
 

@@ -81,7 +81,7 @@ def _new_verb(rest, dry=False):
         print(f"  code:   {rel}/run.py  (+ cmd.json, risk: {risk})")
         print(f"  source: plugin:local — user-owned, survives `script/update` (never in engine.txt)")
         print(f"  next:   implement main() in {rel}/run.py, then `plainkeep {name}`"
-              + ("" if risk != "confirm" else "  (confirm-class → runs with --yes until you lower risk)"))
+              + ("" if risk != "confirm" else "  (confirm-class → runs with --approved until you lower risk)"))
 
     return output.emit(data, "new", human=render)
 

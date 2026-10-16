@@ -71,7 +71,7 @@ def main() -> int:
         r = run("pull", "--all", home=home)
         check("pull --all without --yes -> exit 3 (EXIT_CONFIRM)", r.returncode == 3, r.stdout + r.stderr)
         check("pull --all without --yes writes nothing to ollama's store (no --yes reached)",
-              "--yes" in (r.stderr or r.stdout), r.stdout + r.stderr)
+              "--approved" in (r.stderr or r.stdout), r.stdout + r.stderr)
 
         r = run("pull", "--stage", "embed", home=home)
         check("pull --stage embed without --yes -> exit 3", r.returncode == 3, r.stdout + r.stderr)

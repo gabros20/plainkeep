@@ -43,7 +43,7 @@ def main() -> int:
         # Task 12: the real install is LEAN + non-interactive BY DEFAULT (a piped curl|sh must never
         # block on setup's lean prompt and must never silently fall through to FULL). The dry-run of
         # the real branch surfaces the exact setup args it would hand off.
-        check("default real install passes --yes (non-interactive)", "--yes" in r.stdout, r.stdout)
+        check("default real install passes --approved (non-interactive)", "--approved" in r.stdout, r.stdout)
         check("default real install passes --lean", "--lean" in r.stdout, r.stdout)
         check("default real install does NOT pass --full", "--full" not in r.stdout, r.stdout)
 
@@ -55,8 +55,8 @@ def main() -> int:
 
         # --demo branch is UNCHANGED: it still installs the full tree in the throwaway dir.
         rd = run(["--demo", "--dry-run"], tmp / "drydemo")
-        check("--demo still hands off --full --yes --no-commit",
-              rd.returncode == 0 and "--full --yes --no-commit" in rd.stdout, rd.stdout + rd.stderr)
+        check("--demo still hands off --full --approved --no-commit",
+              rd.returncode == 0 and "--full --approved --no-commit" in rd.stdout, rd.stdout + rd.stderr)
 
         # refuse to overwrite a non-empty existing install
         existing = tmp / "existing"

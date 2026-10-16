@@ -324,7 +324,7 @@ def main() -> int:
             adv = mod_a.advance("automation", yes=True, fake=True)
             joined = " | ".join(adv["ran"])
             check("automation advance renders AND enables (through the job verb)",
-                  "job apply" in joined and "job enable" in joined and "--yes" in joined, joined)
+                  "job apply" in joined and "job enable" in joined and "--approved" in joined, joined)
             check("a fake automation advance mutates no launchd state",
                   not [c for c in auto_fake.calls() if c.split()[:1] in (["bootstrap"], ["bootout"])],
                   str(auto_fake.calls()))
@@ -405,7 +405,7 @@ def main() -> int:
         try:
             u_abs = mod.status("ui")[0]
             check("ui absent (attemptable) when downloadable but not installed",
-                  u_abs["status"] == "absent" and u_abs["next"] == "plainkeep setup ui --yes", str(u_abs))
+                  u_abs["status"] == "absent" and u_abs["next"] == "plainkeep setup ui --approved", str(u_abs))
             u_adv = mod.advance("ui", yes=True, fake=True)
             u_joined = " | ".join(u_adv["ran"])
             check("fake ui advance previews gh release download + sha256 verify (no network)",
@@ -427,7 +427,7 @@ def main() -> int:
             u_upd = mod.status("ui")[0]
             check("ui partial (update available) when installed version != engine's expected",
                   u_upd["status"] == "partial" and "update available" in u_upd["detail"]
-                  and u_upd["next"] == "plainkeep setup ui --yes", str(u_upd))
+                  and u_upd["next"] == "plainkeep setup ui --approved", str(u_upd))
             u_uadv = mod.advance("ui", yes=True, fake=True)
             check("fake ui update advance pins the download to the expected release tag",
                   any("gh release download ui-v9.9.9" in c for c in u_uadv["ran"]), str(u_uadv["ran"]))
@@ -677,7 +677,7 @@ def main() -> int:
             {"id": "skeleton", "title": "Vault structure", "status": "absent", "required": True,
              "detail": "", "items": [], "next": "plainkeep setup skeleton"},
             {"id": "search", "title": "Semantic search", "status": "absent", "required": False,
-             "detail": "", "items": [], "next": "plainkeep setup search --yes"},
+             "detail": "", "items": [], "next": "plainkeep setup search --approved"},
             {"id": "backups", "title": "Durability", "status": "blocked", "required": False,
              "detail": "backup setup needs human initialization", "items": [], "next": "plainkeep backup init"},
             {"id": "models", "title": "File-processing", "status": "ready", "required": False,
@@ -685,7 +685,7 @@ def main() -> int:
             {"id": "automation", "title": "Schedules", "status": "absent", "required": False,
              "detail": "", "items": [], "next": "plainkeep setup automation"},
             {"id": "ui", "title": "Terminal UI", "status": "absent", "required": False,
-             "detail": "", "items": [], "next": "plainkeep setup ui --yes"},
+             "detail": "", "items": [], "next": "plainkeep setup ui --approved"},
         ]
         wiz_calls = []
 
@@ -1227,7 +1227,7 @@ def main() -> int:
         check("setup dashboard lists six layers",
               all(layer in dashboard.stdout for layer in ("skeleton", "search", "backups", "models", "automation", "ui")),
               dashboard.stdout)
-        check("setup dashboard shows next commands", "plainkeep setup search --yes" in dashboard.stdout, dashboard.stdout)
+        check("setup dashboard shows next commands", "plainkeep setup search --approved" in dashboard.stdout, dashboard.stdout)
 
         json_dash = run_setup(["--json"], cli_home)
         try:
@@ -1245,7 +1245,7 @@ def main() -> int:
         gated_cli = run_setup(["search"], cli_home)
         check("setup search without yes exits confirm", gated_cli.returncode == 3, gated_cli.stderr + gated_cli.stdout)
         check("setup search confirm includes rerun hint",
-              "re-run: plainkeep setup search --yes" in (gated_cli.stderr + gated_cli.stdout),
+              "re-run: plainkeep setup search --approved" in (gated_cli.stderr + gated_cli.stdout),
               gated_cli.stderr + gated_cli.stdout)
 
         gated_json = run_setup(["search", "--json"], cli_home)
@@ -1255,7 +1255,7 @@ def main() -> int:
                              and gated_env["ok"] is False
                              and gated_env["verb"] == "setup"
                              and gated_env["error"]["code"] == 3
-                             and gated_env["error"]["hint"] == "re-run: plainkeep setup search --yes")
+                             and gated_env["error"]["hint"] == "re-run: plainkeep setup search --approved")
         except Exception as e:
             gated_json_ok = False
             gated_json.stderr += str(e)
@@ -1273,7 +1273,7 @@ def main() -> int:
         check("setup --wizard without a tty exits usage (2)", wiz_notty.returncode == 2,
               wiz_notty.stderr + wiz_notty.stdout)
         check("setup --wizard non-tty names the non-interactive alternatives",
-              "plainkeep setup --all --yes" in (wiz_notty.stderr + wiz_notty.stdout)
+              "plainkeep setup --all --approved" in (wiz_notty.stderr + wiz_notty.stdout)
               and "plainkeep setup --json" in (wiz_notty.stderr + wiz_notty.stdout),
               wiz_notty.stderr + wiz_notty.stdout)
         wiz_json = run_setup(["--wizard", "--json"], cli_home)
@@ -1397,7 +1397,7 @@ def main() -> int:
               and sorted(i["state"] for i in row["items"]) == ["absent", "absent", "linked"],
               str(row))
         check("agents: the row hands over the exact command",
-              row["next"] == "plainkeep setup agents --yes", str(row))
+              row["next"] == "plainkeep setup agents --approved", str(row))
 
         # (3) Confirm-class: it writes outside the vault, so no --yes means no write.
         res = sl.advance("agents", yes=False, fake=False)
